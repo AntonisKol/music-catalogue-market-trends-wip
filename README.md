@@ -10,7 +10,7 @@ This repo currently has the database and a Discogs API client. Fetching a releas
 | --- | --- |
 | `labels` | Discogs label id, name, and resource URL |
 | `artists` | Discogs artist id, name, and resource URL |
-| `releases` | Physical release detail: title, year, country, catalogue number, formats, genres, and styles |
+| `releases` | Release detail: title, year, country, catalogue number, formats, genres, styles, and whether it is physical |
 | `release_artists` | Which artists appear on which release |
 | `price_snapshots` | One row per release per day: number for sale, lowest price, and currency |
 | `demand_snapshots` | One row per release per day: want count, have count, rating count, and average rating |
@@ -27,7 +27,7 @@ This repo currently has the database and a Discogs API client. Fetching a releas
 
 From the repo root, create a `.env` file. Compose and the Python client both read it.
 
-```bash
+```
 DISCOGS_TOKEN=your_personal_access_token
 DISCOGS_USER_AGENT=MusicCatalogueMarketTrends/0.1 +https://github.com/AntonisKol/music-catalogue-market-trends-wip
 POSTGRES_HOST=localhost
@@ -59,21 +59,29 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Fetch data from Discogs. `get_label_releases` pages through a label and returns summary records (enough to collect release ids). `get_release` returns the full release, which is what the schema is shaped for. The label list pauses briefly between pages so the client stays under Discogs' rate limit.
+Fetch one release. `get_release` returns the full Discogs release, which is what the schema is shaped for. `249504` is the release id from the Discogs API docs; swap in any other id.
 
 ```bash
 python - <<'PY'
-from ingestion.discogs_client import get_label_releases, get_release
+from ingestion.discogs_client import get_release
 
-summaries = get_label_releases(1)  # replace with a Discogs label id
-print(len(summaries), summaries[0]["id"], summaries[0]["title"])
-
-release = get_release(summaries[0]["id"])
+release = get_release(249504)
 print(release["title"], release.get("year"))
 PY
 ```
 
-Nothing in that example writes to Postgres. The database is ready for a later load step.
+To collect release ids for a label, call `get_label_releases`. It returns summary records (the list endpoint is not detailed enough to fill `releases` on its own) and pauses between pages so the client stays under Discogs' authenticated limit of 60 requests per minute. Pick a label you actually want; a large catalogue will take a while.
+
+```bash
+python - <<'PY'
+from ingestion.discogs_client import get_label_releases
+
+summaries = get_label_releases(12345)  # replace with a Discogs label id
+print(len(summaries), summaries[0]["id"], summaries[0]["title"])
+PY
+```
+
+Nothing in these examples writes to Postgres. The database is ready for a later load step.
 
 ## Reset the database
 
