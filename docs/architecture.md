@@ -1,0 +1,348 @@
+# Architecture and task map
+
+How the project fits together, what each part is made of, and how it was built step by step, including the problems met on the way and how they were solved. The reasoning behind each individual decision is in [decisions.md](decisions.md).
+
+- **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
+- **Developers:** every box names its code file, and the components table goes into detail.
+
+*Last updated: 1 November 2026, after step 6 (issue 11). 177 automated tests.*
+
+**How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
+
+- **Achieved:** the part is built, tested and merged. Green boxes.
+- **Will achieve:** the part is planned. Grey boxes with dashed borders.
+- Orange boxes are supporting work alongside the main steps: tests in CI, seller locations and documentation.
+
+Steps are numbered as in the README roadmap (step 1 to step 11). Each step is one GitHub issue, whose number is given too.
+
+---
+
+## 1. The system at a glance
+
+In one sentence: every night a Python job copies the vinyl releases of chosen labels, with that day's prices and demand, from Discogs into PostgreSQL. A read-only set of query tools then lets an AI answer people's questions on a web page from that data.
+
+```mermaid
+flowchart TB
+    subgraph EXT["Outside services"]
+        DG["Discogs REST API<br/>Source of releases, label lists<br/>and marketplace prices"]
+        AN["Anthropic API, Claude<br/>Reads a question and picks<br/>which query tool to call"]
+    end
+
+    subgraph ING["Ingestion: writes data"]
+        SCH["Nightly schedule, step 5<br/>How: a scheduler starts ingest_label,<br/>never two runs at once<br/>Will achieve: fresh prices every day<br/>without anyone running a command"]
+        CLI["Label command, step 4<br/>Code: ingest_label.py, pipeline.py<br/>How: lists a label, skips non-vinyl,<br/>saves each release, logs a summary<br/>Achieved: a whole label in one command,<br/>failures reported, never silently lost"]
+        SHOP["Shop tracker, issue 24<br/>How: reads chosen record shops'<br/>Discogs inventories every day<br/>Will achieve: prices by seller city,<br/>such as Berlin"]
+        CL["Discogs client, steps 1 and 4<br/>Code: discogs_client.py<br/>How: one request every 1.1 s,<br/>retries after 5, 15, 60 s<br/>Achieved: stays under the limit of<br/>60 requests a minute, rides out<br/>Discogs hiccups of up to 80 s"]
+        MAP["Mapping, steps 1, 3, 4<br/>Code: mapping.py<br/>How: turns Discogs JSON into rows,<br/>decides vinyl or not<br/>Achieved: exact prices, NULL instead<br/>of a misleading 0"]
+        REP["Repository, steps 1 and 3<br/>Code: repository.py<br/>How: upserts in one transaction per save<br/>Achieved: reruns update rows<br/>instead of duplicating them, and<br/>artists no longer credited are removed"]
+    end
+
+    subgraph DB["PostgreSQL 16"]
+        CAT[("Catalogue<br/>labels, artists, releases<br/>Code: db/schema.sql")]
+        SNAP[("Daily snapshots<br/>price and demand per release per day<br/>Achieved: history that grows with every run")]
+        LST[("Shop listings, issue 24<br/>one row per listing per day")]
+    end
+
+    subgraph QRY["Questions: reads data"]
+        RD["Reader login, step 6<br/>Code: create_reader_role.py<br/>How: SELECT-only role, read-only<br/>sessions, 5 s query limit<br/>Achieved: nothing using this login can<br/>change data, enforced by the database"]
+        TL["Five query tools, step 6<br/>Code: queries/tools.py<br/>How: fixed SQL, arguments checked<br/>by Pydantic, capped results<br/>Achieved: safe, predictable reads<br/>an AI can call"]
+        QS["Question service, step 7<br/>How: sends the question and only the<br/>tool descriptions to Claude, checks and<br/>runs the tool it picks, returns the rows<br/>Will achieve: answers grounded in our data,<br/>clear replies for unsupported questions<br/>and for AI or database errors"]
+        API["Web API, step 9<br/>How: one HTTP endpoint, JSON in and out,<br/>question shape and length checked<br/>Will achieve: the page can ask questions,<br/>keys and passwords stay on the server"]
+        UI["Web page, step 10<br/>How: HTML, CSS and JavaScript, a question<br/>form with example questions, loading,<br/>empty, answer and error states<br/>Will achieve: anyone can ask about techno<br/>vinyl prices, on phone or desktop"]
+    end
+
+    USER(["Visitor"])
+
+    SCH --> CLI
+    SCH --> SHOP
+    CLI --> CL
+    SHOP --> CL
+    CL <-->|"HTTPS, about 55 requests a minute"| DG
+    CL --> MAP --> REP
+    REP -->|"writer login"| CAT
+    REP -->|"writer login"| SNAP
+    REP -->|"writer login"| LST
+    CAT --> RD
+    SNAP --> RD
+    LST --> RD
+    RD --> TL
+    TL --> QS
+    QS <-->|"question, tool descriptions, tool results"| AN
+    QS --> API
+    API -->|"JSON answer"| UI
+    USER -->|"types a question"| UI
+
+    classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
+    classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
+    classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200,stroke-dasharray: 4 3
+    class CLI,CL,MAP,REP,CAT,SNAP,RD,TL built
+    class SCH,QS,API,UI planned
+    class SHOP,LST support
+```
+
+Two separate logins protect the data. The **writer** (used only by ingestion) can change tables. The **reader** (used by everything a visitor can reach) can only read, and the database itself enforces that. The Discogs token, the Anthropic key and both passwords stay on the server and never reach the browser.
+
+---
+
+## 2. Task map, from step 1 to the web page
+
+In one sentence: steps are built in dependency order, and each arrow means "needs this first".
+
+```mermaid
+flowchart TD
+    S0["Starting point: schema and Docker<br/>Code: db/schema.sql, docker-compose.yml<br/>How: SQL tables, PostgreSQL 16 in a container<br/>Achieved: the same database on any machine"]
+    S1["Step 1, issue 5: Save releases<br/>Code: repository.py, mapping.py, save_release.py<br/>How: psycopg upserts in one transaction<br/>Achieved: a release with its label and<br/>artists, saved again without duplicates"]
+    S2["Step 2, issue 2: Tests and test database<br/>Code: tests/, conftest.py<br/>How: pytest, Discogs faked with responses,<br/>a throwaway PostgreSQL via Testcontainers<br/>Achieved: every change checked<br/>without touching real data"]
+    S3["Step 3, issue 3: Daily snapshots<br/>Code: save_snapshot.py, repository.py<br/>How: marketplace stats in EUR plus<br/>want, have and rating, one row per day<br/>Achieved: price and demand history"]
+    S4["Step 4, issue 6: Ingest a whole label<br/>Code: pipeline.py, ingest_label.py<br/>How: dedupe, vinyl filter, pacing,<br/>retries, commit per release, logging<br/>Achieved: a whole label in one command,<br/>failures listed, never silently lost"]
+    S5["Step 5, issue 10: Nightly schedule<br/>How: a scheduler runs the same command,<br/>prevents overlapping runs, keeps logs<br/>Will achieve: data refreshed every night,<br/>with a documented recovery path"]
+    S6["Step 6, issue 11: Read-only query tools<br/>Code: queries/, create_reader_role.py<br/>How: SELECT-only role, 5 fixed tools,<br/>Pydantic checks, capped results<br/>Achieved: safe reads for the AI"]
+    S7["Step 7, issue 7: AI question service<br/>How: Anthropic Messages API with tool use<br/>Will achieve: questions answered from the<br/>stored data, the AI never writes SQL"]
+    S8["Step 8, issue 9: Test the AI service<br/>How: pytest with faked AI answers<br/>Will achieve: tool choice, limits, errors<br/>and read-only access proven without<br/>live AI calls"]
+    S9["Step 9, issue 8: Web API<br/>How: a Python HTTP endpoint, JSON<br/>Will achieve: checked questions in,<br/>clear answers and errors out,<br/>no secrets sent to the browser"]
+    S10["Step 10, issue 12: Web page<br/>How: HTML, CSS, JavaScript calling the API<br/>Will achieve: the question box with example<br/>questions and loading, empty, answer and<br/>error states, on phone and desktop"]
+    S11["Step 11, issue 13: Test the web page<br/>How: browser tests against a faked API,<br/>plus one end-to-end check<br/>Will achieve: keyboard, labels, focus and<br/>screen-reader announcements verified"]
+    F19["Issue 19: CI runs all tests<br/>How: GitHub Actions with Docker, CI=true<br/>Will achieve: every pull request runs<br/>all tests, database ones included"]
+    F24["Issue 24: Tracked techno shops<br/>How: chosen shops' Discogs inventories,<br/>city recorded by us, a sixth query tool<br/>Will achieve: questions by seller city,<br/>such as records sold from Berlin"]
+    F18["Issues 18 and 25: Documentation<br/>Code: README, decisions.md, this page<br/>Achieved: decisions and architecture<br/>written down, updated with every step"]
+
+    S0 --> S1
+    S1 --> S2
+    S1 --> S3
+    S2 --> S4
+    S3 --> S4
+    S4 --> S5
+    S4 --> S6
+    S6 --> S7
+    S7 --> S8
+    S7 --> S9
+    S8 --> S9
+    S9 --> S10
+    S10 --> S11
+    S2 --> F19
+    S4 --> F24
+    S6 --> F24
+
+    classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
+    classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
+    classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
+    class S0,S1,S2,S3,S4,S6 built
+    class S5,S7,S8,S9,S10,S11 planned
+    class F19,F24,F18 support
+```
+
+| Step | Issue | Status | What it gives | Main tech |
+| --- | --- | --- | --- | --- |
+| Start | – | Built | The tables and a local PostgreSQL | SQL, Docker Compose |
+| 1 | [5](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/5) Save releases | Built | One release with label and artists, saved repeatably | Python, psycopg, upserts |
+| 2 | [2](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/2) Tests | Built | Fake Discogs, a throwaway test database | pytest, responses, Testcontainers |
+| 3 | [3](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) Snapshots | Built | One price and demand row per release per day | Discogs marketplace API |
+| 4 | [6](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) Pipeline | Built | A whole label in one command | logging, pacing, retries |
+| 5 | [10](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) Schedule | Planned | The pipeline runs every night, never twice at once | scheduler, logs |
+| 6 | [11](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) Query tools | Built | Safe, capped reads for the AI | PostgreSQL roles, Pydantic |
+| 7 | [7](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) AI service | Planned | Questions answered from the data | Anthropic Messages API, tool use |
+| 8 | [9](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) Test AI | Planned | Guardrails proven without live AI calls | pytest, mocks |
+| 9 | [8](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) Web API | Planned | An HTTP endpoint for the page | Python web framework |
+| 10 | [12](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) Web page | Planned | The question box on adnsaudio.com | HTML, CSS, JavaScript |
+| 11 | [13](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) Test page | Planned | Keyboard, focus and screen-reader checks | browser tests |
+| – | [19](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/19) CI | Next | Every pull request runs all tests, including the database ones | GitHub Actions |
+| – | [24](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/24) Tracked shops | Planned | Questions by seller city, e.g. Berlin | Discogs inventory API |
+| – | [18](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/18), [25](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/25) Documentation | Ongoing | README, decisions and this page kept current | Markdown, Mermaid |
+
+---
+
+## 3. One ingestion run, step by step
+
+In one sentence: the command lists a label's releases and skips what is clearly not vinyl. For each remaining release it fetches the details and prices, saves them, and commits before moving on.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Op as Operator or schedule
+    participant Cmd as ingest_label.py, the command
+    participant Pipe as pipeline.py, the run logic
+    participant Cli as discogs_client.py, HTTP calls
+    participant Dg as Discogs API
+    participant Map as mapping.py, JSON to rows
+    participant Repo as repository.py, saving
+    participant Pg as PostgreSQL
+
+    Op->>Cmd: python -m ingestion.ingest_label 800000
+    Cmd->>Pg: connect as writer
+    Cmd->>Pipe: ingest_label(label, today in UTC)
+    Note over Cmd,Pipe: Achieved: one date per run, so a run<br/>that passes midnight stays on one day
+    Pipe->>Cli: get_label_releases
+    loop every page of 100
+        Cli->>Cli: wait until 1.1 s since the last request
+        Cli->>Dg: GET labels/800000/releases
+        Dg-->>Cli: summaries
+    end
+    Note over Cli,Dg: Achieved: never more than about 55 requests<br/>a minute, below the Discogs limit of 60.<br/>Every request is retried after 5, 15, 60 s<br/>on 429, 5xx or a dropped connection
+    opt the label list cannot be fetched
+        Cmd->>Op: log the error, exit 1
+        Note over Cmd: Achieved: nothing half-done, since<br/>no release was started
+    end
+    Pipe->>Pipe: drop duplicates, 12 entries become 11
+    Note over Pipe: Achieved: no release fetched or<br/>counted twice
+    loop every release
+        alt list text is clearly CD, File, Cass
+            Pipe->>Pipe: skip without a request, count as not vinyl
+            Note over Pipe: Achieved: no time spent on<br/>releases that are not vinyl
+        else maybe vinyl
+            Cli->>Dg: GET releases/id
+            Dg-->>Cli: details, formats, community want and have
+            alt details have no Vinyl format
+                Pipe->>Pipe: skip, count as not vinyl
+            else vinyl
+                Cli->>Dg: GET marketplace/stats/id in EUR
+                Dg-->>Cli: copies for sale, lowest price
+                Pipe->>Map: map release, price row, demand row
+                Map-->>Pipe: rows, NULL where nothing to measure
+                Note over Map: Achieved: no price means NULL, not 0,<br/>so averages stay honest
+                Pipe->>Repo: save_release, then save_snapshots
+                Repo->>Pg: release, then snapshot, each in its own transaction, committed
+                Note over Repo,Pg: Achieved: each release is saved for good<br/>before the next starts, and reruns update<br/>instead of duplicating
+                Pipe->>Cmd: log saved line with price and demand
+            end
+        end
+        opt any error for this release
+            Pipe->>Pipe: record it, log ERROR, continue
+            Note over Pipe: Achieved: one bad release does<br/>not stop the whole label
+        end
+        opt the database connection is lost
+            Pipe->>Cmd: stop the run, log the error, exit 1
+            Note over Pipe,Cmd: Achieved: no pointless retries when<br/>every later save would fail too
+        end
+    end
+    Cmd->>Op: summary, failed releases listed, exit 0 or 1
+    Note over Op,Cmd: Achieved: a schedule can tell from the<br/>exit code whether anything failed
+```
+
+Smaller commands for one release at a time: `save_release` saves a release with its label and artists, and `save_snapshot` adds that day's price and demand. Both use the same client, mapping and repository.
+
+---
+
+## 4. A visitor's question, step by step (planned, steps 7 to 10)
+
+In one sentence: the AI never touches the database. It can only ask for one of five fixed tools, whose answers come back capped and are turned into a plain-language reply on the web page.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor V as Visitor
+    participant UI as Web page, step 10
+    participant API as Web API, step 9
+    participant QS as Question service, step 7
+    participant AI as Claude via Anthropic API
+    participant T as Query tools, step 6
+    participant Pg as PostgreSQL as reader
+
+    V->>UI: Which Planet E records got more expensive this month
+    UI->>UI: show loading, block a second submit
+    UI->>API: POST question as JSON
+    alt question empty or too long
+        API-->>UI: clear error, nothing sent to the AI
+    end
+    API->>QS: checked question
+    Note over UI,QS: Will achieve: questions arrive checked<br/>for shape and length, keys stay on the server
+    QS->>AI: question and the 5 tool descriptions
+    alt no tool fits the question
+        AI-->>QS: plain reply that the data cannot answer it
+    else a tool fits
+        AI-->>QS: call market_changes with label planet e, metric lowest_price, days 30
+        Note over QS,AI: Will achieve: the AI chooses a tool<br/>but never writes SQL itself
+        QS->>T: run_tool, arguments checked by Pydantic
+        alt arguments refused
+            T-->>QS: ToolError with the reason
+            QS->>AI: the reason, so it can correct the call
+        end
+        T->>Pg: fixed parameterized SELECT, 5 s limit, capped rows
+        Note over T,Pg: Achieved in step 6: read-only login,<br/>fixed queries, capped results
+        Pg-->>T: rows and total matched
+        T-->>QS: JSON result
+        QS->>AI: tool result
+        AI-->>QS: answer grounded in the rows
+        Note over QS,AI: Will achieve: answers based only<br/>on the stored data
+    end
+    opt Anthropic or database error
+        QS-->>API: a clear error, no secrets in it
+    end
+    QS-->>API: answer
+    API-->>UI: JSON
+    UI-->>V: 3 records rose, Throw from 10.00 to 15.00 EUR
+    Note over V,UI: Will achieve: a plain-language answer, or a<br/>clear empty or error state, announced to<br/>screen readers too
+```
+
+The five query tools, built in step 6, are all the AI can use:
+
+| Tool | Answers questions like | Limits |
+| --- | --- | --- |
+| `search_releases` | "Which Underground Resistance records from the 90s are in the catalogue?" | Filters: title, label, artist, genre, style, country, years |
+| `rank_releases` | "Cheapest Tresor records right now", "most wanted Detroit techno" | 7 fixed rankings: lowest or highest price, most wanted, most owned, best rated, fewest for sale, most wanted per owner |
+| `release_history` | "How has the price of this record moved?" | Day by day, up to 90 days |
+| `market_changes` | "Which records got more expensive this month?" | Lowest price, copies for sale, want or have; rises or falls; up to 365 days |
+| `compare_labels` | "Compare Tresor and Axis" | Up to 5 labels: releases, copies for sale, average and median price, want, have, rating |
+
+The list tools return at most 50 rows (25 unless asked for more), plus the total number that matched. `release_history` returns one row per day, so at most 90, and `compare_labels` at most 10.
+
+---
+
+## 5. Components
+
+| Part | Code | Tech | What it does | Safeguards |
+| --- | --- | --- | --- | --- |
+| Schema | [`db/schema.sql`](../db/schema.sql) | PostgreSQL 16 | Tables: labels, artists, releases, release_artists, price_snapshots, demand_snapshots | One snapshot per release per day (unique key) |
+| Local database | [`docker-compose.yml`](../docker-compose.yml) | Docker Compose | Runs PostgreSQL on port 5432 and loads the schema on first start | Data kept in a named volume |
+| Settings | [`ingestion/config.py`](../ingestion/config.py), [`queries/config.py`](../queries/config.py) | python-dotenv | Read `.env`; stop at once if a setting is missing | The web side never sees the Discogs token or the writer's password |
+| Discogs client | [`ingestion/discogs_client.py`](../ingestion/discogs_client.py) | requests | Fetches releases, label pages and marketplace stats | 1.1 s between requests; retries 429, 5xx and dropped connections after 5, 15, 60 s; 30 s timeout |
+| Mapping | [`ingestion/mapping.py`](../ingestion/mapping.py) | pure Python | Turns Discogs JSON into table rows; decides vinyl or not | No price stored as NULL, not 0; no ratings stored as NULL, not 0.0; exact decimal prices |
+| Repository | [`ingestion/repository.py`](../ingestion/repository.py) | psycopg 3 | Saves releases and snapshots | Upserts, so a rerun updates instead of duplicating; one transaction per save; artists no longer credited are unlinked |
+| Single-release commands | [`save_release.py`](../ingestion/save_release.py), [`save_snapshot.py`](../ingestion/save_snapshot.py) | Python CLI | Save one release, or one release plus today's snapshot | Clear messages and exit codes |
+| Label pipeline | [`ingestion/pipeline.py`](../ingestion/pipeline.py), [`ingest_label.py`](../ingestion/ingest_label.py) | Python CLI, logging | Ingests every vinyl release of a label | Duplicates dropped; failures listed and exit 1; commit per release; stops if the label list cannot be fetched or the database connection is lost |
+| Reader login | [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) | PostgreSQL roles | Creates the SELECT-only login | Read-only sessions and a 5 s limit set on the role; future tables readable, never writable |
+| Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped |
+| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 177 tests: fake Discogs, a throwaway PostgreSQL, a fake clock | Database tests skip without Docker on a laptop, fail in CI |
+
+---
+
+## 6. How problems are usually approached
+
+The same routine has been used on every task:
+
+1. **Check the facts at the source.** Before deciding, look at what the real system returns: call the live API, read the code, look at the database. Several decisions changed because of this. For example, the rating endpoint turned out to have no want and have numbers.
+2. **Separate the environment from the code.** When something fails, first find out whether the cause is our code, the machine (Docker, disk, settings) or the outside service.
+3. **Lay out the options with their trade-offs.** Name two or three ways, what each costs, and what risk each leaves open. Pick one deliberately and record why (see [decisions.md](decisions.md)).
+4. **Make the smallest change that solves it,** in the place where the problem belongs.
+5. **Prove it with tests,** including the failure cases.
+6. **Plant bugs on purpose.** Break the code in specific ways and check that a test fails each time. Add a test whenever a planted bug survives.
+7. **Run it for real.** Do a live run against Discogs and a throwaway database before handing over.
+8. **Write it down.** Update the README, decisions.md and this page. Raise anything outside the task's scope as its own ticket instead of fixing it on the side.
+
+---
+
+## 7. Problem log: what went wrong and what we did
+
+| Issue | Problem | Where it came from | What we did |
+| --- | --- | --- | --- |
+| 2 | Tests could not start on a fresh copy: the app stops when a setting is missing | Strict settings, which are deliberate | Tests set obviously fake settings themselves (`tests/conftest.py`); the app stayed strict |
+| 2 | Docker could not start any container ("input/output error") | The Docker virtual machine (Colima) had disk errors and went read-only | Restarted Colima and recreated the local database container; no data was lost |
+| 2 | Testcontainers failed on this Mac | Its clean-up helper looks for the Docker socket at a path that does not exist inside Colima | Pointed it at the socket inside the virtual machine (`TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE`) |
+| 2 | A green test run could hide skipped database tests | Without Docker the database tests skip | Skip on a laptop, fail when `CI=true`; CI itself is issue 19 |
+| 3 | The Discogs documentation page refused automated reading | Discogs blocks scripted page requests | Called the live API with the project's own client and read the real answers |
+| 3 | The release endpoint's price had no currency and ignored currency requests | How Discogs builds that response | Took prices from the marketplace stats endpoint, always in EUR |
+| 3 | "No ratings" arrived as an average of 0.0 | Discogs' format | Stored as NULL (not rated), so averages are not dragged down |
+| 3 | A bug-planting script reverted uncommitted work | Restoring files with git before committing | Re-applied the changes; since then work is committed before bugs are planted |
+| 6 | A label list repeated releases (597 entries, 511 releases) | Discogs lists some releases twice | De-duplicated before fetching |
+| 6 | Format text in label lists is loose and abbreviated | Discogs summary format | Skip only clear non-vinyl; let each release's details decide the rest |
+| 6 | Saves were only committed at the end of a run | A read left a database transaction open, turning later saves into savepoints | Closed each read in its own transaction; a test checks releases are visible mid-run |
+| 6 | Risk of hitting Discogs' rate limit | About 2 requests per release, 60 a minute allowed | Every request paced 1.1 s apart, temporary errors retried |
+| 11 | A read-only session alone can be switched off | PostgreSQL session settings belong to the session | A separate SELECT-only login, with read-only sessions as a second lock |
+| 11 | `%` and `_` typed by a user act as wildcards | SQL LIKE syntax | Escaped before matching; tests check they match literally |
+| 11 | The live check showed releases filed under other labels | Discogs' label list includes releases where the label is only credited ("Recorded At"), and only the first label is stored | Documented; to be resolved before the AI service (step 7) |
+| Setup | Commands could not start on a new machine | `.env` lacked most settings, and an appended line was glued onto the previous one | Added the settings and split the glued line, without displaying any values |
+
+---
+
+## 8. Keeping this page current
+
+Each task updates this page in the same pull request: the diagram boxes (outcome text, colour, new parts), the task table, the components table and the problem log. When a planned part is built, its box changes from **Will achieve** to **Achieved** and turns green.
