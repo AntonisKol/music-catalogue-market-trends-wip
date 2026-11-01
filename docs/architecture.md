@@ -5,7 +5,7 @@ How the project fits together, what each part is made of, and how it was built s
 - **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
 - **Developers:** every box names its code file, and the components table goes into detail.
 
-*Last updated: 1 November 2026, after step 8 (issue 9). 244 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude.*
+*Last updated: 1 November 2026, after step 9 (issue 8). 293 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude.*
 
 **How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
 
@@ -26,6 +26,7 @@ flowchart TB
     subgraph EXT["Outside services"]
         DG["Discogs REST API<br/>Source of releases, label lists<br/>and marketplace prices"]
         AN["Anthropic API, Claude<br/>Reads a question and picks<br/>which query tool to call"]
+        CF["Cloudflare Turnstile<br/>Confirms the visitor is a person"]
     end
 
     subgraph ING["Ingestion: writes data"]
@@ -41,13 +42,14 @@ flowchart TB
         CAT[("Catalogue<br/>labels, artists, releases<br/>Code: db/schema.sql")]
         SNAP[("Daily snapshots<br/>price and demand per release per day<br/>Achieved: history that grows with every run")]
         LST[("Shop listings, issue 24<br/>one row per listing per day")]
+        LIM[("Question counts<br/>per visitor hash and site, per hour and day<br/>Code: create_limits_role.py<br/>Achieved: limits that survive restarts")]
     end
 
     subgraph QRY["Questions: reads data"]
         RD["Reader login, step 6<br/>Code: create_reader_role.py<br/>How: SELECT-only role, read-only<br/>sessions, 5 s query limit<br/>Achieved: nothing using this login can<br/>change data, enforced by the database"]
         TL["Five query tools, step 6 and issue 27<br/>Code: queries/tools.py<br/>How: fixed SQL, arguments checked<br/>by Pydantic, capped results, vinyl only<br/>Achieved: safe, predictable reads<br/>an AI can call"]
         QS["Question service, steps 7 and 8<br/>Code: queries/questions.py, queries/verify.py<br/>How: Claude Haiku 5.5 via the SDK tool runner,<br/>gets only the question and tool descriptions,<br/>our code checks and runs each tool it picks,<br/>then checks every figure against the rows<br/>Achieved: answers from our rows, returned<br/>with their sources, a warning when a figure<br/>cannot be found, clear errors for failures"]
-        API["Web API, step 9<br/>How: one HTTP endpoint, JSON in and out,<br/>question shape and length checked,<br/>limits per visitor<br/>Will achieve: the page can ask questions,<br/>keys and passwords stay on the server,<br/>protected from abuse"]
+        API["Web API, step 9<br/>Code: web/app.py, limits.py, captcha.py<br/>How: Flask under gunicorn, JSON in and out;<br/>Turnstile human check, limits per visitor<br/>and for the site, counted in PostgreSQL<br/>Achieved: questions checked and limited<br/>before the AI, clear JSON errors,<br/>keys and passwords stay on the server"]
         UI["Web page, step 10<br/>How: HTML, CSS and JavaScript, a question<br/>form with example questions, loading,<br/>empty, answer and error states,<br/>names the AI model that answered<br/>Will achieve: anyone can ask about techno<br/>vinyl prices, on phone or desktop"]
     end
 
@@ -69,14 +71,16 @@ flowchart TB
     TL --> QS
     QS <-->|"question, tool descriptions, tool results"| AN
     QS --> API
+    API <-->|"verify token"| CF
+    API <-->|"limits login, only this table"| LIM
     API -->|"JSON answer"| UI
     USER -->|"types a question"| UI
 
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200,stroke-dasharray: 4 3
-    class CLI,CL,MAP,REP,CAT,SNAP,RD,TL,QS built
-    class SCH,API,UI planned
+    class CLI,CL,MAP,REP,CAT,SNAP,RD,TL,QS,API,LIM,CF built
+    class SCH,UI planned
     class SHOP,LST support
 ```
 
@@ -99,7 +103,7 @@ flowchart TD
     S6["Step 6, issue 11: Read-only query tools<br/>Code: queries/, create_reader_role.py<br/>How: SELECT-only role, 5 fixed tools,<br/>Pydantic checks, capped results<br/>Achieved: safe reads for the AI"]
     S7["Step 7, issue 7: AI question service<br/>Code: queries/questions.py<br/>How: Claude Haiku 5.5, SDK tool runner over<br/>the 5 tools, prompt caching, no round cap<br/>Achieved: questions answered from the<br/>stored data with their sources,<br/>the AI never writes SQL"]
     S8["Step 8, issue 9: Test the AI service<br/>Code: tests/test_questions.py, test_verify.py,<br/>test_live_answers.py<br/>How: faked AI for guardrails, a free figure check<br/>on every answer, a live test with an AI judge<br/>Achieved: wrong figures flagged to visitors,<br/>tool choice, limits, errors and read-only<br/>access proven, real answers checked before releases"]
-    S9["Step 9, issue 8: Web API<br/>How: a Python HTTP endpoint, JSON<br/>Will achieve: checked questions in,<br/>clear answers and errors out,<br/>no secrets sent to the browser,<br/>limits per visitor"]
+    S9["Step 9, issue 8: Web API<br/>Code: web/, create_limits_role.py<br/>How: Flask, Cloudflare Turnstile, limits per<br/>visitor and site in a PostgreSQL table<br/>Achieved: one endpoint for the page, bots and<br/>heavy use stopped before the AI, JSON errors,<br/>no secrets or usage sent to the browser"]
     S10["Step 10, issue 12: Web page<br/>How: HTML, CSS, JavaScript calling the API<br/>Will achieve: the question box with example<br/>questions and loading, empty, answer and<br/>error states, on phone and desktop"]
     S11["Step 11, issue 13: Test the web page<br/>How: browser tests against a faked API,<br/>plus one end-to-end check<br/>Will achieve: keyboard, labels, focus and<br/>screen-reader announcements verified"]
     F19["Issue 19: CI runs all tests<br/>Code: .github/workflows/tests.yml<br/>How: GitHub Actions on Python 3.10 and 3.13,<br/>Testcontainers PostgreSQL, CI=true,<br/>actions pinned to exact commits<br/>Achieved: no pull request merges into<br/>main unless all tests pass"]
@@ -129,8 +133,8 @@ flowchart TD
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
-    class S0,S1,S2,S3,S4,S6,S7,S8,F27,F19 built
-    class S5,S9,S10,S11 planned
+    class S0,S1,S2,S3,S4,S6,S7,S8,S9,F27,F19 built
+    class S5,S10,S11 planned
     class F24,F18 support
 ```
 
@@ -145,7 +149,7 @@ flowchart TD
 | 6 | [11](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) Query tools | Built | Safe, capped reads for the AI | PostgreSQL roles, Pydantic |
 | 7 | [7](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) AI service | Built | Questions answered from the data, with their sources | Anthropic Messages API, tool runner, Claude Haiku 5.5 |
 | 8 | [9](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) Test AI | Built | Guardrails proven with a faked AI; figures checked on every answer; a live before-release test with an AI judge | pytest, httpx MockTransport, Claude Opus 5.5 as judge |
-| 9 | [8](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) Web API | Planned | An HTTP endpoint for the page, with limits per visitor before going public | Python web framework |
+| 9 | [8](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) Web API | Built | One endpoint for the page; a human check and limits per visitor and for the site before any AI call | Flask, gunicorn, Cloudflare Turnstile, PostgreSQL |
 | 10 | [12](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) Web page | Planned | The question box on adnsaudio.com | HTML, CSS, JavaScript |
 | 11 | [13](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) Test page | Planned | Keyboard, focus and screen-reader checks | browser tests |
 | – | [27](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/27) Review fixes | Built | Malformed data, deleted and credit-only releases handled; one run at a time; vinyl-only answers | Python, PostgreSQL advisory lock |
@@ -253,16 +257,20 @@ sequenceDiagram
 
     V->>UI: Which Planet E records got more expensive this month
     UI->>UI: show loading, block a second submit
-    UI->>API: POST question as JSON
-    opt this visitor asked too often
-        API-->>UI: limit reached, no AI request made
-        Note over UI,API: Will achieve: the service protected<br/>from abuse before the site goes public
+    UI->>API: POST question and Turnstile token as JSON
+    alt question empty, too long or malformed
+        API-->>UI: 400 with a clear message
     end
-    alt question empty or too long
-        API-->>UI: clear error, nothing sent to the AI
+    API->>API: confirm the token with Cloudflare Turnstile
+    alt not a person, or Cloudflare unreachable
+        API-->>UI: 403 or 503, nothing counted, no AI request
     end
+    API->>API: count it: visitor hour, visitor day, site day
+    alt a limit is reached
+        API-->>UI: 429 with Retry-After, nothing counted
+    end
+    Note over UI,API: Achieved in step 9: bots and heavy use stopped<br/>before the AI, visitors stored only as a keyed hash
     API->>QS: checked question
-    Note over UI,QS: Will achieve: questions arrive checked<br/>for shape and length, keys stay on the server
     QS->>AI: question and the 5 tool descriptions
     alt no tool fits the question
         AI-->>QS: plain reply that the data cannot answer it
@@ -286,10 +294,11 @@ sequenceDiagram
     end
     opt Anthropic or database error
         QS-->>API: QuestionError with a code and a safe message
+        API-->>UI: JSON error, 503 with Retry-After or 500
         Note over QS,API: Achieved in step 7: busy, unavailable, configuration<br/>or database, details only in the log
     end
     QS-->>API: answer
-    API-->>UI: JSON
+    API-->>UI: answer, sources, warning, model as JSON
     UI-->>V: 3 records rose, Throw from 10.00 to 15.00 EUR, answered by Claude Haiku 5.5
     Note over V,UI: Will achieve: a plain-language answer, or a<br/>clear empty or error state, announced to<br/>screen readers too
 ```
@@ -322,8 +331,9 @@ The list tools return at most 50 rows (25 unless asked for more), plus the total
 | Label pipeline | [`ingestion/pipeline.py`](../ingestion/pipeline.py), [`ingest_label.py`](../ingestion/ingest_label.py) | Python CLI, logging | Ingests every vinyl release of a label | One run at a time (advisory lock); duplicates dropped; credit-only releases skipped; deleted releases listed as gone; failures, malformed data included, listed and exit 1; commit per release; stops if the label list cannot be fetched or the database connection is lost |
 | Reader login | [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) | PostgreSQL roles | Creates the SELECT-only login | Read-only sessions and a 5 s limit set on the role; future tables readable, never writable; no temporary tables |
 | Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped; vinyl only; timeouts reported as a readable reason |
-| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 244 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock; a `--live` before-release test with the real Claude and an AI judge | Database tests skip without Docker on a laptop, fail in CI; live tests never run without `--live` |
+| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 293 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock; a `--live` before-release test with the real Claude and an AI judge | Database tests skip without Docker on a laptop, fail in CI; live tests never run without `--live` |
 | Question service | [`queries/questions.py`](../queries/questions.py) | Anthropic SDK tool runner, Claude Haiku 5.5 | Sends the question and tool descriptions to Claude, runs the tools it asks for, returns the answer with its sources | Claude never sees SQL or the database; refused arguments go back as errors; a database failure stops the run; every error becomes a visitor-safe `QuestionError`; instructions and tools cached |
+| Web API | [`web/app.py`](../web/app.py), [`limits.py`](../web/limits.py), [`captcha.py`](../web/captcha.py), [`create_limits_role.py`](../ingestion/create_limits_role.py) | Flask, gunicorn, Cloudflare Turnstile | `POST /api/questions`: checks the request, the human check and the limits, then asks the question service | Fails closed; limits counted in one transaction by a login that can only touch `question_counts`; visitors stored as a keyed hash, deleted after two days; forwarded addresses trusted only behind a configured proxy; usage never sent; 8 KB body limit; CORS only for listed origins |
 | CI | [`.github/workflows/tests.yml`](../.github/workflows/tests.yml), [`dependabot.yml`](../.github/dependabot.yml) | GitHub Actions, Dependabot | Runs every test on Python 3.10 and 3.13 for each pull request and push to main | Required to pass before merging; read-only token; actions pinned to exact commits; runs stop after 15 minutes |
 
 ---
@@ -376,6 +386,7 @@ The same routine has been used on every task:
 | 9 | Tool schema bounds (25, 100, 1900, 2100) let invented prices pass the figure check | The first version allowed every number in the tool definitions | Only the instructions and plain tool descriptions count; schema bounds are left out |
 | 9 | A live answer said "the data has no October prices" although it did, and the test passed | A 30-day lookup stopped one day short of the October snapshot; the check matched "10 copies" as €10; the judge accepted a claim of absence | Tool descriptions and instructions now ask for whole periods; prices checked as prices; the judge checks claims of absence; the second run answered correctly |
 | 9 | A planted bug (list markers counted as figures) survived | The test's markers 1 and 2 happen to appear in the test data | Added markers 8 and 9, which appear nowhere; the bug is now caught |
+| 8 | Two planted bugs survived | They changed nothing in the code's behaviour (a condition that was always true anyway, a proxy setting of zero), so they proved nothing | Replaced by bugs that really change what the code does; both were then caught |
 | Setup | Commands could not start on a new machine | `.env` lacked most settings, and an appended line was glued onto the previous one | Added the settings and split the glued line, without displaying any values |
 
 ---

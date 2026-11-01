@@ -46,8 +46,8 @@ The tasks below are ordered so each step builds on working code from the previou
 | 6 | [#11 Add safe read-only query tools for the live dataset](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) | P1 | Done | A restricted database role and a small set of parameterized query functions for release lookup and price/demand comparisons. |
 | 7 | [#7 Add Anthropic-powered natural-language queries over live data](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) | P1 | Done | Use Anthropic tool use: the model selects an approved Python query tool, the app executes it, and the model explains the live results. |
 | 8 | [#9 Test the Anthropic query service and guardrails](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) | P1 | Done | Test the assistant service, tool selection, read-only behavior, query limits, and grounded answers without live API calls. |
-| 9 | [#8 Expose natural-language questions through a Python web API](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) | P1 | Todo | Add a validated HTTP/JSON endpoint for the browser to call; keep Anthropic and database credentials server-side. |
-| 10 | [#12 Build the natural-language question web frontend](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) | P1 | Todo; blocked by #8 | Build the user-facing question form and answer view, including loading, validation, and error states. |
+| 9 | [#8 Expose natural-language questions through a Python web API](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) | P1 | Done | Add a validated HTTP/JSON endpoint for the browser to call; keep Anthropic and database credentials server-side. |
+| 10 | [#12 Build the natural-language question web frontend](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) | P1 | Todo | Build the user-facing question form and answer view, including loading, validation, and error states. |
 | 11 | [#13 Test web question frontend and accessibility](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) | P1 | Todo; blocked by #12 | Test the browser experience, API integration, keyboard interaction, focus, and accessibility announcements. |
 
 ### What each task teaches
@@ -77,7 +77,9 @@ The tasks below are ordered so each step builds on working code from the previou
 
 - A question service: Claude Haiku 5.5 picks among the five query tools, our code runs them through the read-only login, and the answer comes back with the rows it is based on (see [Ask a question](#ask-a-question)).
 
-Scheduling, the web API and the frontend are roadmap work.
+- A web API (`POST /api/questions`) in front of the question service, with a human check, limits per visitor and for the whole site, and JSON errors (see [Run the web API](#run-the-web-api)).
+
+Scheduling and the frontend are roadmap work.
 
 ## Requirements
 
@@ -101,6 +103,10 @@ POSTGRES_PASSWORD=catalogue
 POSTGRES_DB=catalogue
 POSTGRES_READER_USER=catalogue_reader
 POSTGRES_READER_PASSWORD=choose_a_different_password
+POSTGRES_LIMITS_USER=catalogue_limits
+POSTGRES_LIMITS_PASSWORD=choose_another_password
+TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA
+VISITOR_HASH_SECRET=a_long_random_string
 ```
 
 `DISCOGS_USER_AGENT` must identify this app. Discogs rejects generic clients. Use your own token and password; these values are examples for local development, not production credentials. Do not commit `.env`.
@@ -227,6 +233,58 @@ PY
 - **Checked figures.** Every price, count and date in an answer must appear in the rows, arguments or question it was built from ([`queries/verify.py`](queries/verify.py)): no extra AI call. If one cannot be found, the answer is still returned, with `result.unverified` listing those figures and `result.warning` set to a note for the page to show, and the case is logged.
 - **Errors.** Every failure becomes a `QuestionError` with a `code` (`invalid_question`, `busy`, `unavailable`, `configuration` or `database`) and a message that is safe to show a visitor. The details are only logged. A refused tool argument is not an error: it goes back to Claude with the reason, so it can correct the call.
 - **Usage.** Each answer reports its `rounds` (model requests) and token `usage`. The tool definitions and instructions are cached between questions. There is no cap on tool rounds per question; limits per visitor belong to the web API.
+
+## Run the web API
+
+The API is what the question page calls. Every question passes three guards before anything is sent to Claude:
+1. **A human check:** [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/). The page shows Turnstile's widget, which gives the visitor a one-time token, and the API confirms it with Cloudflare.
+2. **Per-visitor limits:** by default 10 questions an hour and 30 a day.
+3. **A site-wide daily limit:** by default 500.
+
+Visitors are counted by a keyed hash of their IP address, never the address itself, and counts are deleted after two days.
+
+Create the counter table and its login once per database. Like the reader, this login is separate: it may only read and change the counter table.
+
+```bash
+python -m ingestion.create_limits_role
+```
+
+Then start the API:
+
+```bash
+flask --app web.app run                                    # development, on port 5000
+gunicorn --workers 2 --timeout 120 'web.app:create_app()'  # production
+```
+
+Ask a question:
+
+```bash
+curl -s -X POST localhost:5000/api/questions -H 'Content-Type: application/json' \
+  -d '{"question": "Which is the cheapest Planet E record?", "captcha_token": "XXXX.DUMMY.TOKEN.XXXX"}'
+```
+
+The response is `{"answer", "sources", "warning", "model"}`. Errors are `{"error": {"code", "message"}}`, and the message is safe to show a visitor:
+
+| Status | Codes |
+| --- | --- |
+| 400 | `invalid_request`, `invalid_question` |
+| 403 | `captcha_failed` |
+| 413 | the request is over 8 KB |
+| 429 | `visitor_limit_reached`, `site_limit_reached`, with a `Retry-After` header |
+| 500 | `configuration`, `internal_error` |
+| 503 | `captcha_unavailable`, `busy`, `unavailable`, `database`, with `Retry-After` |
+
+**Settings in `.env`:**
+- **Required:**
+  - `TURNSTILE_SECRET_KEY`: your Turnstile site's secret. For development, Cloudflare's [test keys](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) work: `1x0000000000000000000000000000000AA` always passes and `2x0000000000000000000000000000000AA` always fails.
+  - `VISITOR_HASH_SECRET`: a long random string. Keep it secret and stable, or the visitor counts restart.
+  - `POSTGRES_LIMITS_USER` and `POSTGRES_LIMITS_PASSWORD`: the counting login.
+- **Optional:**
+  - `QUESTIONS_PER_VISITOR_HOUR`, `QUESTIONS_PER_VISITOR_DAY` and `QUESTIONS_PER_SITE_DAY`: the limits.
+  - `ALLOWED_ORIGINS`: the web pages that may call the API from a browser, comma-separated, for example `https://adnsaudio.com`. Empty means same origin only.
+  - `TRUSTED_PROXIES`: how many proxies in front of the API set `X-Forwarded-For`. Leave it at 0 unless there is one, or visitors could fake their address to dodge the limits.
+
+`GET /api/health` answers `{"status": "ok"}` for uptime checks.
 
 ## Reset the local database
 
