@@ -5,7 +5,7 @@ This file records what was decided while building the project, why, and how it s
 - **Everyone** (recruiters, product people, anyone curious): read *The need*, *The choice* and *In plain words*. No coding knowledge is needed. A [glossary](#glossary) at the end explains the technical words.
 - **Developers**: *In the code* shows where each decision lives and what it looks like.
 
-Each task adds a section. Newest at the bottom.
+Each task adds a section. Newest at the bottom. For diagrams of how the parts fit together, the task map and a log of the problems solved, see [architecture.md](architecture.md).
 
 ---
 
