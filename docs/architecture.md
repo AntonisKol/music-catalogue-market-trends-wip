@@ -370,7 +370,8 @@ The same routine has been used on every task:
 | 19 | Version tags of GitHub actions can be moved to other code | In March 2025 the tags of the `tj-actions/changed-files` action were moved to code that printed secrets into logs | Actions pinned to exact commits, updated through Dependabot pull requests |
 | 7 | A database failure inside a tool would have reached Claude as text, followed by another billed request | The SDK's tool runner turns every tool exception into a message for the model | The service runs each round's tools itself and stops at once on a database failure; a planted bug proves it |
 | 7 | The `responses` library could not fake the Anthropic API | The Anthropic SDK uses `httpx`, not `requests` | Faked with httpx's own `MockTransport`, so the real SDK and its runner still run in the tests |
-| 7 | The live check could not get an answer | The Anthropic account had no API credit left | The error path was confirmed instead: a safe message for the visitor, the real reason in the log; live answers to be checked once there is credit |
+| 7 | The first live check could not get an answer | The Anthropic account had no API credit left | Confirmed the error path (a safe message for the visitor, the real reason in the log), added credit, documented how in the README; five live questions then cost about $0.004 |
+| 7 | Answers came back with Markdown tables | The model formats its answers by default | Noted for the web page (step 10): render Markdown safely or ask for plain text |
 | Setup | Commands could not start on a new machine | `.env` lacked most settings, and an appended line was glued onto the previous one | Added the settings and split the glued line, without displaying any values |
 
 ---

@@ -240,6 +240,14 @@ PY
 - **Errors.** Every failure becomes a `QuestionError` with a `code` (`invalid_question`, `busy`, `unavailable`, `configuration` or `database`) and a message that is safe to show a visitor. The details are only logged. A refused tool argument is not an error: it goes back to Claude with the reason, so it can correct the call.
 - **Cost.** Each answer reports its `rounds` (billed model requests) and token `usage`. The tool definitions and instructions are cached between questions. There is no cap on tool rounds per question; limits per visitor belong to the web API.
 
+### Anthropic API credit
+
+The question service is paid per use from your Anthropic API balance. This is separate from a Claude.ai subscription (Pro or Max), which does not cover API usage. Without credit, every question fails with the `configuration` error, and the log says "Your credit balance is too low".
+
+1. Sign in at [console.anthropic.com](https://console.anthropic.com) with the account your `ANTHROPIC_API_KEY` belongs to.
+2. Open **Settings → Billing** ([direct link](https://console.anthropic.com/settings/billing)) and click **Buy credits**. $5 is plenty for testing: with Claude Haiku 5.5 a question costs about $0.001.
+3. Optional but recommended once the site is public: turn on **auto-reload** in Billing, and set a monthly spend limit under **Settings → Limits** as a safety net.
+
 ## Reset the local database
 
 Schema changes apply only when the data volume is created. To reapply `db/schema.sql` from scratch, this deletes the local database volume and its data:
