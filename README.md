@@ -86,7 +86,7 @@ The client currently **reads from Discogs but does not write to PostgreSQL**. Pe
 ## Requirements
 
 - Docker with Compose
-- Python 3.9 or newer
+- Python 3.10 or newer. The pinned libraries do not install on older versions, and macOS's built-in `python3` is 3.9: check with `python3 --version`, and if needed install a newer one (for example `brew install python@3.12`, then use `python3.12` below)
 - A [Discogs personal access token](https://www.discogs.com/settings/developers)
 - An [Anthropic API key](https://console.anthropic.com/) for the natural-language question feature
 
