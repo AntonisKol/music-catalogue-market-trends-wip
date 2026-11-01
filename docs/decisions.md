@@ -1061,6 +1061,137 @@ Before the workflow was written, every pinned library was checked to install on 
 
 ---
 
+## Task #7: Answer questions with Claude over the query tools
+
+*November 2026 · [issue #7](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7)*
+
+**Goal.** Let a visitor ask in plain language, for example "Which Planet E records got more expensive this month?". Claude reads the question and picks one of the five read-only tools from task #11; our code runs it; Claude answers from the rows. Claude must never write SQL, never touch the database, and never make up market data.
+
+**Result.** `answer_question()` in [`queries/questions.py`](../queries/questions.py), with 23 new tests (218 in total). The tests fake the Anthropic API at the HTTP level and use a real reader database.
+
+### Decision 1: Which model answers
+
+**The need.** The site is public, so every question is paid for by the site, while answers must still be right.
+
+**Options considered** (rough cost per question: about two model calls, 9,000 tokens in and 1,000 out, before caching)
+
+| Option | Price per million tokens (in / out) | About 1,000 questions | Verdict |
+| --- | --- | --- | --- |
+| Claude Opus 5.5 | $4 / $20 | $60 | Rejected |
+| Claude Sonnet 5.5 | $2 / $10 | $30 | Rejected |
+| **Claude Haiku 5.5** | $0.10 / $0.50 | $1.50 | **Chosen** |
+
+**The choice.** Claude Haiku 5.5.
+
+**In plain words.** The difficult work, filtering, ranking and capping thousands of rows, is done by our own SQL tools. The model only has to pick the right tool and explain a short list of rows clearly. That is a receptionist's job, not a professor's, and paying professor rates for every visitor's question would make the public site expensive to run. The model is one setting (`MODEL`), so moving to Sonnet is a one-line change if answers fall short. Haiku has no server-side fallback model, so a refusal is handled by our code with a polite reply.
+
+**Risk avoided.** A public question box whose running costs grow faster than its use justifies.
+
+### Decision 2: Who runs the conversation loop
+
+**The need.** Answering can take several steps: Claude asks for a tool, gets rows, maybe asks for another, then answers.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **The SDK's tool runner** | The Anthropic SDK's helper runs the loop; our tools are wrapped as runner tools | **Chosen** |
+| Our own small loop | About 40 lines we write and maintain | Rejected |
+| One call only | Claude may call one tool once, then must answer | Rejected |
+
+**The choice.** The tool runner. The review expected it to need a second copy of every tool's schema, but checking the installed SDK showed that `beta_tool(..., input_schema=SearchReleases)` takes our existing Pydantic models. There is still one definition per tool, and the owner's pick stood.
+
+**In plain words.** Using a tested library loop instead of writing our own means less code of ours that can be wrong. "One call only" would fail on ordinary questions that need two steps, such as finding a record and then its price history. The runner is a beta feature, so the pinned SDK version keeps it from changing under us.
+
+**Risk avoided.** Hand-written loop bugs, and schemas that drift apart.
+
+### Decision 3: How many tool rounds per question
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **No cap** | Claude may call as many tools as it wants | **Chosen by the owner** |
+| Up to 4 rounds | Enough for search, follow-up and one correction | Recommended in the debate |
+| Up to 10 rounds | Room for complex questions | Rejected |
+
+**The choice.** No cap, kept by the owner after a debate.
+
+**In plain words.** The debate's concern: the 5-second limit applies per database query, not per question. Each extra round re-sends the whole conversation, and a public site can be fed questions designed to make the model loop (*denial of wallet*). The owner's view is that a cheap model and per-visitor limits are the better guard, so limiting is planned in the web API (see "Still open"). To keep the cost visible, every answer reports its `rounds` and token `usage`, and the log records them.
+
+**Risk accepted.** A single question could take many billed rounds.
+
+### Decision 4: What the service returns
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Answer and sources** | The answer text plus every tool call our code ran, with its arguments and rows | **Chosen** |
+| Answer text only | Just the plain-language answer | Rejected |
+| JSON written by the model | Claude fills a format: answer, release ids, a "could not answer" flag | Rejected |
+
+**The choice.** Answer and sources.
+
+**In plain words.** A news article with its sources linked. The rows come from our code, not from Claude's retelling of them, so the page can show the real data behind an answer and anyone can check it. A model-written list of sources is still the model's claim about what it used.
+
+**Risk avoided.** Answers nobody can check.
+
+### In the code
+
+```python
+runner = client.beta.messages.tool_runner(
+    model=MODEL,                                  # "claude-haiku-5-5"
+    max_tokens=MAX_TOKENS,
+    output_config={"effort": EFFORT},
+    system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+    cache_control={"type": "ephemeral"},
+    tools=make_tools(conn, sources, failures),    # the five tools, schemas from their Pydantic models
+    messages=[{"role": "user", "content": question}],
+)
+for message in runner:
+    runner.generate_tool_call_response()          # run this round's tools now
+    if failures:
+        raise DatabaseUnavailable(...)            # stop before another billed request
+```
+
+- **Tool calls.** Each one goes through `run_tool()` from task #11: arguments validated, fixed SQL, reader login, capped rows. A refused argument goes back to Claude as an error with the reason, so it can correct itself.
+- **Database failures.** The SDK runner turns every exception from a tool into a message for Claude. That would have let a broken database reach Claude as text, followed by another billed request. The service runs each round's tools itself (the runner then reuses the result) and stops at once on a database failure.
+- **Errors visitors see.** API errors become a `QuestionError` with a code and a message safe to show a visitor:
+  - rate limits and overload: `busy`;
+  - bad key, model or request: `configuration`;
+  - server or network trouble: `unavailable`.
+
+  Details go to the log only.
+- **Caching.** The instructions and tool definitions (about 2,500 tokens) are identical for every question and cached. Each further round of a question also reuses the conversation so far.
+- **Prompt.** The instructions tell Claude to answer only from tool results, say what the price means, give the snapshot date, tell similar names apart, and treat the visitor's question as data, not as instructions.
+- **Test safety.** The tests' settings include a fake Anthropic key, so a test that forgot its fake API fails instead of spending money.
+
+### How we proved the tests work
+
+All 13 planted bugs were caught:
+- refused arguments not marked as errors;
+- a database failure not stopping the run;
+- tools run only after the next request;
+- sources not recorded;
+- instructions not cached;
+- rate limits, authentication and connection errors each reported wrongly;
+- refusals and cut-off answers not handled;
+- question not trimmed;
+- no length limit;
+- token usage not added up.
+
+### Live check
+
+Against the real API, all five test questions were refused with "Your credit balance is too low". The account has no API credit, so no answer was produced and nothing was charged. It did prove the error path: each visitor got "The question service is not set up correctly", while the log kept the real reason and the request id. The live check of real answers is still to be done once the account has credit.
+
+### Still open
+
+- **Asking too often, or paying.** The site will be public. Before launch, the owner wants to limit how often a visitor can ask, or charge for questions. This belongs in the web API (step 9), in front of the paid calls, together with a daily spending ceiling.
+- **Show the model.** The page (step 10) must say which AI model answered. The service already returns it as `model` with every answer.
+
+---
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.
@@ -1090,5 +1221,8 @@ Before the workflow was written, every pinned library was checked to install on 
 - **GitHub Actions / workflow**: GitHub's built-in CI; a workflow file says when to run which steps on GitHub's machines.
 - **Required check**: a rule that a pull request can only be merged when a named CI job has passed.
 - **Pinning**: referring to an exact version of a dependency, so it cannot change unnoticed.
+- **Tool use**: a model asking the program to run one of a fixed set of functions and reading the result, instead of answering from memory.
+- **Tool runner**: the Anthropic SDK's helper that sends the question, runs the functions Claude asks for and sends the results back, until Claude answers.
+- **Prompt caching**: the API reusing an identical beginning of a request (here the instructions and tool list) at a fraction of the price.
 - **Advisory lock**: a named lock kept by the database, used here so only one ingestion run works at a time; it is released automatically when the run's connection closes.
 - **Savepoint**: a checkpoint inside an open database transaction; nothing in it is permanent until the outer transaction is committed.
