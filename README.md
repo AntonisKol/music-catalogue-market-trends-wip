@@ -154,3 +154,13 @@ Schema changes apply only when the data volume is created. To reapply `db/schema
 docker compose down -v
 docker compose up -d
 ```
+
+## Run the tests
+
+```bash
+python -m pytest
+```
+
+The tests need no `.env` and never use your token or your database: `tests/conftest.py` sets fake settings, and Discogs is faked with the [`responses`](https://github.com/getsentry/responses) library.
+
+The database tests start their own throwaway PostgreSQL 16 container with [Testcontainers](https://testcontainers-python.readthedocs.io/), load `db/schema.sql`, and remove the container when the run ends. Docker must be running for them. Without Docker they are skipped with a reason, except in CI (`CI=true`), where they fail so a run can't pass without them. Your local database on port 5432 is never touched.
