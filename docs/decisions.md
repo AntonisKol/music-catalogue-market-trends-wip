@@ -416,6 +416,197 @@ The last one survived at first: no test had covered Discogs sending a currency w
 
 ---
 
+## Task #6: Ingest a whole Discogs label
+
+*November 2026 · [issue #6](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6)*
+
+**Goal.** One command that takes a record label and does everything from the earlier tasks for each of its releases: fetch the details, save the release, and record today's price and demand snapshot. It must be safe to rerun, polite to Discogs, and honest about anything that went wrong.
+
+**Result.** `python -m ingestion.ingest_label <label_id>`, with 39 new tests (107 in total), checked live on a real label.
+
+**What the real data showed first.** A live look at label 1 (Planet E) shaped the decisions:
+
+- The label list has 597 entries but only **511 unique releases**. Some releases are listed twice, identically.
+- Its format text is loose and abbreviated (`12"`, `2xLP`, `CD, Comp`, `14xFile, AIFF, Album, 24-`). About 323 releases look like vinyl and 188 like CD, digital or cassette. The exact format names, such as "Vinyl", come only with each release's full details.
+- At 60 requests a minute and about 2 requests per vinyl release, a label of this size takes roughly 15 minutes.
+
+### Decision 1: What happens when one release fails
+
+**The need.** In a run of hundreds of releases, one may fail: Discogs returns an error, or a database write is refused. The issue requires failures to be visible and never silently skipped.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Stop the run | Stop at the first failure; rerun once fixed | Rejected |
+| Retry, then skip | Try up to 3 times, then move on so the run always completes | Rejected as proposed |
+| **Retry temporary errors, continue, report, exit 1** | Retry only what can recover; record the rest, carry on, list every failure at the end, and exit with status 1 | **Chosen** |
+
+**The choice.** Retry temporary errors only, then report. "Retry, then skip" was picked first, and it was refined after debate: the retry idea stayed, the silent skip went.
+
+**In plain words.** A delivery driver who can't deliver one parcel. *Stopping the run* drives the whole van back to the depot, so today's data for the other 510 releases is lost because of one. *Retry, then skip* knocks three times and quietly takes the parcel home, and the nightly job reports success while data is missing. It also retries things that can never work: a deleted release (404) or a database rule fails the same way every time. The good driver rings again if nobody answered (a temporary error), delivers the rest of the round, and hands in a list of undelivered parcels at the end.
+
+**Risk avoided.** Missing data hidden behind a "successful" run, and one bad release costing a whole day's data.
+
+**In the code.** [`ingestion/pipeline.py`](../ingestion/pipeline.py) records each failure and carries on:
+
+```python
+try:
+    saved = ingest_release(conn, release_id, snapshot_date)
+except (requests.RequestException, MappingError, psycopg.Error) as error:
+    run.failed[release_id] = str(error)
+    log.error("%s failed: %s", step, error)
+    if conn.broken:
+        raise DatabaseConnectionLost(str(error)) from error
+    continue
+```
+
+[`ingestion/ingest_label.py`](../ingestion/ingest_label.py) lists every failed release at the end and returns `0 if run.ok else 1`. One deliberate exception: if the database connection itself is lost, every later save would fail too, so the run stops at once rather than logging hundreds of identical errors.
+
+### Decision 2: Staying under Discogs' rate limit
+
+**The need.** Discogs allows 60 requests a minute and answers "429 Too Many Requests" beyond that.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Fixed pause (+ back-off on 429)** | Keep requests at least 1.1 s apart; if a 429 still happens, wait and retry | **Chosen** |
+| Read the headers (+ back-off) | Full speed while many requests remain, slow down when the "remaining" count is low | Rejected |
+| Back off on 429 only | No pacing; wait and retry whenever Discogs says "too many" | Rejected |
+
+**The choice.** A fixed pause, with back-off kept as a safety net. Back-off only was picked first, and it was changed after debate.
+
+**In plain words.** Driving with no speedometer and using speed cameras as the speed limit: you arrive, but every flash is a fine, and enough fines cost the licence. Back-off only would hit Discogs' limit about once a minute for a whole run. That wastes every rejected request, makes releases likelier to end up on the failure list, and risks the token or home connection being throttled, which could also hit other apps sharing it. Reading the headers is faster for small runs, but it is more logic to get right, and an overnight job gains little from speed. A fixed pause is simple, predictable and always polite, and the earlier label paging already worked that way.
+
+**Risk avoided.** Being throttled or blocked by Discogs, and needless failures.
+
+**In the code.** Every request now goes through one helper in [`ingestion/discogs_client.py`](../ingestion/discogs_client.py), which paces it and retries only temporary failures:
+
+```python
+MIN_INTERVAL = 1.1
+RETRY_WAITS = (5, 15, 60)
+TEMPORARY_STATUSES = {429, 500, 502, 503, 504}
+```
+
+Dropped connections and timeouts are retried too; anything else (401, 404, ...) is raised at once. After the last wait a request has waited 80 seconds in total, longer than Discogs' 60-second window. Requests also time out after 30 seconds, so a hung connection can no longer stall a run forever.
+
+### Decision 3: Vinyl only, and how to tell
+
+**The need.** The project tracks the vinyl market, but labels also release CDs, files and cassettes.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Everything | Save and snapshot every release | Rejected |
+| Filter on the list text | Fetch details only for entries whose text looks like vinyl | Refined |
+| Filter on details | Fetch every release's details, keep those with "Vinyl" | Rejected |
+| **Refined list filter** | Skip only entries that are *clearly* not vinyl; let the details decide everything else | **Chosen** |
+
+**The choice.** The list-text filter was picked, and checked against Planet E's real data: it held up well. Two safeguards were then added. Combinations (any `+`) and anything unclear are never skipped from the text alone, and every kept release must show "Vinyl" in its exact formats, which costs nothing because the details are fetched anyway.
+
+**In plain words.** Sorting post by the envelope: bin the obvious junk mail unopened, and open anything you're unsure about. Saving everything would mix CD and download prices into a "vinyl" market history. Fetching every release's details first is accurate but spends about 188 requests (3.5 minutes) per run on CDs. The plain text rule is cheap, but the text is abbreviated and loose: a "CD + 2×LP" set could be skipped, and nobody would ever notice the missing record.
+
+**Risk avoided.** Non-vinyl prices polluting the data, and vinyl releases silently missing.
+
+**In the code.** [`ingestion/mapping.py`](../ingestion/mapping.py):
+
+```python
+def is_clearly_not_vinyl(summary_format):
+    if not summary_format or "+" in summary_format:
+        return False
+    first = summary_format.split(",")[0].strip()
+    return re.sub(r"^\d+x", "", first) in NON_VINYL_SUMMARY_FORMATS
+
+def is_vinyl(formats):
+    return any(f.get("name") == "Vinyl" for f in formats)
+```
+
+`NON_VINYL_SUMMARY_FORMATS` lists CD, CDr, SACD, File, Cass, VHS, DVD, DVDr, Blu-ray, Minidisc and Floppy Disk. Only the format named exactly "Vinyl" counts; Discogs' separate formats such as lathe cuts and flexi-discs are not included. The run's summary reports how many releases were skipped as not vinyl, so the filter's effect stays visible.
+
+### Decision 4: How the run reports progress
+
+**The need.** A run takes 15 to 20 minutes and will later run unattended every night (#10).
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| print() per release | A plain line per release | Rejected |
+| **Logging, timestamped** | Python's logging: time, level (INFO, WARNING, ERROR) and message per line | **Chosen** |
+| Summary only | Silent until one summary at the end | Rejected |
+
+**The choice.** Timestamped logging.
+
+**In plain words.** A ship's log rather than shouting across the deck. When something goes wrong at 03:12, the log shows when each step happened and how serious it was. Plain prints have no times or levels, so "show me only the errors" is impossible. A silent run can't be told apart from a stuck one, and if it crashes halfway there is no summary at all.
+
+**Risk avoided.** Problems in the nightly run that nobody can diagnose afterwards.
+
+**In the code.** The command sets up the format once:
+
+```python
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+```
+
+A real run looks like this:
+
+```text
+2026-11-01 18:58:41,355 INFO Label 800000: 11 releases listed
+2026-11-01 18:58:43,388 INFO [1/11] 1832937 saved: 38 for sale from 2.99 EUR; want 39, have 328; rated 2.54 by 35
+2026-11-01 18:58:43,388 INFO [2/11] 1844080 skipped, not vinyl (CD, Album, Comp)
+...
+2026-11-01 18:59:01,003 INFO Label 800000 done: 11 listed, 9 saved, 2 not vinyl, 0 failed
+```
+
+Retries are logged as WARNING, and failed releases as ERROR.
+
+### A bug found before it shipped
+
+While the pipeline was being written, a review of the code turned up a real problem. The database library opens a transaction for every read, and the read-back after each saved release left one open. Every *later* save in the run would then have become a savepoint inside it, committed only when the run ended. A crash at release 400 would have lost the 399 saved before it. The fix is to close the read in its own transaction. A test now proves that while release 3 is being fetched, releases 1 and 2 are already visible to another database connection:
+
+```python
+with conn.transaction():
+    return get_saved_snapshot(conn, release_id, snapshot_date)
+```
+
+### What the tests check
+
+| File | What it proves |
+| --- | --- |
+| [`tests/test_discogs_client.py`](../tests/test_discogs_client.py) | Permanent errors are raised at once; 429 and 5xx are retried with the right waits, then succeed or are raised; dropped connections are retried; requests are paced across all endpoints; requests have a timeout |
+| [`tests/test_pipeline.py`](../tests/test_pipeline.py) | The vinyl checks; duplicates are ingested once; clearly non-vinyl entries cost no request; combinations and unclear entries are decided by their details; a failed release is recorded while the rest are saved; a temporary error is retried within the run; **each release is committed as soon as it is saved**; a database error on one release does not stop the others; a lost connection stops the run; a failing label list is raised; running twice the same day adds nothing |
+| [`tests/test_ingest_label.py`](../tests/test_ingest_label.py) | Exit 0 with a summary when all is well; failed releases listed and exit 1; clear messages and exit 1 when the label list fails, the database is unreachable or the connection is lost; usage errors exit 2 |
+
+All tests share a fake clock (the `discogs_clock` fixture in [`tests/conftest.py`](../tests/conftest.py)), so pauses and retry waits are recorded, not waited, and the suite still runs in about 6 seconds.
+
+### How we proved the tests work
+
+| Planted bug | Caught |
+| --- | --- |
+| Read left open, so saves are committed only at the end | Yes |
+| Run stops at the first failed release | Yes |
+| Failures dropped from the result | Yes |
+| Run carries on after the database connection is lost | Yes |
+| No de-duplication of the label list | Yes |
+| No "Vinyl" check on the details | Yes |
+| Combinations (`+`) skipped from the text | Yes, after adding a test (`CD, Album + 2xLP`) |
+| 404 retried as if temporary | Yes |
+| No pacing between requests | Yes |
+| Dropped connections not retried | Yes |
+| Exit 0 despite failures | Yes |
+
+### Live check
+
+`python -m ingestion.ingest_label 800000` was run against the real Discogs API and a throwaway database. The label's 12 entries were 11 unique releases: 9 vinyl releases were saved with snapshots, and 2 CDs were skipped from the list text without a request. There were 0 failures and exit status 0, at about 2.2 seconds per vinyl release. A second run the same day still left exactly 9 rows in each table.
+
+### Other actions
+
+- README: documented `ingest_label`, marked #6 done, and unblocked #10 and #11.
+- The single-release snapshot command now reuses the pipeline's snapshot description, so both commands print the same text.
+
+---
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.
@@ -433,3 +624,7 @@ The last one survived at first: no test had covered Discogs sending a currency w
 - **NULL**: the database's way of saying "unknown" or "nothing to measure", which is different from zero.
 - **UTC**: the world's reference clock, with no time zones or summer time.
 - **Idempotent**: safe to run again; a second run gives the same result instead of duplicates.
+- **Retry / back-off**: trying a failed request again after waiting, and waiting longer each time.
+- **Exit status**: the number a command reports when it ends; 0 means success, anything else tells a scheduler that something went wrong.
+- **Logging**: writing timestamped, graded messages (INFO, WARNING, ERROR) about what a program is doing, so they can be read and filtered later.
+- **Savepoint**: a checkpoint inside an open database transaction; nothing in it is permanent until the outer transaction is committed.
