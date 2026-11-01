@@ -24,7 +24,11 @@ FAKE_SETTINGS = {
     "POSTGRES_DB": "test",
     "POSTGRES_READER_USER": "catalogue_reader",
     "POSTGRES_READER_PASSWORD": "reader-test-password",
-    # Never a real key: a test that forgot its fake API would fail, not spend money.
+    "POSTGRES_LIMITS_USER": "catalogue_limits",
+    "POSTGRES_LIMITS_PASSWORD": "limits-test-password",
+    "TURNSTILE_SECRET_KEY": "test-turnstile-secret",
+    "VISITOR_HASH_SECRET": "test-visitor-hash-secret",
+    # Never a real key: a test that forgot its fake API fails instead of calling the real one.
     "ANTHROPIC_API_KEY": "test-key-not-real",
 }
 
@@ -149,3 +153,30 @@ def reader(db, reader_role, postgres_url, monkeypatch):
     monkeypatch.setattr(config, "POSTGRES_DB", info["dbname"])
     with database.connect_reader() as conn:
         yield conn
+
+
+@pytest.fixture(scope="session")
+def limits_role(postgres_url):
+    """The counter table and its login, created in the test database as in production."""
+    import psycopg
+
+    from ingestion.create_limits_role import create_limits_role
+
+    with psycopg.connect(postgres_url) as conn:
+        create_limits_role(conn, FAKE_SETTINGS["POSTGRES_LIMITS_USER"], FAKE_SETTINGS["POSTGRES_LIMITS_PASSWORD"])
+    return FAKE_SETTINGS["POSTGRES_LIMITS_USER"]
+
+
+@pytest.fixture
+def limits_db(db, limits_role, postgres_url, monkeypatch):
+    """web.limits.connect_limits() pointed at the test database, with no questions counted yet."""
+    from psycopg.conninfo import conninfo_to_dict
+
+    from web import config
+
+    db.execute("TRUNCATE question_counts")
+    db.commit()
+    info = conninfo_to_dict(postgres_url)
+    monkeypatch.setattr(config, "POSTGRES_HOST", info["host"])
+    monkeypatch.setattr(config, "POSTGRES_PORT", str(info["port"]))
+    monkeypatch.setattr(config, "POSTGRES_DB", info["dbname"])
