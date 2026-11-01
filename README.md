@@ -1,35 +1,103 @@
 # Music Catalogue Market Trends
 
-Tracks a Discogs label catalogue and how the market moves around it. Release, artist, and label records live in Postgres, alongside daily snapshots of asking price and collector demand (want, have, and rating).
+A step-by-step project for building a pipeline that collects vinyl release data from the Discogs REST API, stores catalogue and daily market snapshots in PostgreSQL, and lets people ask questions about the live dataset in natural language.
 
-This repo currently has the database and a Discogs API client. Fetching a release or a label's release list works from Python. Writing those responses into the tables is not wired up yet.
+The language model does not connect directly to PostgreSQL or invent SQL to run. The application gives it a small set of approved, read-only data tools. The model chooses a tool for a user's question, the application runs a parameterized query, and the model explains the returned data.
 
-## What is stored
+**Stack:** Python, PostgreSQL, Docker, Discogs REST API, Anthropic API, and a browser frontend.
 
-| Table | Contents |
-| --- | --- |
-| `labels` | Discogs label id, name, and resource URL |
-| `artists` | Discogs artist id, name, and resource URL |
-| `releases` | Release detail: title, year, country, catalogue number, formats, genres, styles, and whether it is physical |
-| `release_artists` | Which artists appear on which release |
-| `price_snapshots` | One row per release per day: number for sale, lowest price, and currency |
-| `demand_snapshots` | One row per release per day: want count, have count, rating count, and average rating |
+## How the app works
 
-`labels`, `artists`, and `releases` are the catalogue. `price_snapshots` and `demand_snapshots` are append-only daily facts, so the same release can be compared over time.
+```mermaid
+flowchart TD
+    A["Discogs REST API"] -->|"label releases, details, marketplace and community data"| B["Python ingestion pipeline"]
+    B -->|"idempotent catalogue writes"| C[("PostgreSQL")]
+    B -->|"daily price and demand rows"| C
+    D["Daily schedule"] -->|"starts pipeline"| B
+    U["User asks in browser frontend"] -->|"question"| E["Python HTTP API"]
+    E -->|"question"| Q["Anthropic question service"]
+    Q -->|"question + approved tool definitions"| F["Anthropic Messages API"]
+    F -->|"selects an approved data tool"| Q
+    Q -->|"call approved query function"| R["Read-only query tools"]
+    R -->|"parameterized, read-only query"| C
+    C -->|"live query results"| R
+    R -->|"tool result"| Q
+    Q -->|"answer grounded in results"| F
+    F -->|"final answer"| Q
+    Q -->|"JSON response"| E
+    E -->|"answer, loading/error state"| U
+```
+
+The browser sends questions to the Python API; the server calls the Anthropic API on the user's behalf and uses approved read-only tools to query PostgreSQL. PostgreSQL remains the source of truth. The pipeline updates it, and the web app reads it. API keys and database credentials stay on the server and are never sent to the browser.
+
+## Project roadmap: one task at a time
+
+The tasks below are ordered so each step builds on working code from the previous one. Start with **Task 1** and do not start a blocked task early. Every task has a corresponding issue on the [GitHub project board](https://github.com/users/AntonisKol/projects/3), where priority and blocker links are tracked.
+
+| Step | Issue | Priority | Status | What you'll build |
+| --- | --- | --- | --- | --- |
+| 1 | [#5 Persist Discogs vinyl release data in PostgreSQL](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/5) | P0 | In progress | A Python/psycopg repository that maps Discogs records to the existing tables and writes them safely and repeatedly. |
+| 2 | [#2 Test Discogs ingestion and PostgreSQL pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/2) | P0 | Todo; blocked by #5 | Automated tests for API handling and database mapping/upserts, using mocked HTTP and a test database. |
+| 3 | [#3 Capture daily vinyl price and demand snapshots](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) | P0 | Todo; blocked by #5 | Fetch market supply/price and community demand, then store one snapshot per release per day. |
+| 4 | [#6 Build a repeatable Discogs-to-PostgreSQL ingestion pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) | P0 | Todo; blocked by #2 and #3 | A Python command that connects label pagination, release detail fetching, catalogue writes, and snapshot writes. |
+| 5 | [#10 Schedule and operate daily ingestion](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) | P2 | Todo; blocked by #3 and #6 | Run the pipeline daily, avoid overlapping runs, and document logs, failures, and safe retries. |
+| 6 | [#11 Add safe read-only query tools for the live dataset](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) | P1 | Todo; blocked by #6 | A restricted database role and a small set of parameterized query functions for release lookup and price/demand comparisons. |
+| 7 | [#7 Add Anthropic-powered natural-language queries over live data](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) | P1 | Todo; blocked by #11 | Use Anthropic tool use: the model selects an approved Python query tool, the app executes it, and the model explains the live results. |
+| 8 | [#9 Test the Anthropic query service and guardrails](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) | P1 | Todo; blocked by #7 | Test the assistant service, tool selection, read-only behavior, query limits, and grounded answers without live API calls. |
+| 9 | [#8 Expose natural-language questions through a Python web API](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) | P1 | Todo; blocked by #7 and #9 | Add a validated HTTP/JSON endpoint for the browser to call; keep Anthropic and database credentials server-side. |
+| 10 | [#12 Build the natural-language question web frontend](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) | P1 | Todo; blocked by #8 | Build the user-facing question form and answer view, including loading, validation, and error states. |
+| 11 | [#13 Test web question frontend and accessibility](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) | P1 | Todo; blocked by #12 | Test the browser experience, API integration, keyboard interaction, focus, and accessibility announcements. |
+
+### What each task teaches
+
+1. **Persist records — Python, psycopg, PostgreSQL.** Follow one Discogs response into the database. Separate API response mapping from SQL, respect foreign-key order, and use `INSERT ... ON CONFLICT` so rerunning ingestion updates records instead of duplicating them.
+2. **Test ingestion — unittest/pytest, mocks, PostgreSQL.** Test the mapping and failure paths without making live Discogs requests. Use a disposable test database for SQL behavior; never point tests at valuable local data.
+3. **Capture snapshots — Discogs REST API, Python, PostgreSQL.** Use the relevant release and marketplace/community endpoints, map only available fields, and use the schema's `(release_id, snapshot_date)` uniqueness to make a daily run repeatable.
+4. **Build the pipeline command — Python CLI.** Compose existing small functions rather than putting the whole workflow in one function: list label releases, fetch details, write catalogue data, then write snapshots. Surface API and database errors instead of hiding them.
+5. **Schedule daily ingestion — scheduler, Docker, logs.** Reuse the same ingestion command on a schedule. Make failures visible and retries safe; scheduling is separate from the pipeline so local development remains simple.
+6. **Add safe query tools — PostgreSQL permissions, parameterized SQL.** Give the question feature a read-only database role. Implement narrowly scoped functions with parameters and bounded results; do not execute SQL text supplied by a user or generated by a model.
+7. **Connect Anthropic — Anthropic Messages API, tool use.** Send the question and descriptions of the approved tools. When the model requests a tool, validate its input, call the matching Python function, return the result to the model, and produce a data-grounded answer. Keep the API key in an environment variable.
+8. **Test the question service — Python tests, mocks.** Mock Anthropic responses and database tools. Confirm unsupported questions and failures are handled clearly, tool arguments are validated, results are bounded, and generated text cannot change database data.
+9. **Expose the question service — Python HTTP API.** Accept a validated question and return a clear JSON response. Keep API keys on the server and return safe, useful error responses.
+10. **Build the frontend — HTML, CSS, and JavaScript.** Create the browser form, example questions, answer display, and loading/error states. Use `fetch` to call the Python API; the browser never connects directly to PostgreSQL or Anthropic.
+11. **Test the frontend — browser and accessibility checks.** Verify submission and response states against a mocked API, then test keyboard use, accessible labels, focus, and screen-reader status announcements.
+
+## How to learn as you build
+
+Work on one issue at a time, in roadmap order. For each task:
+
+1. Read the issue and identify its prerequisite tasks.
+2. Before changing code, trace the data flow and explain the relevant Python, SQL, and API concepts in your own words.
+3. Make the smallest working change. Ask for a walkthrough of each file and decision rather than asking for the entire project to be generated at once.
+4. Run the task's tests and a small manual check; inspect the database or output to confirm the behavior.
+5. Review what happens on invalid input and API/database failure. Do not mark the issue Done until its acceptance criteria pass.
+6. Summarize what you learned, then move the issue to Done and begin the next unblocked task.
+
+An effective coding prompt is: *“Let's work only on roadmap Task 1. First explain the files and concepts we need, then make one small change at a time. Pause after each step so I can review it. Do not start another task.”*
+
+## What's already implemented
+
+- PostgreSQL schema for labels, artists, releases, release/artist relationships, and daily price and demand snapshots.
+- Docker Compose configuration for PostgreSQL 16; the schema initializes on first database creation.
+- Discogs client functions for fetching a release and paginating through a label's release summaries.
+
+The client currently **reads from Discogs but does not write to PostgreSQL**. Persistence, scheduled snapshots, and natural-language queries are roadmap work.
 
 ## Requirements
 
 - Docker with Compose
-- Python 3.9 or newer
+- Python 3.10 or newer. The pinned libraries do not install on older versions, and macOS's built-in `python3` is 3.9: check with `python3 --version`, and if needed install a newer one (for example `brew install python@3.12`, then use `python3.12` below)
 - A [Discogs personal access token](https://www.discogs.com/settings/developers)
+- An [Anthropic API key](https://console.anthropic.com/) for the natural-language question feature
 
-## Run it locally
+## Set up the current project
 
-From the repo root, create a `.env` file. Compose and the Python client both read it.
+From the repository root, create a `.env` file. Compose and the Python client read these values:
 
-```
+```dotenv
 DISCOGS_TOKEN=your_personal_access_token
 DISCOGS_USER_AGENT=MusicCatalogueMarketTrends/0.1 +https://github.com/AntonisKol/music-catalogue-market-trends-wip
+ANTHROPIC_API_KEY=your_anthropic_api_key
 POSTGRES_HOST=localhost
 POSTGRES_PORT=5432
 POSTGRES_USER=catalogue
@@ -37,29 +105,24 @@ POSTGRES_PASSWORD=catalogue
 POSTGRES_DB=catalogue
 ```
 
-`DISCOGS_USER_AGENT` must identify this app. Discogs rejects generic clients. Use your own token and password; the values above are only a local example.
+`DISCOGS_USER_AGENT` must identify this app. Discogs rejects generic clients. Use your own token and password; these values are examples for local development, not production credentials. Do not commit `.env`.
 
-Start Postgres. On the first start, `db/schema.sql` is applied automatically.
+Start PostgreSQL. On the first start, Docker applies `db/schema.sql` automatically:
 
 ```bash
 docker compose up -d
-```
-
-Confirm the tables exist:
-
-```bash
 docker compose exec db psql -U catalogue -d catalogue -c '\dt'
 ```
 
-Install the Python dependencies:
+Create a Python environment and install dependencies:
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Fetch one release. `get_release` returns the full Discogs release, which is what the schema is shaped for. `249504` is the release id from the Discogs API docs; swap in any other id.
+Fetch one release using the current API client:
 
 ```bash
 python - <<'PY'
@@ -70,22 +133,22 @@ print(release["title"], release.get("year"))
 PY
 ```
 
-To collect release ids for a label, call `get_label_releases`. It returns summary records (the list endpoint is not detailed enough to fill `releases` on its own) and pauses between pages so the client stays under Discogs' authenticated limit of 60 requests per minute. Pick a label you actually want; a large catalogue will take a while.
+To fetch a label's release summaries, replace `12345` with a Discogs label id:
 
 ```bash
 python - <<'PY'
 from ingestion.discogs_client import get_label_releases
 
-summaries = get_label_releases(12345)  # replace with a Discogs label id
+summaries = get_label_releases(12345)
 print(len(summaries), summaries[0]["id"], summaries[0]["title"])
 PY
 ```
 
-Nothing in these examples writes to Postgres. The database is ready for a later load step.
+The label endpoint returns summaries, not the full release records needed by the database; the future ingestion pipeline will fetch each release detail before writing it. The client pauses between pages to respect Discogs' authenticated request limit. A large catalogue can take a while.
 
-## Reset the database
+## Reset the local database
 
-Schema changes apply only when the data volume is created. To reapply `db/schema.sql` from scratch:
+Schema changes apply only when the data volume is created. To reapply `db/schema.sql` from scratch, this deletes the local database volume and its data:
 
 ```bash
 docker compose down -v
