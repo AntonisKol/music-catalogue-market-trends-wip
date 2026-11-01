@@ -1,8 +1,15 @@
 from datetime import date
+from decimal import Decimal
 
 import pytest
 
-from ingestion.mapping import MappingError, map_release, parse_released
+from ingestion.mapping import (
+    MappingError,
+    map_demand_snapshot,
+    map_price_snapshot,
+    map_release,
+    parse_released,
+)
 
 
 def discogs_release(**overrides):
@@ -111,3 +118,54 @@ def test_missing_optional_fields_become_none_or_empty():
 def test_rejects_release_without_id_or_title(release):
     with pytest.raises(MappingError):
         map_release(release)
+
+
+DAY = date(2026, 11, 1)
+
+
+def test_maps_price_snapshot():
+    stats = {"num_for_sale": 124, "lowest_price": {"value": 0.59, "currency": "EUR"}, "blocked_from_sale": False}
+    assert map_price_snapshot(249504, stats, DAY) == {
+        "release_id": 249504,
+        "snapshot_date": DAY,
+        "num_for_sale": 124,
+        "lowest_price": Decimal("0.59"),
+        "currency": "EUR",
+    }
+
+
+@pytest.mark.parametrize(
+    "lowest_price",
+    [None, {"value": None, "currency": "EUR"}],
+    ids=["live answer: price null", "currency without a value"],
+)
+def test_nothing_for_sale_keeps_the_count_but_has_no_price(lowest_price):
+    stats = {"num_for_sale": 0, "lowest_price": lowest_price, "blocked_from_sale": False}
+    row = map_price_snapshot(1, stats, DAY)
+    assert row["num_for_sale"] == 0
+    assert row["lowest_price"] is None and row["currency"] is None
+
+
+def test_maps_demand_snapshot():
+    release = {"community": {"have": 4159, "want": 594, "rating": {"count": 249, "average": 3.88}}}
+    assert map_demand_snapshot(249504, release, DAY) == {
+        "release_id": 249504,
+        "snapshot_date": DAY,
+        "want": 594,
+        "have": 4159,
+        "rating_count": 249,
+        "rating_average": Decimal("3.88"),
+    }
+
+
+def test_no_ratings_is_not_rated_rather_than_zero():
+    # Discogs sends average 0.0 when nobody has rated the release.
+    release = {"community": {"have": 1, "want": 0, "rating": {"count": 0, "average": 0.0}}}
+    row = map_demand_snapshot(1, release, DAY)
+    assert (row["want"], row["have"], row["rating_count"]) == (0, 1, 0)
+    assert row["rating_average"] is None
+
+
+def test_missing_community_block_gives_unknown_values():
+    row = map_demand_snapshot(1, {"id": 1, "title": "Bare"}, DAY)
+    assert [row[k] for k in ("want", "have", "rating_count", "rating_average")] == [None] * 4

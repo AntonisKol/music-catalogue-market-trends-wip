@@ -4,7 +4,7 @@ import responses
 from responses import matchers
 
 from ingestion import discogs_client
-from ingestion.discogs_client import BASE_URL, get_label_releases, get_release
+from ingestion.discogs_client import BASE_URL, get_label_releases, get_marketplace_stats, get_release
 
 
 @pytest.fixture
@@ -106,3 +106,23 @@ def test_get_label_releases_stops_when_a_later_page_fails(no_sleep):
     with pytest.raises(requests.HTTPError):
         get_label_releases(7)
     assert len(responses.calls) == 2
+
+
+@responses.activate
+def test_get_marketplace_stats_asks_for_the_currency():
+    stats = {"num_for_sale": 124, "lowest_price": {"value": 0.59, "currency": "EUR"}, "blocked_from_sale": False}
+    responses.get(
+        f"{BASE_URL}/marketplace/stats/249504",
+        match=[matchers.query_param_matcher({"curr_abbr": "EUR"})],
+        json=stats,
+    )
+
+    assert get_marketplace_stats(249504, "EUR") == stats
+
+
+@responses.activate
+def test_get_marketplace_stats_raises_for_unknown_release():
+    responses.get(f"{BASE_URL}/marketplace/stats/1", json={"message": "Release not found."}, status=404)
+
+    with pytest.raises(requests.HTTPError):
+        get_marketplace_stats(1, "EUR")

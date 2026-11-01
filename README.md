@@ -38,9 +38,9 @@ The tasks below are ordered so each step builds on working code from the previou
 | --- | --- | --- | --- | --- |
 | 1 | [#5 Persist Discogs vinyl release data in PostgreSQL](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/5) | P0 | Done | A Python/psycopg repository that maps Discogs records to the existing tables and writes them safely and repeatedly. |
 | 2 | [#2 Test Discogs ingestion and PostgreSQL pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/2) | P0 | Done | Automated tests for API handling and database mapping/upserts, using mocked HTTP and a test database. |
-| 3 | [#3 Capture daily vinyl price and demand snapshots](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) | P0 | Todo | Fetch market supply/price and community demand, then store one snapshot per release per day. |
-| 4 | [#6 Build a repeatable Discogs-to-PostgreSQL ingestion pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) | P0 | Todo; blocked by #2 and #3 | A Python command that connects label pagination, release detail fetching, catalogue writes, and snapshot writes. |
-| 5 | [#10 Schedule and operate daily ingestion](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) | P2 | Todo; blocked by #3 and #6 | Run the pipeline daily, avoid overlapping runs, and document logs, failures, and safe retries. |
+| 3 | [#3 Capture daily vinyl price and demand snapshots](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) | P0 | Done | Fetch market supply/price and community demand, then store one snapshot per release per day. |
+| 4 | [#6 Build a repeatable Discogs-to-PostgreSQL ingestion pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) | P0 | Todo | A Python command that connects label pagination, release detail fetching, catalogue writes, and snapshot writes. |
+| 5 | [#10 Schedule and operate daily ingestion](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) | P2 | Todo; blocked by #6 | Run the pipeline daily, avoid overlapping runs, and document logs, failures, and safe retries. |
 | 6 | [#11 Add safe read-only query tools for the live dataset](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) | P1 | Todo; blocked by #6 | A restricted database role and a small set of parameterized query functions for release lookup and price/demand comparisons. |
 | 7 | [#7 Add Anthropic-powered natural-language queries over live data](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) | P1 | Todo; blocked by #11 | Use Anthropic tool use: the model selects an approved Python query tool, the app executes it, and the model explains the live results. |
 | 8 | [#9 Test the Anthropic query service and guardrails](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) | P1 | Todo; blocked by #7 | Test the assistant service, tool selection, read-only behavior, query limits, and grounded answers without live API calls. |
@@ -81,9 +81,10 @@ An effective coding prompt is: *“Let's work only on roadmap Task 1. First expl
 - Docker Compose configuration for PostgreSQL 16; the schema initializes on first database creation.
 - Discogs client functions for fetching a release and paginating through a label's release summaries.
 - Saving one release to PostgreSQL: its label, artists and the release itself, written in one transaction with repeatable upserts (`python -m ingestion.save_release <id>`).
-- Automated tests for the Discogs client, the mapping, saving to PostgreSQL and the save command (see [Run the tests](#run-the-tests)). The reasoning behind each decision is in [docs/decisions.md](docs/decisions.md).
+- A daily price and demand snapshot per release: lowest price (always in EUR) and copies for sale, plus want, have and rating, one row per release per UTC day (`python -m ingestion.save_snapshot <id>`).
+- Automated tests for the Discogs client, the mapping, saving releases and snapshots to PostgreSQL, and both commands (see [Run the tests](#run-the-tests)). The reasoning behind each decision is in [docs/decisions.md](docs/decisions.md).
 
-Daily price and demand snapshots, the full ingestion pipeline, scheduling and natural-language queries are roadmap work.
+The full ingestion pipeline, scheduling and natural-language queries are roadmap work.
 
 ## Requirements
 
@@ -155,6 +156,14 @@ python -m ingestion.save_release 249504
 ```
 
 It prints the saved release, for example `Saved 249504: Rick Astley - Never Gonna Give You Up (1987) on RCA`. Running it again updates the same rows instead of adding duplicates. If Discogs or the database fails, it prints what went wrong, keeps nothing from the failed save, and exits with status 1.
+
+Save today's price and demand snapshot of a release (the release itself is saved or updated first):
+
+```bash
+python -m ingestion.save_snapshot 249504
+```
+
+It prints, for example, `Snapshot of 249504 on 2026-11-01 (UTC): 124 for sale from 0.59 EUR; want 594, have 4159; rated 3.88 by 249`. Prices come from Discogs' marketplace statistics and are always requested in EUR. "Today" is the UTC date, and running it again on the same day replaces that day's values. A release with nothing for sale is stored with no price, and one nobody has rated with no average (shown as "not rated"), rather than as 0.
 
 ## Reset the local database
 
