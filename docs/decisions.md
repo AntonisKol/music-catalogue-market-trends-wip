@@ -1217,7 +1217,7 @@ Task #7's tests already covered tool selection, refused arguments, unsupported q
 
 **Result.**
 - A check of every answer's figures, which costs nothing per question.
-- 25 new tests (243 in total), plus a before-release test with the real Claude (9 questions, about $0.07 a run, never in CI).
+- 26 new tests (244 in total), plus a before-release test with the real Claude (9 questions, about $0.07 a run, never in CI).
 
 ### Decision 1: When answers are checked for accuracy
 
