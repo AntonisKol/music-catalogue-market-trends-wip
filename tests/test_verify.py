@@ -29,6 +29,7 @@ def check(answer, question="Cheapest Earthtones records?", sources=SOURCES):
     "These are the top 10 of 23 matching releases.",
     "The cheapest copy is about €7, around €6.6.",  # rounded from 6.57
     "1. First point\n2. Second point",  # list markers are layout
+    "8. Eighth point\n 9) Ninth point",  # numbers that appear nowhere in the data
     "I can look back up to 90 days, or 365 days for changes, and compare up to 5 labels.",  # from the tool descriptions
     "There are 0 copies left.",
     "The 2nd pressing.",
