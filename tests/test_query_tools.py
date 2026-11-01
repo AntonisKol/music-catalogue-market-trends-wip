@@ -1,4 +1,5 @@
 """The query tools, run through the reader login against a small dataset over three days."""
+import dataclasses
 import json
 from datetime import date
 
@@ -253,3 +254,49 @@ def test_every_tool_has_a_description_and_a_strict_json_schema():
         assert tool.description
         assert schema["additionalProperties"] is False
         assert schema["type"] == "object"
+
+
+@pytest.fixture
+def a_cd(data, db):
+    """A CD on Planet E, saved by the single-release command, which accepts any format."""
+    cd = dict(release(106, "Throw (CD)", (11, "Paperclip People"), PLANET_E, 1994, ["Techno"]), formats=[{"name": "CD"}])
+    save_release(db, cd)
+    for day, price, want in [(OCT_1, 1.0, 10), (NOV_1, 99.0, 9999)]:
+        stats = {"num_for_sale": 1, "lowest_price": {"value": price, "currency": "EUR"}}
+        community = {"want": want, "have": 1, "rating": {"count": 500, "average": 5.0}}
+        save_snapshots(db, 106, stats, dict(cd, community=community), day)
+
+
+@pytest.mark.parametrize("name, arguments", [
+    ("search_releases", {"label": "planet e"}),
+    ("rank_releases", {"sort_by": "most_wanted"}),
+    ("rank_releases", {"sort_by": "best_rated"}),
+    ("market_changes", {"metric": "lowest_price", "days": 31}),
+])
+def test_non_vinyl_releases_never_appear_in_answers(a_cd, reader, name, arguments):
+    assert 106 not in ids(run_tool(reader, name, arguments))
+
+
+def test_non_vinyl_releases_have_no_history_and_do_not_count_for_a_label(a_cd, reader):
+    assert run_tool(reader, "release_history", {"release_id": 106})["release"] is None
+    planet_e = run_tool(reader, "compare_labels", {"labels": ["planet e"]})["rows"][0]
+    assert planet_e["vinyl_releases"] == 3
+    assert planet_e["copies_for_sale"] == 16
+
+
+def test_a_query_stopped_by_the_time_limit_gives_a_clear_reason(reader, monkeypatch):
+    def slow(conn, args):
+        return conn.execute("SELECT pg_sleep(1)").fetchall()
+
+    monkeypatch.setitem(TOOLS, "search_releases", dataclasses.replace(TOOLS["search_releases"], run=slow))
+    reader.execute("SET statement_timeout = '50ms'")
+
+    with pytest.raises(ToolError) as error:
+        run_tool(reader, "search_releases", {})
+    assert "took too long" in str(error.value)
+    assert reader.execute("SELECT 1").fetchone() == (1,)  # the connection is still usable
+
+
+def test_every_tool_says_what_the_prices_mean():
+    for tool in TOOLS.values():
+        assert "any condition, without shipping, in EUR" in tool.description

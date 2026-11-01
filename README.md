@@ -175,10 +175,13 @@ Ingest a whole label: every vinyl release on it, and today's snapshot of each:
 python -m ingestion.ingest_label 800000
 ```
 
-Progress is logged with timestamps, one line per release, for example `[1/11] 1832937 saved: 38 for sale from 2.99 EUR; want 39, have 328; rated 2.54 by 35`, and the run ends with a summary such as `Label 800000 done: 11 listed, 9 saved, 2 not vinyl, 0 failed`. It takes about 2 seconds per vinyl release, so a label with 500 releases takes roughly 15 minutes.
+Progress is logged with timestamps, one line per release, for example `[1/11] 1832937 saved: 38 for sale from 2.99 EUR; want 39, have 328; rated 2.54 by 35`, and the run ends with a summary such as `Label 2 done: 27 listed, 23 saved, 4 not vinyl, 0 not on this label, 0 gone, 0 failed`. It takes about 2 seconds per vinyl release, so a label with 500 releases takes roughly 15 minutes.
 
 - **Vinyl only.** Releases whose list entry is clearly CD, file, cassette or video are skipped without a request. Every other release is kept only if its details include the format "Vinyl". Releases listed twice are ingested once.
-- **Failures.** Rate limits (429), Discogs server errors and dropped connections are retried after 5, 15 and 60 seconds. Anything still failing, or any other error, is logged for that release, and the run carries on with the rest. At the end every failed release is listed, and the command exits with status 1. If the database connection is lost, the run stops at once.
+- **Issued on the label, not just credited.** A label's Discogs list also holds releases where it only appears in a credit, such as a studio under "Recorded At". Those are skipped as "not on this label". A co-release is still stored under its first label only.
+- **Failures.** Rate limits (429), Discogs server errors and dropped connections are retried after 5, 15 and 60 seconds. Anything still failing, malformed data included, is logged for that release, and the run carries on with the rest. At the end every failed release is listed, and the command exits with status 1. If the database connection is lost, the run stops at once.
+- **Gone releases.** A release still on the label's list that Discogs no longer has (404) is logged as a warning and listed as gone. It does not fail the run.
+- **One run at a time.** A second run refuses to start while another one is in progress, since together they would exceed Discogs' rate limit. It exits with status 1.
 - **Safe to rerun.** Each release is committed as soon as it is saved, so an interrupted run keeps what it finished. Running it again the same day updates the same rows.
 
 ## Query the data read-only
@@ -189,7 +192,7 @@ The question feature never uses the login above. It has its own PostgreSQL login
 python -m ingestion.create_reader_role
 ```
 
-Running it again updates the password. The database itself refuses every write from this login, also on tables added later, opens its sessions read-only, and stops any query after 5 seconds. The web side (`queries/`) only ever needs `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB` and the two reader settings, never the Discogs token or the writing login's password.
+Running it again updates the password. The database itself refuses every write from this login, also on tables added later, opens its sessions read-only, and stops any query after 5 seconds. It also takes the right to create temporary tables away from every login except the database's owner. The web side (`queries/`) only ever needs `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB` and the two reader settings, never the Discogs token or the writing login's password.
 
 The five query tools are the only way the question feature reads data:
 
@@ -211,7 +214,7 @@ PY
 | `market_changes` | "Which records got more expensive, or sold out, this month?" |
 | `compare_labels` | "How do these labels compare on prices and demand?" |
 
-Arguments are checked before any query runs: wrong types, out-of-range numbers, unknown sort options and unexpected fields are refused with a clear reason. Text filters match any part of a name, ignoring case. Every result returns at most 50 rows (25 by default) and says how many matched in total. Prices are each release's cheapest copy on sale, in EUR, from its latest snapshot.
+Arguments are checked before any query runs: wrong types, out-of-range numbers, unknown sort options and unexpected fields are refused with a clear reason, and so is a query stopped by the 5-second limit. Text filters match any part of a name, ignoring case. Every result says how many rows matched in total: the list tools return at most 50 rows (25 by default), `release_history` one row per day for up to 90 days, and `compare_labels` up to 10 labels. Only vinyl releases are ever returned, even if a CD was saved with `save_release`. Prices are each release's cheapest copy on sale in any condition, without shipping, in EUR (converted by Discogs), from its latest snapshot.
 
 ## Reset the local database
 

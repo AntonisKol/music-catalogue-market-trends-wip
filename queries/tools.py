@@ -5,7 +5,7 @@ which validates what the language model sends and later gives #7 the JSON schema
 to describe the tool. The SQL of every tool is written here; arguments only ever
 reach it as query parameters. Sort orders and metrics are picked from fixed
 lists, never pasted from input. Every result is capped and says how many rows
-matched in total.
+matched in total, and only vinyl releases are ever returned.
 """
 from dataclasses import dataclass
 from datetime import date
@@ -101,6 +101,11 @@ class CompareLabels(Arguments):
 
 # --- SQL building blocks -------------------------------------------------------
 
+# The one place that decides what counts as vinyl in an answer: Discogs lists the
+# format "Vinyl" in the release's formats. The label pipeline only saves vinyl,
+# but the single-release commands save any release, so every tool applies this.
+VINYL = sql.SQL("""r.formats @> '[{"name": "Vinyl"}]'::jsonb""")
+
 # Each release's most recent snapshot.
 LATEST = sql.SQL("""
     latest AS (
@@ -166,7 +171,7 @@ def contains(text: str) -> str:
 
 
 def filter_clause(args: ReleaseFilters) -> tuple[sql.Composable, dict]:
-    clauses, params = [sql.SQL("TRUE")], {}
+    clauses, params = [VINYL], {}
     for name, clause in FILTERS.items():
         value = getattr(args, name)
         if value is not None:
@@ -245,8 +250,8 @@ def release_history(conn: psycopg.Connection, args: ReleaseHistory) -> dict:
     release = fetch(conn, sql.SQL("""
         SELECT r.id AS release_id, r.title, {artists}, l.name AS label, r.year
         FROM releases r LEFT JOIN labels l ON l.id = r.label_id
-        WHERE r.id = %(release_id)s
-    """).format(artists=ARTISTS), {"release_id": args.release_id})
+        WHERE r.id = %(release_id)s AND {vinyl}
+    """).format(artists=ARTISTS, vinyl=VINYL), {"release_id": args.release_id})
     if not release:
         return {"release": None, "rows": [], "returned": 0, "total": 0, "truncated": False}
     query = sql.SQL("""
@@ -319,13 +324,13 @@ def compare_labels(conn: psycopg.Connection, args: CompareLabels) -> dict:
                max(latest.snapshot_date) AS as_of,
                count(*) OVER () AS total
         FROM labels l
-        JOIN releases r ON r.label_id = l.id
+        JOIN releases r ON r.label_id = l.id AND {vinyl}
         LEFT JOIN latest ON latest.release_id = r.id
         WHERE l.name ILIKE ANY (%(patterns)s)
         GROUP BY l.id, l.name
         ORDER BY l.name, l.id
         LIMIT %(limit)s
-    """).format(latest=LATEST)
+    """).format(latest=LATEST, vinyl=VINYL)
     limit = 2 * MAX_LABELS_COMPARED
     rows = fetch(conn, query, {"patterns": [contains(name) for name in args.labels], "limit": limit})
     return result(rows)
@@ -341,35 +346,44 @@ class Tool:
     run: Callable[[psycopg.Connection, Arguments], dict]
 
 
+# Told to the model with every tool that returns prices, so answers say what the
+# number is and do not overstate a change.
+PRICE_NOTE = (
+    " Prices are the cheapest copy on sale in any condition, without shipping, in EUR"
+    " (converted by Discogs from the seller's currency)."
+)
+
 TOOLS = {tool.name: tool for tool in [
     Tool(
         "search_releases",
         "Find vinyl releases in the catalogue by title, label, artist, genre, style, country or year, "
-        "with each release's latest price and demand.",
+        "with each release's latest price and demand." + PRICE_NOTE,
         SearchReleases, search_releases,
     ),
     Tool(
         "rank_releases",
-        "Rank releases by their latest snapshot: lowest or highest price (the cheapest copy on sale, in EUR), "
+        "Rank vinyl releases by their latest snapshot: lowest or highest price, "
         "most wanted, most owned, best rated, fewest copies for sale, or most wanted per owner. "
-        "Optionally narrowed by label, artist, genre, style, country or year.",
+        "Optionally narrowed by label, artist, genre, style, country or year." + PRICE_NOTE,
         RankReleases, rank_releases,
     ),
     Tool(
         "release_history",
-        "Day-by-day price, supply and demand of one release, for up to 90 days back from its latest snapshot.",
+        "Day-by-day price, supply and demand of one vinyl release, for up to 90 days back from its latest "
+        "snapshot." + PRICE_NOTE,
         ReleaseHistory, release_history,
     ),
     Tool(
         "market_changes",
-        "Releases whose lowest price, copies for sale, want or have changed most over a period "
-        "(up to 365 days back from the latest snapshot), rising or falling.",
+        "Vinyl releases whose lowest price, copies for sale, want or have changed most over a period "
+        "(up to 365 days back from the latest snapshot), rising or falling." + PRICE_NOTE +
+        " A change in the lowest price can mean the cheapest copy sold, or a change in exchange rates.",
         MarketChanges, market_changes,
     ),
     Tool(
         "compare_labels",
         "Compare up to 5 labels: number of vinyl releases, copies for sale, average and median lowest price, "
-        "total want and have, and average rating, from each release's latest snapshot.",
+        "total want and have, and average rating, from each release's latest snapshot." + PRICE_NOTE,
         CompareLabels, compare_labels,
     ),
 ]}
@@ -387,4 +401,10 @@ def run_tool(conn: psycopg.Connection, name: str, arguments: dict) -> dict:
             f"{'.'.join(str(p) for p in e['loc']) or 'arguments'}: {e['msg']}" for e in error.errors()
         )
         raise ToolError(f"Invalid arguments for {name}: {problems}") from error
-    return tool.run(conn, args)
+    try:
+        return tool.run(conn, args)
+    except psycopg.errors.QueryCanceled as error:
+        # The reader's 5 s statement limit stopped the query.
+        raise ToolError(
+            f"{name} took too long and was stopped; narrow it with more filters or a shorter period"
+        ) from error

@@ -5,7 +5,7 @@ How the project fits together, what each part is made of, and how it was built s
 - **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
 - **Developers:** every box names its code file, and the components table goes into detail.
 
-*Last updated: 1 November 2026, after step 6 (issue 11). 177 automated tests.*
+*Last updated: 1 November 2026, after the review fixes (issue 27). 195 automated tests.*
 
 **How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
 
@@ -30,7 +30,7 @@ flowchart TB
 
     subgraph ING["Ingestion: writes data"]
         SCH["Nightly schedule, step 5<br/>How: a scheduler starts ingest_label,<br/>never two runs at once<br/>Will achieve: fresh prices every day<br/>without anyone running a command"]
-        CLI["Label command, step 4<br/>Code: ingest_label.py, pipeline.py<br/>How: lists a label, skips non-vinyl,<br/>saves each release, logs a summary<br/>Achieved: a whole label in one command,<br/>failures reported, never silently lost"]
+        CLI["Label command, step 4 and issue 27<br/>Code: ingest_label.py, pipeline.py<br/>How: one run at a time, lists a label,<br/>skips non-vinyl and credit-only releases,<br/>saves each release, logs a summary<br/>Achieved: a whole label in one command,<br/>failures reported, never silently lost"]
         SHOP["Shop tracker, issue 24<br/>How: reads chosen record shops'<br/>Discogs inventories every day<br/>Will achieve: prices by seller city,<br/>such as Berlin"]
         CL["Discogs client, steps 1 and 4<br/>Code: discogs_client.py<br/>How: one request every 1.1 s,<br/>retries after 5, 15, 60 s<br/>Achieved: stays under the limit of<br/>60 requests a minute, rides out<br/>Discogs hiccups of up to 80 s"]
         MAP["Mapping, steps 1, 3, 4<br/>Code: mapping.py<br/>How: turns Discogs JSON into rows,<br/>decides vinyl or not<br/>Achieved: exact prices, NULL instead<br/>of a misleading 0"]
@@ -45,7 +45,7 @@ flowchart TB
 
     subgraph QRY["Questions: reads data"]
         RD["Reader login, step 6<br/>Code: create_reader_role.py<br/>How: SELECT-only role, read-only<br/>sessions, 5 s query limit<br/>Achieved: nothing using this login can<br/>change data, enforced by the database"]
-        TL["Five query tools, step 6<br/>Code: queries/tools.py<br/>How: fixed SQL, arguments checked<br/>by Pydantic, capped results<br/>Achieved: safe, predictable reads<br/>an AI can call"]
+        TL["Five query tools, step 6 and issue 27<br/>Code: queries/tools.py<br/>How: fixed SQL, arguments checked<br/>by Pydantic, capped results, vinyl only<br/>Achieved: safe, predictable reads<br/>an AI can call"]
         QS["Question service, step 7<br/>How: sends the question and only the<br/>tool descriptions to Claude, checks and<br/>runs the tool it picks, returns the rows<br/>Will achieve: answers grounded in our data,<br/>clear replies for unsupported questions<br/>and for AI or database errors"]
         API["Web API, step 9<br/>How: one HTTP endpoint, JSON in and out,<br/>question shape and length checked<br/>Will achieve: the page can ask questions,<br/>keys and passwords stay on the server"]
         UI["Web page, step 10<br/>How: HTML, CSS and JavaScript, a question<br/>form with example questions, loading,<br/>empty, answer and error states<br/>Will achieve: anyone can ask about techno<br/>vinyl prices, on phone or desktop"]
@@ -104,6 +104,7 @@ flowchart TD
     S11["Step 11, issue 13: Test the web page<br/>How: browser tests against a faked API,<br/>plus one end-to-end check<br/>Will achieve: keyboard, labels, focus and<br/>screen-reader announcements verified"]
     F19["Issue 19: CI runs all tests<br/>How: GitHub Actions with Docker, CI=true<br/>Will achieve: every pull request runs<br/>all tests, database ones included"]
     F24["Issue 24: Tracked techno shops<br/>How: chosen shops' Discogs inventories,<br/>city recorded by us, a sixth query tool<br/>Will achieve: questions by seller city,<br/>such as records sold from Berlin"]
+    F27["Issue 27: Fixes from a code review<br/>Code: pipeline.py, ingest_label.py, tools.py<br/>How: one run at a time, credit-only and<br/>deleted releases handled, vinyl-only answers<br/>Achieved: the code does what the docs promise"]
     F18["Issues 18 and 25: Documentation<br/>Code: README, decisions.md, this page<br/>Achieved: decisions and architecture<br/>written down, updated with every step"]
 
     S0 --> S1
@@ -122,11 +123,13 @@ flowchart TD
     S2 --> F19
     S4 --> F24
     S6 --> F24
+    S4 --> F27
+    S6 --> F27
 
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
-    class S0,S1,S2,S3,S4,S6 built
+    class S0,S1,S2,S3,S4,S6,F27 built
     class S5,S7,S8,S9,S10,S11 planned
     class F19,F24,F18 support
 ```
@@ -145,6 +148,7 @@ flowchart TD
 | 9 | [8](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) Web API | Planned | An HTTP endpoint for the page | Python web framework |
 | 10 | [12](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) Web page | Planned | The question box on adnsaudio.com | HTML, CSS, JavaScript |
 | 11 | [13](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) Test page | Planned | Keyboard, focus and screen-reader checks | browser tests |
+| – | [27](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/27) Review fixes | Built | Malformed data, deleted and credit-only releases handled; one run at a time; vinyl-only answers | Python, PostgreSQL advisory lock |
 | – | [19](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/19) CI | Next | Every pull request runs all tests, including the database ones | GitHub Actions |
 | – | [24](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/24) Tracked shops | Planned | Questions by seller city, e.g. Berlin | Discogs inventory API |
 | – | [18](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/18), [25](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/25) Documentation | Ongoing | README, decisions and this page kept current | Markdown, Mermaid |
@@ -153,7 +157,7 @@ flowchart TD
 
 ## 3. One ingestion run, step by step
 
-In one sentence: the command lists a label's releases and skips what is clearly not vinyl. For each remaining release it fetches the details and prices, saves them, and commits before moving on.
+In one sentence: the command makes sure no other run is going, lists a label's releases and skips what is clearly not vinyl. For each remaining release it fetches the details, checks the release was issued on the label and is vinyl, fetches the prices, saves them, and commits before moving on.
 
 ```mermaid
 sequenceDiagram
@@ -168,7 +172,11 @@ sequenceDiagram
     participant Pg as PostgreSQL
 
     Op->>Cmd: python -m ingestion.ingest_label 800000
-    Cmd->>Pg: connect as writer
+    Cmd->>Pg: connect as writer, take the run lock
+    alt another run holds the lock
+        Cmd->>Op: log it, exit 1
+        Note over Cmd,Pg: Achieved: two runs never share<br/>the Discogs rate limit
+    end
     Cmd->>Pipe: ingest_label(label, today in UTC)
     Note over Cmd,Pipe: Achieved: one date per run, so a run<br/>that passes midnight stays on one day
     Pipe->>Cli: get_label_releases
@@ -190,10 +198,16 @@ sequenceDiagram
             Note over Pipe: Achieved: no time spent on<br/>releases that are not vinyl
         else maybe vinyl
             Cli->>Dg: GET releases/id
-            Dg-->>Cli: details, formats, community want and have
-            alt details have no Vinyl format
+            Dg-->>Cli: details, labels, formats, community want and have
+            alt Discogs answers 404
+                Pipe->>Pipe: list as gone, log WARNING
+                Note over Pipe: Achieved: a deleted release does<br/>not fail every nightly run
+            else label not among the release's labels
+                Pipe->>Pipe: skip, count as not on this label
+                Note over Pipe: Achieved: releases only credited to<br/>the label, such as by a studio, stay out
+            else details have no Vinyl format
                 Pipe->>Pipe: skip, count as not vinyl
-            else vinyl
+            else vinyl, issued on the label
                 Cli->>Dg: GET marketplace/stats/id in EUR
                 Dg-->>Cli: copies for sale, lowest price
                 Pipe->>Map: map release, price row, demand row
@@ -205,7 +219,7 @@ sequenceDiagram
                 Pipe->>Cmd: log saved line with price and demand
             end
         end
-        opt any error for this release
+        opt any error for this release, malformed data included
             Pipe->>Pipe: record it, log ERROR, continue
             Note over Pipe: Achieved: one bad release does<br/>not stop the whole label
         end
@@ -214,7 +228,7 @@ sequenceDiagram
             Note over Pipe,Cmd: Achieved: no pointless retries when<br/>every later save would fail too
         end
     end
-    Cmd->>Op: summary, failed releases listed, exit 0 or 1
+    Cmd->>Op: summary with saved, not vinyl, not on label, gone, failed. Exit 0 or 1
     Note over Op,Cmd: Achieved: a schedule can tell from the<br/>exit code whether anything failed
 ```
 
@@ -283,7 +297,7 @@ The five query tools, built in step 6, are all the AI can use:
 | `market_changes` | "Which records got more expensive this month?" | Lowest price, copies for sale, want or have; rises or falls; up to 365 days |
 | `compare_labels` | "Compare Tresor and Axis" | Up to 5 labels: releases, copies for sale, average and median price, want, have, rating |
 
-The list tools return at most 50 rows (25 unless asked for more), plus the total number that matched. `release_history` returns one row per day, so at most 90, and `compare_labels` at most 10.
+The list tools return at most 50 rows (25 unless asked for more), plus the total number that matched. `release_history` returns one row per day, so at most 90, and `compare_labels` at most 10. Every tool returns vinyl only, and a query stopped by the 5-second limit comes back as a readable reason. Each tool description tells the AI what the price means: the cheapest copy on sale in any condition, without shipping, in EUR converted by Discogs.
 
 ---
 
@@ -298,10 +312,10 @@ The list tools return at most 50 rows (25 unless asked for more), plus the total
 | Mapping | [`ingestion/mapping.py`](../ingestion/mapping.py) | pure Python | Turns Discogs JSON into table rows; decides vinyl or not | No price stored as NULL, not 0; no ratings stored as NULL, not 0.0; exact decimal prices |
 | Repository | [`ingestion/repository.py`](../ingestion/repository.py) | psycopg 3 | Saves releases and snapshots | Upserts, so a rerun updates instead of duplicating; one transaction per save; artists no longer credited are unlinked |
 | Single-release commands | [`save_release.py`](../ingestion/save_release.py), [`save_snapshot.py`](../ingestion/save_snapshot.py) | Python CLI | Save one release, or one release plus today's snapshot | Clear messages and exit codes |
-| Label pipeline | [`ingestion/pipeline.py`](../ingestion/pipeline.py), [`ingest_label.py`](../ingestion/ingest_label.py) | Python CLI, logging | Ingests every vinyl release of a label | Duplicates dropped; failures listed and exit 1; commit per release; stops if the label list cannot be fetched or the database connection is lost |
-| Reader login | [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) | PostgreSQL roles | Creates the SELECT-only login | Read-only sessions and a 5 s limit set on the role; future tables readable, never writable |
-| Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped |
-| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 177 tests: fake Discogs, a throwaway PostgreSQL, a fake clock | Database tests skip without Docker on a laptop, fail in CI |
+| Label pipeline | [`ingestion/pipeline.py`](../ingestion/pipeline.py), [`ingest_label.py`](../ingestion/ingest_label.py) | Python CLI, logging | Ingests every vinyl release of a label | One run at a time (advisory lock); duplicates dropped; credit-only releases skipped; deleted releases listed as gone; failures, malformed data included, listed and exit 1; commit per release; stops if the label list cannot be fetched or the database connection is lost |
+| Reader login | [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) | PostgreSQL roles | Creates the SELECT-only login | Read-only sessions and a 5 s limit set on the role; future tables readable, never writable; no temporary tables |
+| Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped; vinyl only; timeouts reported as a readable reason |
+| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 195 tests: fake Discogs, a throwaway PostgreSQL, a fake clock | Database tests skip without Docker on a laptop, fail in CI |
 
 ---
 
@@ -338,7 +352,13 @@ The same routine has been used on every task:
 | 6 | Risk of hitting Discogs' rate limit | About 2 requests per release, 60 a minute allowed | Every request paced 1.1 s apart, temporary errors retried |
 | 11 | A read-only session alone can be switched off | PostgreSQL session settings belong to the session | A separate SELECT-only login, with read-only sessions as a second lock |
 | 11 | `%` and `_` typed by a user act as wildcards | SQL LIKE syntax | Escaped before matching; tests check they match literally |
-| 11 | The live check showed releases filed under other labels | Discogs' label list includes releases where the label is only credited ("Recorded At"), and only the first label is stored | Documented; to be resolved before the AI service (step 7) |
+| 11 | The live check showed releases filed under other labels | Discogs' label list includes releases where the label is only credited ("Recorded At"), and only the first label is stored | Credit-only releases skipped since issue 27; a co-release is still stored under its first label only |
+| 27 | An artist without a name stopped a whole label run with no summary | The pipeline only expected Discogs, mapping and database errors | Malformed data is now recorded as a failed release; a test with a wrong data type found one more error type to add |
+| 27 | A CD saved with `save_release` appeared in "vinyl" answers | Only the label pipeline checks for vinyl | Every query tool applies one shared vinyl condition |
+| 27 | One deleted release would have failed every nightly run | Discogs keeps some deleted releases on label lists | A 404 is listed as gone, not as a failure |
+| 27 | A studio's label list filled the catalogue with other labels' records | Label lists include releases where the label is only credited | Releases are kept only if their own labels include the one being ingested |
+| 27 | Two runs at once would exceed the rate limit | Pacing works within one run only | A database advisory lock lets one run at a time |
+| 27 | The live run's user agent could not be loaded by the shell | It contains a space and is not quoted in `.env` | Read with python-dotenv, as the app does, without displaying it |
 | Setup | Commands could not start on a new machine | `.env` lacked most settings, and an appended line was glued onto the previous one | Added the settings and split the glued line, without displaying any values |
 
 ---

@@ -10,12 +10,13 @@ from responses import matchers
 
 from ingestion.discogs_client import BASE_URL
 from ingestion.mapping import is_clearly_not_vinyl, is_vinyl
-from ingestion.pipeline import DatabaseConnectionLost, ingest_label, unique_releases
+from ingestion.pipeline import DatabaseConnectionLost, ingest_label, is_on_label, unique_releases
 
 DAY = date(2026, 11, 1)
 VINYL = [{"name": "Vinyl", "qty": "1", "descriptions": ['12"']}]
 CD = [{"name": "CD", "qty": "1"}]
 STATS = {"num_for_sale": 3, "lowest_price": {"value": 6.5, "currency": "EUR"}, "blocked_from_sale": False}
+ON_LABEL_1 = [{"id": 1, "name": "Label 1", "catno": "L1"}]
 
 
 def summary(release_id, format_text):
@@ -29,11 +30,13 @@ def label_list(*summaries, label_id=1):
     )
 
 
-def details(release_id, formats=VINYL, status=200):
+def details(release_id, formats=VINYL, status=200, labels=ON_LABEL_1, **extra):
     release = {
         "id": release_id,
         "title": f"Release {release_id}",
+        "labels": labels,
         "formats": formats,
+        **extra,
         "community": {"want": 10, "have": 20, "rating": {"count": 2, "average": 4.5}},
     }
     responses.get(f"{BASE_URL}/releases/{release_id}", json=release if status == 200 else {"message": "x"}, status=status)
@@ -112,7 +115,7 @@ def test_ingests_vinyl_skips_the_rest_and_reports_failures(db, committed, caplog
     details(3, formats=CD + VINYL)
     stats(3)
     details(4, formats=CD)
-    details(5, status=404)
+    details(5, status=401)
     details(6)
     stats(6)
 
@@ -122,7 +125,7 @@ def test_ingests_vinyl_skips_the_rest_and_reports_failures(db, committed, caplog
     assert run.saved == [1, 3, 6]
     assert run.not_vinyl == [2, 4]
     assert list(run.failed) == [5]
-    assert "404" in run.failed[5]
+    assert "401" in run.failed[5]
     assert not run.ok
     assert requested("/releases/1") == 1
     assert requested("/releases/2") == 0
@@ -161,7 +164,7 @@ def test_every_release_is_committed_as_soon_as_it_is_saved(db, postgres_url):
     def release_3(request):
         with psycopg.connect(postgres_url) as other:
             seen_while_running.extend(other.execute("SELECT id FROM releases ORDER BY id").fetchall())
-        return 404, {}, '{"message": "Release not found."}'
+        return 401, {}, '{"message": "Unauthorized."}'
 
     responses.add_callback(responses.GET, f"{BASE_URL}/releases/3", callback=release_3)
 
@@ -178,7 +181,10 @@ def test_database_error_on_one_release_does_not_stop_the_others(db, committed):
     responses.replace(
         responses.GET,
         f"{BASE_URL}/releases/1",
-        json={"id": 1, "title": "Bad", "formats": VINYL, "community": {"want": 1, "have": 1, "rating": {"count": 1, "average": 10}}},
+        json={
+            "id": 1, "title": "Bad", "labels": ON_LABEL_1, "formats": VINYL,
+            "community": {"want": 1, "have": 1, "rating": {"count": 1, "average": 10}},
+        },
     )
     stats(1)
     details(2)
@@ -202,7 +208,7 @@ def test_lost_database_connection_stops_the_run(db, postgres_url):
     def details_then_kill_connection(request):
         with psycopg.connect(postgres_url, autocommit=True) as admin:
             admin.execute("SELECT pg_terminate_backend(%s)", (pid,))
-        return 200, {}, '{"id": 1, "title": "Release 1", "formats": [{"name": "Vinyl"}]}'
+        return 200, {}, '{"id": 1, "title": "Release 1", "labels": [{"id": 1, "name": "Label 1"}], "formats": [{"name": "Vinyl"}]}'
 
     responses.add_callback(responses.GET, f"{BASE_URL}/releases/1", callback=details_then_kill_connection)
 
@@ -231,3 +237,78 @@ def test_running_twice_the_same_day_updates_instead_of_duplicating(db, committed
     assert committed("SELECT count(*) FROM releases") == [(1,)]
     assert committed("SELECT count(*) FROM price_snapshots") == [(1,)]
     assert committed("SELECT count(*) FROM demand_snapshots") == [(1,)]
+
+
+def test_is_on_label():
+    assert is_on_label({"labels": [{"id": 2}, {"id": 1}]}, 1)
+    assert not is_on_label({"labels": [{"id": 2}], "companies": [{"id": 1, "entity_type_name": "Recorded At"}]}, 1)
+    assert not is_on_label({}, 1)
+
+
+@responses.activate
+def test_a_release_only_credited_to_the_label_is_skipped_without_a_price_request(db, committed, caplog):
+    caplog.set_level(logging.INFO)
+    label_list(summary(1, '12"'), summary(2, '12"'))
+    details(1, labels=[{"id": 7, "name": "Other Label"}], companies=[{"id": 1, "entity_type_name": "Recorded At"}])
+    details(2, labels=[{"id": 7, "name": "Other Label"}, {"id": 1, "name": "Label 1"}])  # a co-release
+    stats(2)
+
+    run = ingest_label(db, 1, DAY)
+
+    assert run.not_on_label == [1]
+    assert run.saved == [2] and run.ok
+    assert requested("/marketplace/stats/1") == 0
+    assert committed("SELECT id FROM releases") == [(2,)]
+    assert "[1/2] 1 skipped, only credited to label 1, not issued on it" in caplog.text
+
+
+@responses.activate
+def test_a_release_discogs_no_longer_has_is_gone_not_failed(db, caplog):
+    label_list(summary(1, '12"'), summary(2, '12"'))
+    details(1, status=404)
+    details(2)
+    stats(2)
+
+    run = ingest_label(db, 1, DAY)
+
+    assert run.gone == [1]
+    assert run.failed == {}
+    assert run.saved == [2] and run.ok
+    assert any(r.levelname == "WARNING" and "[1/2] 1 gone" in r.message for r in caplog.records)
+
+
+@responses.activate
+@pytest.mark.parametrize(
+    "bad_field",
+    [
+        {"artists": [{"id": 5}]},  # an artist without a name: KeyError
+        {"artists": "not a list"},  # TypeError
+    ],
+)
+def test_malformed_discogs_data_fails_that_release_only(db, committed, bad_field):
+    label_list(summary(1, '12"'), summary(2, '12"'))
+    details(1, **bad_field)
+    stats(1)
+    details(2)
+    stats(2)
+
+    run = ingest_label(db, 1, DAY)
+
+    assert list(run.failed) == [1]
+    assert run.saved == [2]
+    assert committed("SELECT id FROM releases") == [(2,)]
+
+
+@responses.activate
+def test_a_malformed_price_fails_that_release_only(db):
+    label_list(summary(1, '12"'), summary(2, '12"'))
+    details(1)
+    stats(1, body={"num_for_sale": 1, "lowest_price": {"value": "n/a", "currency": "EUR"}})
+    details(2)
+    stats(2)
+
+    run = ingest_label(db, 1, DAY)
+
+    assert list(run.failed) == [1]
+    assert run.failed[1].startswith("InvalidOperation")
+    assert run.saved == [2]

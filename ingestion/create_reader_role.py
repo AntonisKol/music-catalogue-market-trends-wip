@@ -37,6 +37,10 @@ def create_reader_role(conn: psycopg.Connection, name: str, password: str) -> No
         cur.execute(sql.SQL("ALTER ROLE {} SET statement_timeout = {}").format(role, sql.Literal(STATEMENT_TIMEOUT)))
         db = cur.execute("SELECT current_database()").fetchone()[0]
         cur.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(sql.Identifier(db), role))
+        # Every login may create temporary tables by default (a grant to PUBLIC,
+        # which cannot be taken from one role alone). The reader has no use for
+        # them; the app's own login owns the database and keeps the right.
+        cur.execute(sql.SQL("REVOKE TEMPORARY ON DATABASE {} FROM PUBLIC").format(sql.Identifier(db)))
         cur.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(role))
         cur.execute(sql.SQL("REVOKE CREATE ON SCHEMA public FROM {}").format(role))
         cur.execute(sql.SQL("GRANT SELECT ON ALL TABLES IN SCHEMA public TO {}").format(role))

@@ -15,6 +15,7 @@ WRITES = [
     "DROP TABLE labels",
     "CREATE TABLE stolen (id int)",
     "ALTER TABLE labels ADD COLUMN x int",
+    "CREATE TEMP TABLE scratch (id int)",
 ]
 
 

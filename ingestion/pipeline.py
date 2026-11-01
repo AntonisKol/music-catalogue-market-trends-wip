@@ -5,6 +5,7 @@ catalogue save and the snapshot save. A failed release is logged and listed in
 the result, and the run carries on with the others; only losing the database
 connection stops the run, since every later save would fail too.
 """
+import decimal
 import logging
 from dataclasses import dataclass, field
 from datetime import date
@@ -20,6 +21,19 @@ from ingestion.repository import get_saved_snapshot, save_release, save_snapshot
 log = logging.getLogger(__name__)
 
 
+# Errors that belong to one release: Discogs failing, data the catalogue cannot
+# use (including malformed answers, such as an artist without a name), or the
+# database refusing a row. Each is recorded and the run carries on.
+RELEASE_ERRORS = (
+    requests.RequestException, MappingError, psycopg.Error,
+    KeyError, TypeError, AttributeError, decimal.InvalidOperation,
+)
+
+# What ingest_release found, besides a saved snapshot.
+NOT_VINYL = "not vinyl"
+NOT_ON_LABEL = "not on label"
+
+
 class DatabaseConnectionLost(Exception):
     """The database connection broke during the run, so the run was stopped."""
 
@@ -30,6 +44,8 @@ class LabelRun:
     listed: int = 0
     saved: list = field(default_factory=list)
     not_vinyl: list = field(default_factory=list)
+    not_on_label: list = field(default_factory=list)
+    gone: list = field(default_factory=list)
     failed: dict = field(default_factory=dict)
 
     @property
@@ -54,12 +70,25 @@ def describe_snapshot(saved) -> str:
     return f"{supply}; want {want}, have {have}; {rating}"
 
 
-def ingest_release(conn: psycopg.Connection, release_id: int, snapshot_date: date):
+def is_on_label(discogs_release: dict, label_id: int) -> bool:
+    """The release was issued on the label, not merely credited to it.
+
+    A label's Discogs list also holds releases where the name only appears in a
+    credit, such as a studio under "Recorded At". Those credits are listed as
+    companies; the release's own labels are what it was issued on.
+    """
+    return any(label.get("id") == label_id for label in discogs_release.get("labels") or [])
+
+
+def ingest_release(conn: psycopg.Connection, release_id: int, snapshot_date: date, label_id: int = None):
     """Fetch, check and save one release with its snapshot. Returns the saved snapshot,
-    or None when the details show it is not vinyl."""
+    NOT_ON_LABEL when label_id is given and the release was not issued on it, or
+    NOT_VINYL when the details show it is not vinyl."""
     discogs_release = get_release(release_id)
+    if label_id is not None and not is_on_label(discogs_release, label_id):
+        return NOT_ON_LABEL
     if not is_vinyl(discogs_release.get("formats") or []):
-        return None
+        return NOT_VINYL
     stats = get_marketplace_stats(release_id, config.SNAPSHOT_CURRENCY)
     save_release(conn, discogs_release)
     save_snapshots(conn, release_id, stats, discogs_release, snapshot_date)
@@ -84,14 +113,26 @@ def ingest_label(conn: psycopg.Connection, label_id: int, snapshot_date: date) -
             log.info("%s skipped, not vinyl (%s)", step, summary.get("format"))
             continue
         try:
-            saved = ingest_release(conn, release_id, snapshot_date)
-        except (requests.RequestException, MappingError, psycopg.Error) as error:
+            saved = ingest_release(conn, release_id, snapshot_date, label_id)
+        except requests.HTTPError as error:
+            if error.response is not None and error.response.status_code == 404:
+                # Still on the label's list, but Discogs no longer has the release.
+                run.gone.append(release_id)
+                log.warning("%s gone: Discogs no longer has this release", step)
+                continue
             run.failed[release_id] = str(error)
             log.error("%s failed: %s", step, error)
+            continue
+        except RELEASE_ERRORS as error:
+            run.failed[release_id] = f"{type(error).__name__}: {error}"
+            log.error("%s failed: %s: %s", step, type(error).__name__, error)
             if conn.broken:
                 raise DatabaseConnectionLost(str(error)) from error
             continue
-        if saved is None:
+        if saved == NOT_ON_LABEL:
+            run.not_on_label.append(release_id)
+            log.info("%s skipped, only credited to label %s, not issued on it", step, label_id)
+        elif saved == NOT_VINYL:
             run.not_vinyl.append(release_id)
             log.info("%s skipped, not vinyl (details)", step)
         else:
