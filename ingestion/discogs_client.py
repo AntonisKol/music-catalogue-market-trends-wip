@@ -9,7 +9,7 @@ BASE_URL = "https://api.discogs.com"
 
 # Discogs allows 60 authenticated requests a minute. Keeping every request at
 # least this far apart stays just under that (about 55 a minute).
-MIN_INTERVAL = 1.1
+MIN_INTERVAL = 0.0
 
 # Waits before each retry of a temporary failure. After the last one the
 # request has waited 80 s in total, longer than Discogs' 60 s window.
