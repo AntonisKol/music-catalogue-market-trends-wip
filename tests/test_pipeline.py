@@ -73,6 +73,7 @@ def committed(postgres_url):
         ('12"', False),
         ("2xLP", False),
         ('CD + 12"', False),
+        ("CD, Album + 2xLP", False),
         ('5x10", Album + Box', False),
         ("Box, Comp", False),
         ("", False),
