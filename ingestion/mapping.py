@@ -2,12 +2,21 @@
 
 Pure functions only: no HTTP and no database, so they can be tested on their own.
 """
+import re
 from datetime import date
 from decimal import Decimal
 from typing import Optional
 
 # Discogs format names that are not a physical object.
 DIGITAL_FORMATS = {"File"}
+
+
+# Formats in a label list's summary text ("2xCD, Comp", "4xFile, WAV") that are
+# certainly not vinyl. The summary is a loose, abbreviated text, so anything not
+# on this list, or any combination ("CD + 12\""), is checked in the release details.
+NON_VINYL_SUMMARY_FORMATS = {
+    "CD", "CDr", "SACD", "File", "Cass", "VHS", "DVD", "DVDr", "Blu-ray", "Minidisc", "Floppy Disk",
+}
 
 
 class MappingError(ValueError):
@@ -26,6 +35,19 @@ def parse_released(value: Optional[str]) -> Optional[date]:
 
 def is_physical(formats: list) -> bool:
     return any(f.get("name") not in DIGITAL_FORMATS for f in formats)
+
+
+def is_vinyl(formats: list) -> bool:
+    """The release details list at least one format named "Vinyl"."""
+    return any(f.get("name") == "Vinyl" for f in formats)
+
+
+def is_clearly_not_vinyl(summary_format: Optional[str]) -> bool:
+    """A label-list summary whose format text leaves no doubt that it is not vinyl."""
+    if not summary_format or "+" in summary_format:
+        return False
+    first = summary_format.split(",")[0].strip()
+    return re.sub(r"^\d+x", "", first) in NON_VINYL_SUMMARY_FORMATS
 
 
 def map_label(release: dict) -> Optional[dict]:
