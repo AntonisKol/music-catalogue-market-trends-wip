@@ -939,6 +939,128 @@ Against the real Discogs API and a throwaway database:
 
 ---
 
+## Task #19: Run all tests automatically (CI)
+
+*November 2026 · [issue #19](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/19)*
+
+**Goal.** Run every test automatically on every pull request, database tests included, so a change cannot reach `main` with broken behaviour. Without CI, the step 2 rule ("database tests skip on a laptop but fail in CI") protected nothing, because nothing ran in CI.
+
+**Result.** A GitHub Actions workflow that runs all 195 tests on two Python versions in under a minute, required to pass before merging. Its failure paths were proven on purpose.
+
+### Decision 1: Which Python versions
+
+**The need.** The README promises "Python 3.10 or newer", while development happens on 3.12.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| 3.12 only | The development version | Rejected |
+| **Oldest and newest** | 3.10 and 3.13 side by side | **Chosen** |
+| Every version | 3.10, 3.11, 3.12 and 3.13 | Rejected |
+
+**The choice.** Oldest and newest.
+
+**In plain words.** Testing a bridge with the lightest and the heaviest lorry. If both cross, the ones in between will too. Testing only 3.12 would leave the README's promise to 3.10 users unchecked, and every version doubles the work for little extra safety.
+
+**Risk avoided.** A documented Python version that does not actually work.
+
+### Decision 2: Where CI gets its database
+
+**The need.** The database tests need a real PostgreSQL 16.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| GitHub service container | GitHub starts PostgreSQL beside the job; the tests get a switch to use it | Rejected after debate |
+| **Testcontainers** | The tests start their own PostgreSQL, exactly as on a laptop | **Chosen** |
+| Skip database tests in CI | Database tests stay a laptop job | Rejected |
+
+**The choice.** Testcontainers. The service container was picked first, and it was changed after debate.
+
+**In plain words.** A fire drill should use the real exits. A service container would make CI take a different route from every laptop, so the setup developers rely on, including the "fail when `CI=true`" rule, would never be tested in CI. It would also need a switch in the test code: a second way to get a database, which can drift from the first. GitHub's Linux machines already have Docker, so nothing had to change in the tests.
+
+**Risk avoided.** CI passing on a path nobody else uses.
+
+### Decision 3: How the workflow refers to other people's actions
+
+**The need.** The workflow uses ready-made actions (`checkout`, `setup-python`) whose code is downloaded from other repositories on every run.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Latest (`@main`) | Whatever the action's code is at that moment | Rejected after debate |
+| Version tag (`@v7`) | A label the action's owner can move | Rejected after debate |
+| **Exact commit, kept current by Dependabot** | A full commit id with the version in a comment; Dependabot opens a pull request for each new release | **Chosen** |
+
+**The choice.** Exact commits with Dependabot. "Latest" was picked first, then version tags, and the choice was changed after two rounds of debate.
+
+**In plain words.** A version tag is a label on a box, and anyone who controls the shelf can move the label to a different box. A commit id is a fingerprint of what is inside. In March 2025 attackers did exactly that to the popular `tj-actions/changed-files` action: they moved its version tags to code that printed thousands of repositories' secrets into their public logs. Pinning stops that, and Dependabot removes the chore of updating long ids by hand. Each update arrives as a small pull request, which CI checks before anyone merges it. `@main` would add a second problem, a build that turns red overnight because someone else pushed a change.
+
+**Risk avoided.** Someone else's compromised or broken code running inside our workflow.
+
+### Decision 4: Whether a red run blocks merging
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Informational | A red cross on the pull request, merging still possible | Rejected |
+| **Required check** | A rule on `main`: only green pull requests can be merged; the owner can override in an emergency | **Chosen** |
+| Block everything | No override, and no direct pushes to `main` | Rejected |
+
+**The choice.** A required check.
+
+**In plain words.** A pre-flight checklist the captain can sign off in an emergency. A red cross that is only informational gets clicked past on a busy day. Without any override, a broken GitHub runner could lock the owner out of their own project.
+
+**Risk avoided.** Broken code merged because the warning was easy to ignore.
+
+### In the code
+
+[`.github/workflows/tests.yml`](../.github/workflows/tests.yml):
+
+```yaml
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read            # the tests need no secrets and write nothing
+...
+    strategy:
+      fail-fast: false      # report both versions even when one fails
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      ...
+      - name: Run the tests
+        env:
+          CI: "true"
+        run: python -m pytest -ra
+```
+
+A newer push to the same pull request cancels the older run, and a run is stopped after 15 minutes. [`.github/dependabot.yml`](../.github/dependabot.yml) checks the actions weekly. The required check is a branch rule on `main` that names both jobs, `pytest (Python 3.10)` and `pytest (Python 3.13)`.
+
+### How we proved CI works
+
+Before it was trusted, CI was made to fail on purpose, on two throwaway pull requests that were closed and deleted afterwards:
+
+| Planted problem | Result |
+| --- | --- |
+| Request pacing switched off in the Discogs client | Red: 2 failed, 193 passed, on both versions |
+| Docker made unreachable | Red: 116 database tests errored ("Docker is not running…") instead of being skipped |
+
+Before the workflow was written, every pinned library was checked to install on Python 3.10 and 3.13, and the code was scanned for features newer than 3.10.
+
+### Other actions
+
+- README: a test status badge, a "Continuous integration" section, and the merge rule.
+
+---
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.
@@ -965,5 +1087,8 @@ Against the real Discogs API and a throwaway database:
 - **SQL injection**: tricking a program into running database commands hidden inside text a user typed.
 - **Denial of wallet**: running up someone's cloud or AI bill by sending many expensive requests.
 - **JSON schema**: a machine-readable description of what arguments a tool accepts, used to explain the tools to the AI.
+- **GitHub Actions / workflow**: GitHub's built-in CI; a workflow file says when to run which steps on GitHub's machines.
+- **Required check**: a rule that a pull request can only be merged when a named CI job has passed.
+- **Pinning**: referring to an exact version of a dependency, so it cannot change unnoticed.
 - **Advisory lock**: a named lock kept by the database, used here so only one ingestion run works at a time; it is released automatically when the run's connection closes.
 - **Savepoint**: a checkpoint inside an open database transaction; nothing in it is permanent until the outer transaction is committed.

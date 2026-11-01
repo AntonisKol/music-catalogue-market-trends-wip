@@ -5,13 +5,13 @@ How the project fits together, what each part is made of, and how it was built s
 - **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
 - **Developers:** every box names its code file, and the components table goes into detail.
 
-*Last updated: 1 November 2026, after the review fixes (issue 27). 195 automated tests.*
+*Last updated: 1 November 2026, after CI (issue 19). 195 automated tests, run by GitHub Actions on every pull request.*
 
 **How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
 
 - **Achieved:** the part is built, tested and merged. Green boxes.
 - **Will achieve:** the part is planned. Grey boxes with dashed borders.
-- Orange boxes are supporting work alongside the main steps: tests in CI, seller locations and documentation.
+- Orange boxes are supporting work alongside the main steps that is still open: seller locations and documentation. Supporting work that is finished, such as CI, is green.
 
 Steps are numbered as in the README roadmap (step 1 to step 11). Each step is one GitHub issue, whose number is given too.
 
@@ -102,7 +102,7 @@ flowchart TD
     S9["Step 9, issue 8: Web API<br/>How: a Python HTTP endpoint, JSON<br/>Will achieve: checked questions in,<br/>clear answers and errors out,<br/>no secrets sent to the browser"]
     S10["Step 10, issue 12: Web page<br/>How: HTML, CSS, JavaScript calling the API<br/>Will achieve: the question box with example<br/>questions and loading, empty, answer and<br/>error states, on phone and desktop"]
     S11["Step 11, issue 13: Test the web page<br/>How: browser tests against a faked API,<br/>plus one end-to-end check<br/>Will achieve: keyboard, labels, focus and<br/>screen-reader announcements verified"]
-    F19["Issue 19: CI runs all tests<br/>How: GitHub Actions with Docker, CI=true<br/>Will achieve: every pull request runs<br/>all tests, database ones included"]
+    F19["Issue 19: CI runs all tests<br/>Code: .github/workflows/tests.yml<br/>How: GitHub Actions on Python 3.10 and 3.13,<br/>Testcontainers PostgreSQL, CI=true,<br/>actions pinned to exact commits<br/>Achieved: no pull request merges into<br/>main unless all tests pass"]
     F24["Issue 24: Tracked techno shops<br/>How: chosen shops' Discogs inventories,<br/>city recorded by us, a sixth query tool<br/>Will achieve: questions by seller city,<br/>such as records sold from Berlin"]
     F27["Issue 27: Fixes from a code review<br/>Code: pipeline.py, ingest_label.py, tools.py<br/>How: one run at a time, credit-only and<br/>deleted releases handled, vinyl-only answers<br/>Achieved: the code does what the docs promise"]
     F18["Issues 18 and 25: Documentation<br/>Code: README, decisions.md, this page<br/>Achieved: decisions and architecture<br/>written down, updated with every step"]
@@ -129,9 +129,9 @@ flowchart TD
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
-    class S0,S1,S2,S3,S4,S6,F27 built
+    class S0,S1,S2,S3,S4,S6,F27,F19 built
     class S5,S7,S8,S9,S10,S11 planned
-    class F19,F24,F18 support
+    class F24,F18 support
 ```
 
 | Step | Issue | Status | What it gives | Main tech |
@@ -149,7 +149,7 @@ flowchart TD
 | 10 | [12](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) Web page | Planned | The question box on adnsaudio.com | HTML, CSS, JavaScript |
 | 11 | [13](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) Test page | Planned | Keyboard, focus and screen-reader checks | browser tests |
 | – | [27](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/27) Review fixes | Built | Malformed data, deleted and credit-only releases handled; one run at a time; vinyl-only answers | Python, PostgreSQL advisory lock |
-| – | [19](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/19) CI | Next | Every pull request runs all tests, including the database ones | GitHub Actions |
+| – | [19](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/19) CI | Built | Every pull request runs all tests, including the database ones, and must pass to merge | GitHub Actions, Dependabot |
 | – | [24](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/24) Tracked shops | Planned | Questions by seller city, e.g. Berlin | Discogs inventory API |
 | – | [18](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/18), [25](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/25) Documentation | Ongoing | README, decisions and this page kept current | Markdown, Mermaid |
 
@@ -316,6 +316,7 @@ The list tools return at most 50 rows (25 unless asked for more), plus the total
 | Reader login | [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) | PostgreSQL roles | Creates the SELECT-only login | Read-only sessions and a 5 s limit set on the role; future tables readable, never writable; no temporary tables |
 | Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped; vinyl only; timeouts reported as a readable reason |
 | Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 195 tests: fake Discogs, a throwaway PostgreSQL, a fake clock | Database tests skip without Docker on a laptop, fail in CI |
+| CI | [`.github/workflows/tests.yml`](../.github/workflows/tests.yml), [`dependabot.yml`](../.github/dependabot.yml) | GitHub Actions, Dependabot | Runs every test on Python 3.10 and 3.13 for each pull request and push to main | Required to pass before merging; read-only token; actions pinned to exact commits; runs stop after 15 minutes |
 
 ---
 
@@ -327,7 +328,7 @@ The same routine has been used on every task:
 2. **Separate the environment from the code.** When something fails, first find out whether the cause is our code, the machine (Docker, disk, settings) or the outside service.
 3. **Lay out the options with their trade-offs.** Name two or three ways, what each costs, and what risk each leaves open. Pick one deliberately and record why (see [decisions.md](decisions.md)).
 4. **Make the smallest change that solves it,** in the place where the problem belongs.
-5. **Prove it with tests,** including the failure cases.
+5. **Prove it with tests,** including the failure cases. Since issue 19, CI runs them on every pull request.
 6. **Plant bugs on purpose.** Break the code in specific ways and check that a test fails each time. Add a test whenever a planted bug survives.
 7. **Run it for real.** Do a live run against Discogs and a throwaway database before handing over.
 8. **Write it down.** Update the README, decisions.md and this page. Raise anything outside the task's scope as its own ticket instead of fixing it on the side.
@@ -359,6 +360,8 @@ The same routine has been used on every task:
 | 27 | A studio's label list filled the catalogue with other labels' records | Label lists include releases where the label is only credited | Releases are kept only if their own labels include the one being ingested |
 | 27 | Two runs at once would exceed the rate limit | Pacing works within one run only | A database advisory lock lets one run at a time |
 | 27 | The live run's user agent could not be loaded by the shell | It contains a space and is not quoted in `.env` | Read with python-dotenv, as the app does, without displaying it |
+| 19 | A check that has never failed proves nothing | A green run can also mean nothing was tested | Two throwaway pull requests: a planted bug gave 2 failures, and an unreachable Docker gave 116 errors instead of skips; both closed afterwards |
+| 19 | Version tags of GitHub actions can be moved to other code | In March 2025 the tags of the `tj-actions/changed-files` action were moved to code that printed secrets into logs | Actions pinned to exact commits, updated through Dependabot pull requests |
 | Setup | Commands could not start on a new machine | `.env` lacked most settings, and an appended line was glued onto the previous one | Added the settings and split the glued line, without displaying any values |
 
 ---

@@ -1,0 +1,52 @@
+# Runs every test, database tests included, on each pull request and each push
+# to main. The database tests start their own PostgreSQL 16 with Testcontainers,
+# exactly as on a laptop; GitHub's Linux machines have Docker. CI=true makes
+# them fail, not skip, if Docker is ever unavailable (see tests/conftest.py).
+name: Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# The tests need no secrets and write nothing to the repository.
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request replaces the older run.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      # Report both versions even when one fails.
+      fail-fast: false
+      matrix:
+        # The oldest Python the README supports, and the newest.
+        python-version: ["3.10", "3.13"]
+
+    steps:
+      # Actions are pinned to exact commits, so their code cannot change under
+      # us; Dependabot (.github/dependabot.yml) proposes updates as pull requests.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run the tests
+        env:
+          CI: "true"
+        run: python -m pytest -ra

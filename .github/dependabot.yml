@@ -1,0 +1,8 @@
+# Proposes updates to the GitHub actions used by the workflows, which are pinned
+# to exact commits. Each update arrives as a pull request that CI checks first.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
