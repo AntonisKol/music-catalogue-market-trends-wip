@@ -1513,6 +1513,105 @@ Screenshots were reviewed for layout. Then the same page ran against the real AP
 
 ---
 
+## Task #10: Update the data every night
+
+*November 2026 · [issue #10](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10)*
+
+**Goal.** Run the label pipeline every night for every tracked label, so the price and demand history grows by one day at a time. It must never overlap with another run, must make failures visible, and must make recovery easy.
+
+**Result.**
+- A `tracked_labels` table with a command to manage it.
+- `python -m ingestion.nightly`, which records every run in the database and a rotating log, and emails an alert on problems.
+- `python -m ingestion.runs` to look at recent nights.
+- A launchd job for a Mac, and a cron line for a server.
+- 26 new tests (319 in total), and a live run on an old-style database.
+
+### Decision 1: What starts the run
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **The system scheduler** | launchd on a Mac, cron on a server; it simply runs the command | **Chosen** |
+| A Python scheduler | A long-running process such as APScheduler | Rejected |
+| A scheduler container | A cron container in docker-compose | Rejected for now: needs an app image, which hosting will bring |
+| GitHub Actions | A scheduled workflow | Rejected: the database would have to be reachable from the internet |
+
+**In plain words.** An alarm clock built into the house, rather than a person who has to stay awake to ring a bell. A Python scheduler has to be running at 3 a.m. itself. If it crashes, or the machine restarts, nothing happens until someone notices, and keeping it alive would again need launchd or systemd. launchd survives reboots, and if the Mac was asleep at 03:00, it runs the job when the Mac wakes.
+
+### Decision 2: Where the list of labels lives
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **A database table** | `tracked_labels`, managed with `track_labels add / list / pause / resume` | **Chosen** |
+| A file in the repository | `labels.txt`, changed by pull requests | Rejected |
+| A setting | `TRACKED_LABELS=1,538,...` | Rejected |
+
+**In plain words.** Visitors will be able to ask for labels to be tracked ([issue #37](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/37)), and those requests need to land in the same list. A table can take additions from both the owner and visitors. Adding a label checks it on Discogs first and stores its real name, so a typo in an id fails at once instead of at 3 a.m.
+
+### Decision 3: How a run is recorded
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **A table and a log file** | `ingestion_runs` and `ingestion_run_labels`, plus `logs/nightly.log` | **Chosen** |
+| A log file only | Text to read | Rejected |
+| Terminal output | Lost unless someone watches | Rejected |
+
+**In plain words.** A ship's logbook with a summary page. The table answers "did last night work, and which label failed?" in one query, and can later feed a "data updated on …" line on the page. The log file keeps the release-by-release detail for investigating. It rotates at 5 MB with 10 kept, so it never fills the disk.
+
+### Decision 4: How a failed night is noticed
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **An email on failure** | An alert when a run has problems, cannot reach the database, or finds another run in progress | **Chosen** |
+| Checking the record by hand | `ingestion.runs` when someone remembers | Rejected |
+| A status line on the page | A stale date visible to all | Rejected for now |
+
+**In plain words.** A machine that is switched off cannot send an email saying it did not run. So each run also checks whether the previous successful one is more than 36 hours old and reports missed nights. An alert from outside the machine belongs with hosting. Email goes over standard SMTP, so any provider works, including the one chosen for sign-in emails. Without settings, alerts are only logged, and a broken mail server never breaks the run.
+
+### In the code
+
+- **[`ingestion/nightly.py`](../ingestion/nightly.py):**
+  - takes the advisory lock from issue #27, so it never overlaps with `ingest_label` or itself;
+  - marks a run that was interrupted (for example by a crash) as failed;
+  - creates the run row and processes the active labels in name order, recording one row per label;
+  - finishes as `succeeded` or `failed`, with a summary.
+
+  A label whose list cannot be fetched is recorded with its error, and the next label is processed. A lost database connection stops the run. Exit status 0 means no problems.
+- **[`ingestion/track_labels.py`](../ingestion/track_labels.py), [`ingestion/runs.py`](../ingestion/runs.py), [`ingestion/alerts.py`](../ingestion/alerts.py):** the label list, the run summary, and SMTP alerts with STARTTLS.
+- **[`ingestion/apply_schema.py`](../ingestion/apply_schema.py):** every statement in `db/schema.sql` is now `CREATE TABLE IF NOT EXISTS`. Docker applies that file only to a new database, so this command brings an existing one up to date without touching its data.
+- **[`ops/`](../ops):** the launchd job and `install-launchd.sh`, which fills in the project's path and loads it.
+
+**Capacity.** Discogs allows about 3,300 requests an hour, and each vinyl release needs two a day. An 8-hour night therefore refreshes about 13,000 releases, roughly 30 to 40 labels the size of Perlon. The run record shows how long each night takes, so the limit is visible well before it is reached.
+
+### How we proved the tests work
+
+Thirteen bugs were planted:
+- paused labels updated;
+- one failing label stopping the run;
+- failed releases ignored;
+- missed nights not noticed;
+- too short a threshold for "missed";
+- interrupted runs left as running;
+- failure recorded as success;
+- no alert;
+- no lock;
+- exit 0 despite problems;
+- re-adding a label keeping it paused;
+- a mail-server error breaking the run;
+- a schema that cannot be re-applied.
+
+Twelve were caught at once. "One failing label stops the run" survived, because labels run in name order and the test's failing label happened to come last. With a failing label that sorts first, the bug is caught.
+
+### Live check
+
+A throwaway database was created with the old schema. Then:
+1. `apply_schema` added the three new tables.
+2. `track_labels` refused a label id that does not exist and tracked label 2 under its Discogs name, Earthtones Recordings.
+3. The nightly run took one minute: 27 listed, 23 saved, 4 not vinyl, exit 0.
+4. A second run the same day also succeeded and left 23 snapshot rows for 23 releases, with no duplicates.
+5. `ingestion.runs` showed both runs, and the log file was written.
+
+---
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.
@@ -1555,5 +1654,7 @@ Screenshots were reviewed for layout. Then the same page ran against the real AP
 - **Widget**: a self-contained piece of a web page (here the question box) that can be placed on any page.
 - **Text node**: a piece of a web page that the browser always shows as text, never runs as code.
 - **aria-live**: a marker that tells screen readers to announce changes in part of the page.
+- **launchd / cron**: the schedulers built into macOS and Linux, which start a command at set times.
+- **SMTP**: the standard way programs send email through a mail provider.
 - **Advisory lock**: a named lock kept by the database, used here so only one ingestion run works at a time; it is released automatically when the run's connection closes.
 - **Savepoint**: a checkpoint inside an open database transaction; nothing in it is permanent until the outer transaction is committed.

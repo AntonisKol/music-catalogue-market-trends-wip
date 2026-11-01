@@ -5,7 +5,7 @@ How the project fits together, what each part is made of, and how it was built s
 - **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
 - **Developers:** every box names its code file, and the components table goes into detail.
 
-*Last updated: 2 November 2026, after step 10 (issue 12). 293 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
+*Last updated: 2 November 2026, after step 5 (issue 10). 319 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
 
 **How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
 
@@ -30,7 +30,7 @@ flowchart TB
     end
 
     subgraph ING["Ingestion: writes data"]
-        SCH["Nightly schedule, step 5<br/>How: a scheduler starts ingest_label,<br/>never two runs at once<br/>Will achieve: fresh prices every day<br/>without anyone running a command"]
+        SCH["Nightly update, step 5<br/>Code: ingestion/nightly.py, track_labels.py, ops/<br/>How: launchd (Mac) or cron (server) runs<br/>one command for every tracked label<br/>Achieved: fresh prices every night, each run<br/>recorded, email alert on problems"]
         CLI["Label command, step 4 and issue 27<br/>Code: ingest_label.py, pipeline.py<br/>How: one run at a time, lists a label,<br/>skips non-vinyl and credit-only releases,<br/>saves each release, logs a summary<br/>Achieved: a whole label in one command,<br/>failures reported, never silently lost"]
         SHOP["Shop tracker, issue 24<br/>How: reads chosen record shops'<br/>Discogs inventories every day<br/>Will achieve: prices by seller city,<br/>such as Berlin"]
         CL["Discogs client, steps 1 and 4<br/>Code: discogs_client.py<br/>How: one request every 1.1 s,<br/>retries after 5, 15, 60 s<br/>Achieved: stays under the limit of<br/>60 requests a minute, rides out<br/>Discogs hiccups of up to 80 s"]
@@ -40,6 +40,7 @@ flowchart TB
 
     subgraph DB["PostgreSQL 16"]
         CAT[("Catalogue<br/>labels, artists, releases<br/>Code: db/schema.sql")]
+        TRK[("Tracked labels and run records<br/>tracked_labels, ingestion_runs<br/>Achieved: what to update, and how each night went")]
         SNAP[("Daily snapshots<br/>price and demand per release per day<br/>Achieved: history that grows with every run")]
         LST[("Shop listings, issue 24<br/>one row per listing per day")]
         LIM[("Question counts<br/>per visitor hash and site, per hour and day<br/>Code: create_limits_role.py<br/>Achieved: limits that survive restarts")]
@@ -55,6 +56,7 @@ flowchart TB
 
     USER(["Visitor"])
 
+    SCH -->|"reads the list, records the run"| TRK
     SCH --> CLI
     SCH --> SHOP
     CLI --> CL
@@ -79,8 +81,8 @@ flowchart TB
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200,stroke-dasharray: 4 3
-    class CLI,CL,MAP,REP,CAT,SNAP,RD,TL,QS,API,LIM,CF,UI built
-    class SCH planned
+    class CLI,CL,MAP,REP,CAT,SNAP,RD,TL,QS,API,LIM,CF,UI,TRK built
+    class SCH built
     class SHOP,LST support
 ```
 
@@ -99,7 +101,7 @@ flowchart TD
     S2["Step 2, issue 2: Tests and test database<br/>Code: tests/, conftest.py<br/>How: pytest, Discogs faked with responses,<br/>a throwaway PostgreSQL via Testcontainers<br/>Achieved: every change checked<br/>without touching real data"]
     S3["Step 3, issue 3: Daily snapshots<br/>Code: save_snapshot.py, repository.py<br/>How: marketplace stats in EUR plus<br/>want, have and rating, one row per day<br/>Achieved: price and demand history"]
     S4["Step 4, issue 6: Ingest a whole label<br/>Code: pipeline.py, ingest_label.py<br/>How: dedupe, vinyl filter, pacing,<br/>retries, commit per release, logging<br/>Achieved: a whole label in one command,<br/>failures listed, never silently lost"]
-    S5["Step 5, issue 10: Nightly schedule<br/>How: a scheduler runs the same command,<br/>prevents overlapping runs, keeps logs<br/>Will achieve: data refreshed every night,<br/>with a documented recovery path"]
+    S5["Step 5, issue 10: Nightly update<br/>Code: nightly.py, track_labels.py, runs.py, alerts.py<br/>How: tracked_labels table, launchd or cron,<br/>run lock, run records, rotating log, SMTP alert<br/>Achieved: data refreshed every night, missed<br/>nights flagged, safe reruns"]
     S6["Step 6, issue 11: Read-only query tools<br/>Code: queries/, create_reader_role.py<br/>How: SELECT-only role, 5 fixed tools,<br/>Pydantic checks, capped results<br/>Achieved: safe reads for the AI"]
     S7["Step 7, issue 7: AI question service<br/>Code: queries/questions.py<br/>How: Claude Haiku 5.5, SDK tool runner over<br/>the 5 tools, prompt caching, no round cap<br/>Achieved: questions answered from the<br/>stored data with their sources,<br/>the AI never writes SQL"]
     S8["Step 8, issue 9: Test the AI service<br/>Code: tests/test_questions.py, test_verify.py,<br/>test_live_answers.py<br/>How: faked AI for guardrails, a free figure check<br/>on every answer, a live test with an AI judge<br/>Achieved: wrong figures flagged to visitors,<br/>tool choice, limits, errors and read-only<br/>access proven, real answers checked before releases"]
@@ -133,8 +135,8 @@ flowchart TD
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
-    class S0,S1,S2,S3,S4,S6,S7,S8,S9,S10,F27,F19 built
-    class S5,S11 planned
+    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,F27,F19 built
+    class S11 planned
     class F24,F18 support
 ```
 
@@ -145,7 +147,7 @@ flowchart TD
 | 2 | [2](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/2) Tests | Built | Fake Discogs, a throwaway test database | pytest, responses, Testcontainers |
 | 3 | [3](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) Snapshots | Built | One price and demand row per release per day | Discogs marketplace API |
 | 4 | [6](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) Pipeline | Built | A whole label in one command | logging, pacing, retries |
-| 5 | [10](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) Schedule | Planned | The pipeline runs every night, never twice at once | scheduler, logs |
+| 5 | [10](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) Nightly update | Built | Every tracked label refreshed each night, every run recorded, alerts on problems | launchd, cron, PostgreSQL, SMTP |
 | 6 | [11](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) Query tools | Built | Safe, capped reads for the AI | PostgreSQL roles, Pydantic |
 | 7 | [7](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) AI service | Built | Questions answered from the data, with their sources | Anthropic Messages API, tool runner, Claude Haiku 5.5 |
 | 8 | [9](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) Test AI | Built | Guardrails proven with a faked AI; figures checked on every answer; a live before-release test with an AI judge | pytest, httpx MockTransport, Claude Opus 5.5 as judge |
@@ -332,10 +334,12 @@ The list tools return at most 50 rows (25 unless asked for more), plus the total
 | Label pipeline | [`ingestion/pipeline.py`](../ingestion/pipeline.py), [`ingest_label.py`](../ingestion/ingest_label.py) | Python CLI, logging | Ingests every vinyl release of a label | One run at a time (advisory lock); duplicates dropped; credit-only releases skipped; deleted releases listed as gone; failures, malformed data included, listed and exit 1; commit per release; stops if the label list cannot be fetched or the database connection is lost |
 | Reader login | [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) | PostgreSQL roles | Creates the SELECT-only login | Read-only sessions and a 5 s limit set on the role; future tables readable, never writable; no temporary tables |
 | Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped; vinyl only; timeouts reported as a readable reason |
-| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 293 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock; a `--live` before-release test with the real Claude and an AI judge | Database tests skip without Docker on a laptop, fail in CI; live tests never run without `--live` |
+| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 319 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock; a `--live` before-release test with the real Claude and an AI judge | Database tests skip without Docker on a laptop, fail in CI; live tests never run without `--live` |
 | Question service | [`queries/questions.py`](../queries/questions.py) | Anthropic SDK tool runner, Claude Haiku 5.5 | Sends the question and tool descriptions to Claude, runs the tools it asks for, returns the answer with its sources | Claude never sees SQL or the database; refused arguments go back as errors; a database failure stops the run; every error becomes a visitor-safe `QuestionError`; instructions and tools cached |
 | Web API | [`web/app.py`](../web/app.py), [`limits.py`](../web/limits.py), [`captcha.py`](../web/captcha.py), [`create_limits_role.py`](../ingestion/create_limits_role.py) | Flask, gunicorn, Cloudflare Turnstile | `POST /api/questions`: checks the request, the human check and the limits, then asks the question service | Fails closed; limits counted in one transaction by a login that can only touch `question_counts`; visitors stored as a keyed hash, deleted after two days; forwarded addresses trusted only behind a configured proxy; usage never sent; 8 KB body limit; CORS only for listed origins |
 | Question box | [`widget/ask.js`](../widget/ask.js), [`ask.css`](../widget/ask.css), [`index.html`](../widget/index.html) | HTML, CSS, JavaScript, Cloudflare Turnstile | The form, example questions, states, answer, warning, model and data table | Answers drawn from text nodes only; no double submits; token reset after each question; no secrets in the page; 90-second request timeout |
+| Nightly update | [`ingestion/nightly.py`](../ingestion/nightly.py), [`track_labels.py`](../ingestion/track_labels.py), [`runs.py`](../ingestion/runs.py), [`alerts.py`](../ingestion/alerts.py), [`ops/`](../ops) | launchd, cron, SMTP | Updates every active tracked label each night and records each run and label | Shares the ingestion lock; interrupted runs marked failed; missed nights flagged; one label's failure doesn't stop the rest; rotating log; alerts never break the run |
+| Schema command | [`ingestion/apply_schema.py`](../ingestion/apply_schema.py) | PostgreSQL | Adds tables introduced since a database was created | Every statement is `CREATE TABLE IF NOT EXISTS`; existing data untouched |
 | CI | [`.github/workflows/tests.yml`](../.github/workflows/tests.yml), [`dependabot.yml`](../.github/dependabot.yml) | GitHub Actions, Dependabot | Runs every test on Python 3.10 and 3.13 for each pull request and push to main | Required to pass before merging; read-only token; actions pinned to exact commits; runs stop after 15 minutes |
 
 ---
@@ -392,6 +396,8 @@ The same routine has been used on every task:
 | 12 | The browser check could not open the demo page | `localhost` resolved to IPv6 while the test server listened on IPv4 | The demo uses `127.0.0.1` for the page and the API |
 | 12 | The faked API refused the page's request | The page and the API are on different origins, so the browser first asks permission (CORS), as on the real site | The fake answers that request with CORS headers, the same way the real API does |
 | 12 | Trying the demo on a Mac showed "Could not reach the question service" | macOS uses port 5000, Flask's default, for AirPlay Receiver, which answered instead of the API | The demo and README use port 5050 |
+| 10 | A planted bug (stop after the first failing label) survived | Labels run in name order, and the test's failing label happened to sort last | The failing label now sorts first; the bug is caught |
+| 10 | Existing databases would not get the new tables | Docker applies `db/schema.sql` only when a database is first created | Every statement became `CREATE TABLE IF NOT EXISTS`, and `ingestion.apply_schema` applies it to an existing database |
 | Setup | Commands could not start on a new machine | `.env` lacked most settings, and an appended line was glued onto the previous one | Added the settings and split the glued line, without displaying any values |
 
 ---

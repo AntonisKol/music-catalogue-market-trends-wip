@@ -42,7 +42,7 @@ The tasks below are ordered so each step builds on working code from the previou
 | 2 | [#2 Test Discogs ingestion and PostgreSQL pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/2) | P0 | Done | Automated tests for API handling and database mapping/upserts, using mocked HTTP and a test database. |
 | 3 | [#3 Capture daily vinyl price and demand snapshots](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) | P0 | Done | Fetch market supply/price and community demand, then store one snapshot per release per day. |
 | 4 | [#6 Build a repeatable Discogs-to-PostgreSQL ingestion pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) | P0 | Done | A Python command that connects label pagination, release detail fetching, catalogue writes, and snapshot writes. |
-| 5 | [#10 Schedule and operate daily ingestion](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) | P2 | Todo | Run the pipeline daily, avoid overlapping runs, and document logs, failures, and safe retries. |
+| 5 | [#10 Schedule and operate daily ingestion](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) | P2 | Done | Run the pipeline daily, avoid overlapping runs, and document logs, failures, and safe retries. |
 | 6 | [#11 Add safe read-only query tools for the live dataset](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) | P1 | Done | A restricted database role and a small set of parameterized query functions for release lookup and price/demand comparisons. |
 | 7 | [#7 Add Anthropic-powered natural-language queries over live data](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) | P1 | Done | Use Anthropic tool use: the model selects an approved Python query tool, the app executes it, and the model explains the live results. |
 | 8 | [#9 Test the Anthropic query service and guardrails](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) | P1 | Done | Test the assistant service, tool selection, read-only behavior, query limits, and grounded answers without live API calls. |
@@ -80,7 +80,9 @@ The tasks below are ordered so each step builds on working code from the previou
 - A web API (`POST /api/questions`) in front of the question service, with a human check, limits per visitor and for the whole site, and JSON errors (see [Run the web API](#run-the-web-api)).
 - A question box for adnsaudio.com: one JavaScript module and one stylesheet in [`widget/`](widget) (see [Add the question box to a page](#add-the-question-box-to-a-page)).
 
-Scheduling and hosting the API publicly are roadmap work.
+- A nightly update of every tracked label, with a record of each run and an email alert on problems (see [Update the data every night](#update-the-data-every-night)).
+
+Hosting the API publicly is roadmap work.
 
 ## Requirements
 
@@ -181,6 +183,68 @@ Progress is logged with timestamps, one line per release, for example `[1/11] 18
 - **Gone releases.** A release still on the label's list that Discogs no longer has (404) is logged as a warning and listed as gone. It does not fail the run.
 - **One run at a time.** A second run refuses to start while another one is in progress, since together they would exceed Discogs' rate limit. It exits with status 1.
 - **Safe to rerun.** Each release is committed as soon as it is saved, so an interrupted run keeps what it finished. Running it again the same day updates the same rows.
+
+## Update the data every night
+
+The labels to update live in the `tracked_labels` table. An existing database gets the new tables with one command, which is safe to run again and leaves existing data alone:
+
+```bash
+python -m ingestion.apply_schema
+```
+
+Choose the labels by their Discogs label id (the number in a label's Discogs address):
+
+```bash
+python -m ingestion.track_labels add 1 538     # Planet E, Perlon
+python -m ingestion.track_labels list
+python -m ingestion.track_labels pause 538     # skip it at night, keep its data
+python -m ingestion.track_labels resume 538
+```
+
+One command updates every active label: its vinyl releases, and that day's prices and demand.
+
+```bash
+python -m ingestion.nightly
+```
+
+- **It never overlaps.** It takes the same lock as `ingest_label`, so it never runs alongside another ingestion run.
+- **One label's problem doesn't stop the rest.** The others are still updated, and the command exits with status 1.
+- **Everything is recorded.** Each run, and each label within it, goes into `ingestion_runs` and `ingestion_run_labels`. Progress goes to `logs/nightly.log`, rotated at 5 MB with 10 kept.
+- **Missed nights are noticed.** If the last successful run started more than 36 hours earlier, the run reports it.
+- **Rerunning the same day is safe.** It updates the same rows, adding no duplicates.
+
+See how recent nights went:
+
+```bash
+python -m ingestion.runs
+```
+
+**Scheduling on a Mac.** launchd starts the run at 03:00 every night. If the Mac is asleep then, it runs when the Mac wakes. Install it once from the project folder:
+
+```bash
+sh ops/install-launchd.sh            # install; "remove" uninstalls
+launchctl kickstart gui/$(id -u)/com.adnsaudio.market-trends.nightly   # run once now, to test
+```
+
+The database has to be running at night, so start Docker's virtual machine at login: `brew services start colima`. Without it, the run fails and says so.
+
+**Scheduling on a Linux server.** Add a cron line:
+
+```cron
+0 3 * * * cd /path/to/project && .venv/bin/python -m ingestion.nightly >> logs/cron.log 2>&1
+```
+
+**Alerts by email.** These settings in `.env` are optional. Without them, an alert is only logged.
+
+```dotenv
+ALERT_EMAIL_TO=you@example.com
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=...
+SMTP_PASSWORD=...
+```
+
+An alert is sent when a run has problems, cannot reach the database, or finds another run in progress. Each alert includes the recovery step: `python -m ingestion.nightly` reruns safely, and `python -m ingestion.ingest_label <id>` reruns a single label.
 
 ## Query the data read-only
 
