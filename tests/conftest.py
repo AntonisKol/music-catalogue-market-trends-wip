@@ -24,6 +24,8 @@ FAKE_SETTINGS = {
     "POSTGRES_DB": "test",
     "POSTGRES_READER_USER": "catalogue_reader",
     "POSTGRES_READER_PASSWORD": "reader-test-password",
+    # Never a real key: a test that forgot its fake API would fail, not spend money.
+    "ANTHROPIC_API_KEY": "test-key-not-real",
 }
 
 os.environ.update(FAKE_SETTINGS)

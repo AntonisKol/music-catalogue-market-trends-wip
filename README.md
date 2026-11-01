@@ -44,8 +44,8 @@ The tasks below are ordered so each step builds on working code from the previou
 | 4 | [#6 Build a repeatable Discogs-to-PostgreSQL ingestion pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) | P0 | Done | A Python command that connects label pagination, release detail fetching, catalogue writes, and snapshot writes. |
 | 5 | [#10 Schedule and operate daily ingestion](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) | P2 | Todo | Run the pipeline daily, avoid overlapping runs, and document logs, failures, and safe retries. |
 | 6 | [#11 Add safe read-only query tools for the live dataset](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) | P1 | Done | A restricted database role and a small set of parameterized query functions for release lookup and price/demand comparisons. |
-| 7 | [#7 Add Anthropic-powered natural-language queries over live data](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) | P1 | Todo | Use Anthropic tool use: the model selects an approved Python query tool, the app executes it, and the model explains the live results. |
-| 8 | [#9 Test the Anthropic query service and guardrails](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) | P1 | Todo; blocked by #7 | Test the assistant service, tool selection, read-only behavior, query limits, and grounded answers without live API calls. |
+| 7 | [#7 Add Anthropic-powered natural-language queries over live data](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) | P1 | Done | Use Anthropic tool use: the model selects an approved Python query tool, the app executes it, and the model explains the live results. |
+| 8 | [#9 Test the Anthropic query service and guardrails](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) | P1 | Todo | Test the assistant service, tool selection, read-only behavior, query limits, and grounded answers without live API calls. |
 | 9 | [#8 Expose natural-language questions through a Python web API](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) | P1 | Todo; blocked by #7 and #9 | Add a validated HTTP/JSON endpoint for the browser to call; keep Anthropic and database credentials server-side. |
 | 10 | [#12 Build the natural-language question web frontend](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) | P1 | Todo; blocked by #8 | Build the user-facing question form and answer view, including loading, validation, and error states. |
 | 11 | [#13 Test web question frontend and accessibility](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) | P1 | Todo; blocked by #12 | Test the browser experience, API integration, keyboard interaction, focus, and accessibility announcements. |
@@ -88,7 +88,9 @@ An effective coding prompt is: *“Let's work only on roadmap Task 1. First expl
 - A read-only database login for the question feature, and five validated, capped query tools in `queries/tools.py`: `search_releases`, `rank_releases`, `release_history`, `market_changes` and `compare_labels` (see [Query the data read-only](#query-the-data-read-only)).
 - Automated tests for the Discogs client, the mapping, saving releases and snapshots to PostgreSQL, the commands, the reader login and the query tools, run by GitHub Actions on every pull request (see [Run the tests](#run-the-tests)). The reasoning behind each decision is in [docs/decisions.md](docs/decisions.md), and diagrams of the whole system, the task map and the problems solved so far are in [docs/architecture.md](docs/architecture.md).
 
-Scheduling, the natural-language question service, the web API and the frontend are roadmap work.
+- A question service: Claude Haiku 5.5 picks among the five query tools, our code runs them through the read-only login, and the answer comes back with the rows it is based on (see [Ask a question](#ask-a-question)).
+
+Scheduling, the web API and the frontend are roadmap work.
 
 ## Requirements
 
@@ -217,6 +219,34 @@ PY
 | `compare_labels` | "How do these labels compare on prices and demand?" |
 
 Arguments are checked before any query runs: wrong types, out-of-range numbers, unknown sort options and unexpected fields are refused with a clear reason, and so is a query stopped by the 5-second limit. Text filters match any part of a name, ignoring case. Every result says how many rows matched in total: the list tools return at most 50 rows (25 by default), `release_history` one row per day for up to 90 days, and `compare_labels` up to 10 labels. Only vinyl releases are ever returned, even if a CD was saved with `save_release`. Prices are each release's cheapest copy on sale in any condition, without shipping, in EUR (converted by Discogs), from its latest snapshot.
+
+## Ask a question
+
+The question service sends a question and the descriptions of the five query tools to Claude. Claude asks for tools, our code checks and runs them over the read-only login, and Claude answers from the rows. It needs `ANTHROPIC_API_KEY` in `.env`, an account with API credit, and the reader login from above:
+
+```bash
+python - <<'PY'
+from queries.questions import answer_question
+
+result = answer_question("What are the most wanted Planet E records, and what do they cost?")
+print(result.text)
+for source in result.sources:
+    print(source["tool"], source["arguments"])
+PY
+```
+
+- **Model.** Claude Haiku 5.5 (`MODEL` in [`queries/questions.py`](queries/questions.py)), returned with every answer as `result.model`.
+- **Grounded.** Claude never sees SQL or the database. It is told to answer only from the tool results and to say plainly when the data cannot answer a question. `result.sources` lists every tool call our code ran, with its arguments and rows, so the page can show the data behind an answer.
+- **Errors.** Every failure becomes a `QuestionError` with a `code` (`invalid_question`, `busy`, `unavailable`, `configuration` or `database`) and a message that is safe to show a visitor. The details are only logged. A refused tool argument is not an error: it goes back to Claude with the reason, so it can correct the call.
+- **Cost.** Each answer reports its `rounds` (billed model requests) and token `usage`. The tool definitions and instructions are cached between questions. There is no cap on tool rounds per question; limits per visitor belong to the web API.
+
+### Anthropic API credit
+
+The question service is paid per use from your Anthropic API balance. This is separate from a Claude.ai subscription (Pro or Max), which does not cover API usage. Without credit, every question fails with the `configuration` error, and the log says "Your credit balance is too low".
+
+1. Sign in at [console.anthropic.com](https://console.anthropic.com) with the account your `ANTHROPIC_API_KEY` belongs to.
+2. Open **Settings → Billing** ([direct link](https://console.anthropic.com/settings/billing)) and click **Buy credits**. $5 is plenty for testing: with Claude Haiku 5.5 a question costs about $0.001.
+3. Optional but recommended once the site is public: turn on **auto-reload** in Billing, and set a monthly spend limit under **Settings → Limits** as a safety net.
 
 ## Reset the local database
 
