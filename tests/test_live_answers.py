@@ -2,7 +2,7 @@
 
     python -m pytest tests/test_live_answers.py --live -s
 
-Costs money (a few cents a run) and is never part of a plain pytest run or CI.
+Calls the real API, so it is never part of a plain pytest run or CI.
 Run it after changing the model, the instructions or the tools. The API key is
 read from ANTHROPIC_LIVE_API_KEY, or from ANTHROPIC_API_KEY in the project's .env.
 
@@ -98,10 +98,11 @@ def live_key():
 def report():
     totals = {"questions": 0, "service_tokens_in": 0, "service_tokens_out": 0, "judge_tokens_in": 0, "judge_tokens_out": 0}
     yield totals
-    # Haiku 5.5 for the service (cache reads ~10% of input), Opus 5.5 for the judge; rough, list prices.
-    cost = (totals["service_tokens_in"] * 0.10 + totals["service_tokens_out"] * 0.50
-            + totals["judge_tokens_in"] * 4.0 + totals["judge_tokens_out"] * 20.0) / 1e6
-    print(f"\nLive check: {totals['questions']} questions, about ${cost:.3f} (at most; cached input costs less)")
+    print(
+        f"\nLive check: {totals['questions']} questions; service tokens in/out "
+        f"{totals['service_tokens_in']}/{totals['service_tokens_out']}, "
+        f"judge tokens in/out {totals['judge_tokens_in']}/{totals['judge_tokens_out']}"
+    )
 
 
 @pytest.fixture

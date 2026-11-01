@@ -47,7 +47,7 @@ flowchart TB
         RD["Reader login, step 6<br/>Code: create_reader_role.py<br/>How: SELECT-only role, read-only<br/>sessions, 5 s query limit<br/>Achieved: nothing using this login can<br/>change data, enforced by the database"]
         TL["Five query tools, step 6 and issue 27<br/>Code: queries/tools.py<br/>How: fixed SQL, arguments checked<br/>by Pydantic, capped results, vinyl only<br/>Achieved: safe, predictable reads<br/>an AI can call"]
         QS["Question service, steps 7 and 8<br/>Code: queries/questions.py, queries/verify.py<br/>How: Claude Haiku 5.5 via the SDK tool runner,<br/>gets only the question and tool descriptions,<br/>our code checks and runs each tool it picks,<br/>then checks every figure against the rows<br/>Achieved: answers from our rows, returned<br/>with their sources, a warning when a figure<br/>cannot be found, clear errors for failures"]
-        API["Web API, step 9<br/>How: one HTTP endpoint, JSON in and out,<br/>question shape and length checked,<br/>limits per visitor or payment<br/>Will achieve: the page can ask questions,<br/>keys and passwords stay on the server,<br/>costs stay under control"]
+        API["Web API, step 9<br/>How: one HTTP endpoint, JSON in and out,<br/>question shape and length checked,<br/>limits per visitor<br/>Will achieve: the page can ask questions,<br/>keys and passwords stay on the server,<br/>protected from abuse"]
         UI["Web page, step 10<br/>How: HTML, CSS and JavaScript, a question<br/>form with example questions, loading,<br/>empty, answer and error states,<br/>names the AI model that answered<br/>Will achieve: anyone can ask about techno<br/>vinyl prices, on phone or desktop"]
     end
 
@@ -99,7 +99,7 @@ flowchart TD
     S6["Step 6, issue 11: Read-only query tools<br/>Code: queries/, create_reader_role.py<br/>How: SELECT-only role, 5 fixed tools,<br/>Pydantic checks, capped results<br/>Achieved: safe reads for the AI"]
     S7["Step 7, issue 7: AI question service<br/>Code: queries/questions.py<br/>How: Claude Haiku 5.5, SDK tool runner over<br/>the 5 tools, prompt caching, no round cap<br/>Achieved: questions answered from the<br/>stored data with their sources,<br/>the AI never writes SQL"]
     S8["Step 8, issue 9: Test the AI service<br/>Code: tests/test_questions.py, test_verify.py,<br/>test_live_answers.py<br/>How: faked AI for guardrails, a free figure check<br/>on every answer, a live test with an AI judge<br/>Achieved: wrong figures flagged to visitors,<br/>tool choice, limits, errors and read-only<br/>access proven, real answers checked before releases"]
-    S9["Step 9, issue 8: Web API<br/>How: a Python HTTP endpoint, JSON<br/>Will achieve: checked questions in,<br/>clear answers and errors out,<br/>no secrets sent to the browser,<br/>limits per visitor or payment"]
+    S9["Step 9, issue 8: Web API<br/>How: a Python HTTP endpoint, JSON<br/>Will achieve: checked questions in,<br/>clear answers and errors out,<br/>no secrets sent to the browser,<br/>limits per visitor"]
     S10["Step 10, issue 12: Web page<br/>How: HTML, CSS, JavaScript calling the API<br/>Will achieve: the question box with example<br/>questions and loading, empty, answer and<br/>error states, on phone and desktop"]
     S11["Step 11, issue 13: Test the web page<br/>How: browser tests against a faked API,<br/>plus one end-to-end check<br/>Will achieve: keyboard, labels, focus and<br/>screen-reader announcements verified"]
     F19["Issue 19: CI runs all tests<br/>Code: .github/workflows/tests.yml<br/>How: GitHub Actions on Python 3.10 and 3.13,<br/>Testcontainers PostgreSQL, CI=true,<br/>actions pinned to exact commits<br/>Achieved: no pull request merges into<br/>main unless all tests pass"]
@@ -145,7 +145,7 @@ flowchart TD
 | 6 | [11](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) Query tools | Built | Safe, capped reads for the AI | PostgreSQL roles, Pydantic |
 | 7 | [7](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) AI service | Built | Questions answered from the data, with their sources | Anthropic Messages API, tool runner, Claude Haiku 5.5 |
 | 8 | [9](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) Test AI | Built | Guardrails proven with a faked AI; figures checked on every answer; a live before-release test with an AI judge | pytest, httpx MockTransport, Claude Opus 5.5 as judge |
-| 9 | [8](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) Web API | Planned | An HTTP endpoint for the page, with limits per visitor or payment before going public | Python web framework |
+| 9 | [8](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) Web API | Planned | An HTTP endpoint for the page, with limits per visitor before going public | Python web framework |
 | 10 | [12](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) Web page | Planned | The question box on adnsaudio.com | HTML, CSS, JavaScript |
 | 11 | [13](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) Test page | Planned | Keyboard, focus and screen-reader checks | browser tests |
 | – | [27](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/27) Review fixes | Built | Malformed data, deleted and credit-only releases handled; one run at a time; vinyl-only answers | Python, PostgreSQL advisory lock |
@@ -256,7 +256,7 @@ sequenceDiagram
     UI->>API: POST question as JSON
     opt this visitor asked too often
         API-->>UI: limit reached, no AI request made
-        Note over UI,API: Will achieve: costs under control<br/>before the site goes public
+        Note over UI,API: Will achieve: the service protected<br/>from abuse before the site goes public
     end
     alt question empty or too long
         API-->>UI: clear error, nothing sent to the AI
@@ -370,9 +370,8 @@ The same routine has been used on every task:
 | 27 | The live run's user agent could not be loaded by the shell | It contains a space and is not quoted in `.env` | Read with python-dotenv, as the app does, without displaying it |
 | 19 | A check that has never failed proves nothing | A green run can also mean nothing was tested | Two throwaway pull requests: a planted bug gave 2 failures, and an unreachable Docker gave 116 errors instead of skips; both closed afterwards |
 | 19 | Version tags of GitHub actions can be moved to other code | In March 2025 the tags of the `tj-actions/changed-files` action were moved to code that printed secrets into logs | Actions pinned to exact commits, updated through Dependabot pull requests |
-| 7 | A database failure inside a tool would have reached Claude as text, followed by another billed request | The SDK's tool runner turns every tool exception into a message for the model | The service runs each round's tools itself and stops at once on a database failure; a planted bug proves it |
+| 7 | A database failure inside a tool would have reached Claude as text, followed by another request | The SDK's tool runner turns every tool exception into a message for the model | The service runs each round's tools itself and stops at once on a database failure; a planted bug proves it |
 | 7 | The `responses` library could not fake the Anthropic API | The Anthropic SDK uses `httpx`, not `requests` | Faked with httpx's own `MockTransport`, so the real SDK and its runner still run in the tests |
-| 7 | The first live check could not get an answer | The Anthropic account had no API credit left | Confirmed the error path (a safe message for the visitor, the real reason in the log), added credit, documented how in the README; five live questions then cost about $0.004 |
 | 7 | Answers came back with Markdown tables | The model formats its answers by default | Noted for the web page (step 10): render Markdown safely or ask for plain text |
 | 9 | Tool schema bounds (25, 100, 1900, 2100) let invented prices pass the figure check | The first version allowed every number in the tool definitions | Only the instructions and plain tool descriptions count; schema bounds are left out |
 | 9 | A live answer said "the data has no October prices" although it did, and the test passed | A 30-day lookup stopped one day short of the October snapshot; the check matched "10 copies" as €10; the judge accepted a claim of absence | Tool descriptions and instructions now ask for whole periods; prices checked as prices; the judge checks claims of absence; the second run answered correctly |

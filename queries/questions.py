@@ -31,8 +31,8 @@ from queries.verify import fixed_text_of, unverified_figures
 
 log = logging.getLogger(__name__)
 
-# The owner's choice for a public site: tools do the filtering and ranking, the
-# model picks a tool and explains its rows. One setting to change if answers fall short.
+# Tools do the filtering and ranking; the model picks a tool and explains its rows,
+# which the fastest model does well. One setting to change if answers fall short.
 MODEL = "claude-haiku-5-5"
 EFFORT = "medium"
 MAX_TOKENS = 16000
@@ -74,7 +74,7 @@ class Answer:
     text: str
     # One entry per tool call our code ran: tool, arguments, and result or error.
     sources: list = field(default_factory=list)
-    # Model requests made for this question; each one is billed.
+    # Model requests made for this question.
     rounds: int = 0
     refused: bool = False
     # Figures in the text that appear nowhere in the sources, as written; see queries/verify.py.
@@ -151,7 +151,7 @@ def answer_question(question: str, conn: psycopg.Connection = None, client: anth
             result.rounds += 1
             add_usage(result.usage, message.usage)
             # Run this round's tools now (the runner reuses the result), so a database
-            # failure stops the run before another billed request is sent.
+            # failure stops the run before another request is sent.
             runner.generate_tool_call_response()
             if failures:
                 raise DatabaseUnavailable(str(failures[0]))

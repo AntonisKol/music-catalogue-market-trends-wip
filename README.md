@@ -64,19 +64,6 @@ The tasks below are ordered so each step builds on working code from the previou
 10. **Build the frontend — HTML, CSS, and JavaScript.** Create the browser form, example questions, answer display, and loading/error states. Use `fetch` to call the Python API; the browser never connects directly to PostgreSQL or Anthropic.
 11. **Test the frontend — browser and accessibility checks.** Verify submission and response states against a mocked API, then test keyboard use, accessible labels, focus, and screen-reader status announcements.
 
-## How to learn as you build
-
-Work on one issue at a time, in roadmap order. For each task:
-
-1. Read the issue and identify its prerequisite tasks.
-2. Before changing code, trace the data flow and explain the relevant Python, SQL, and API concepts in your own words.
-3. Make the smallest working change. Ask for a walkthrough of each file and decision rather than asking for the entire project to be generated at once.
-4. Run the task's tests and a small manual check; inspect the database or output to confirm the behavior.
-5. Review what happens on invalid input and API/database failure. Do not mark the issue Done until its acceptance criteria pass.
-6. Summarize what you learned, then move the issue to Done and begin the next unblocked task.
-
-An effective coding prompt is: *“Let's work only on roadmap Task 1. First explain the files and concepts we need, then make one small change at a time. Pause after each step so I can review it. Do not start another task.”*
-
 ## What's already implemented
 
 - PostgreSQL schema for labels, artists, releases, release/artist relationships, and daily price and demand snapshots.
@@ -222,7 +209,7 @@ Arguments are checked before any query runs: wrong types, out-of-range numbers, 
 
 ## Ask a question
 
-The question service sends a question and the descriptions of the five query tools to Claude. Claude asks for tools, our code checks and runs them over the read-only login, and Claude answers from the rows. It needs `ANTHROPIC_API_KEY` in `.env`, an account with API credit, and the reader login from above:
+The question service sends a question and the descriptions of the five query tools to Claude. Claude asks for tools, our code checks and runs them over the read-only login, and Claude answers from the rows. It needs `ANTHROPIC_API_KEY` in `.env` and the reader login from above:
 
 ```bash
 python - <<'PY'
@@ -237,17 +224,9 @@ PY
 
 - **Model.** Claude Haiku 5.5 (`MODEL` in [`queries/questions.py`](queries/questions.py)), returned with every answer as `result.model`.
 - **Grounded.** Claude never sees SQL or the database. It is told to answer only from the tool results and to say plainly when the data cannot answer a question. `result.sources` lists every tool call our code ran, with its arguments and rows, so the page can show the data behind an answer.
-- **Checked figures.** Every price, count and date in an answer must appear in the rows, arguments or question it was built from ([`queries/verify.py`](queries/verify.py)): no extra AI call, no extra cost. If one cannot be found, the answer is still returned, with `result.unverified` listing those figures and `result.warning` set to a note for the page to show, and the case is logged.
+- **Checked figures.** Every price, count and date in an answer must appear in the rows, arguments or question it was built from ([`queries/verify.py`](queries/verify.py)): no extra AI call. If one cannot be found, the answer is still returned, with `result.unverified` listing those figures and `result.warning` set to a note for the page to show, and the case is logged.
 - **Errors.** Every failure becomes a `QuestionError` with a `code` (`invalid_question`, `busy`, `unavailable`, `configuration` or `database`) and a message that is safe to show a visitor. The details are only logged. A refused tool argument is not an error: it goes back to Claude with the reason, so it can correct the call.
-- **Cost.** Each answer reports its `rounds` (billed model requests) and token `usage`. The tool definitions and instructions are cached between questions. There is no cap on tool rounds per question; limits per visitor belong to the web API.
-
-### Anthropic API credit
-
-The question service is paid per use from your Anthropic API balance. This is separate from a Claude.ai subscription (Pro or Max), which does not cover API usage. Without credit, every question fails with the `configuration` error, and the log says "Your credit balance is too low".
-
-1. Sign in at [console.anthropic.com](https://console.anthropic.com) with the account your `ANTHROPIC_API_KEY` belongs to.
-2. Open **Settings → Billing** ([direct link](https://console.anthropic.com/settings/billing)) and click **Buy credits**. $5 is plenty for testing: with Claude Haiku 5.5 a question costs about $0.001.
-3. Optional but recommended once the site is public: turn on **auto-reload** in Billing, and set a monthly spend limit under **Settings → Limits** as a safety net.
+- **Usage.** Each answer reports its `rounds` (model requests) and token `usage`. The tool definitions and instructions are cached between questions. There is no cap on tool rounds per question; limits per visitor belong to the web API.
 
 ## Reset the local database
 
@@ -274,7 +253,7 @@ The tests need no `.env` and never use your token or your database: `tests/conft
 - the expected facts are mentioned;
 - a stronger model (Claude Opus 5.5) judges every claim supported.
 
-It costs about $0.07 a run, so it never runs by itself, not even in CI. Run it after changing the model, the instructions or the tools:
+It calls the real API, so it never runs by itself, not even in CI. Run it after changing the model, the instructions or the tools:
 
 ```bash
 python -m pytest tests/test_live_answers.py --live -s

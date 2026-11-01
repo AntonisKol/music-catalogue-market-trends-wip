@@ -165,7 +165,7 @@ def test_several_tool_calls_in_one_reply_are_all_run_and_returned_together(catal
     assert [r["tool_use_id"] for r in tool_results(fake.requests[1])] == ["toolu_a", "toolu_b"]
 
 
-def test_a_database_failure_stops_the_run_before_another_billed_request(catalogue, reader):
+def test_a_database_failure_stops_the_run_before_another_request(catalogue, reader):
     fake = FakeAnthropic(
         message(tool_use("search_releases", {"title": "throw"}), stop_reason="tool_use"),
         message(text("should never be requested")),
