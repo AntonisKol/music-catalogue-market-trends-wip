@@ -36,9 +36,9 @@ The tasks below are ordered so each step builds on working code from the previou
 
 | Step | Issue | Priority | Status | What you'll build |
 | --- | --- | --- | --- | --- |
-| 1 | [#5 Persist Discogs vinyl release data in PostgreSQL](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/5) | P0 | In progress | A Python/psycopg repository that maps Discogs records to the existing tables and writes them safely and repeatedly. |
-| 2 | [#2 Test Discogs ingestion and PostgreSQL pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/2) | P0 | Todo; blocked by #5 | Automated tests for API handling and database mapping/upserts, using mocked HTTP and a test database. |
-| 3 | [#3 Capture daily vinyl price and demand snapshots](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) | P0 | Todo; blocked by #5 | Fetch market supply/price and community demand, then store one snapshot per release per day. |
+| 1 | [#5 Persist Discogs vinyl release data in PostgreSQL](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/5) | P0 | Done | A Python/psycopg repository that maps Discogs records to the existing tables and writes them safely and repeatedly. |
+| 2 | [#2 Test Discogs ingestion and PostgreSQL pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/2) | P0 | Done | Automated tests for API handling and database mapping/upserts, using mocked HTTP and a test database. |
+| 3 | [#3 Capture daily vinyl price and demand snapshots](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) | P0 | Todo | Fetch market supply/price and community demand, then store one snapshot per release per day. |
 | 4 | [#6 Build a repeatable Discogs-to-PostgreSQL ingestion pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) | P0 | Todo; blocked by #2 and #3 | A Python command that connects label pagination, release detail fetching, catalogue writes, and snapshot writes. |
 | 5 | [#10 Schedule and operate daily ingestion](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) | P2 | Todo; blocked by #3 and #6 | Run the pipeline daily, avoid overlapping runs, and document logs, failures, and safe retries. |
 | 6 | [#11 Add safe read-only query tools for the live dataset](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) | P1 | Todo; blocked by #6 | A restricted database role and a small set of parameterized query functions for release lookup and price/demand comparisons. |
@@ -80,8 +80,10 @@ An effective coding prompt is: *“Let's work only on roadmap Task 1. First expl
 - PostgreSQL schema for labels, artists, releases, release/artist relationships, and daily price and demand snapshots.
 - Docker Compose configuration for PostgreSQL 16; the schema initializes on first database creation.
 - Discogs client functions for fetching a release and paginating through a label's release summaries.
+- Saving one release to PostgreSQL: its label, artists and the release itself, written in one transaction with repeatable upserts (`python -m ingestion.save_release <id>`).
+- Automated tests for the Discogs client, the mapping, saving to PostgreSQL and the save command (see [Run the tests](#run-the-tests)). The reasoning behind each decision is in [docs/decisions.md](docs/decisions.md).
 
-The client currently **reads from Discogs but does not write to PostgreSQL**. Persistence, scheduled snapshots, and natural-language queries are roadmap work.
+Daily price and demand snapshots, the full ingestion pipeline, scheduling and natural-language queries are roadmap work.
 
 ## Requirements
 
@@ -146,6 +148,14 @@ PY
 
 The label endpoint returns summaries, not the full release records needed by the database; the future ingestion pipeline will fetch each release detail before writing it. The client pauses between pages to respect Discogs' authenticated request limit. A large catalogue can take a while.
 
+Save one release, with its label and artists, to PostgreSQL:
+
+```bash
+python -m ingestion.save_release 249504
+```
+
+It prints the saved release, for example `Saved 249504: Rick Astley - Never Gonna Give You Up (1987) on RCA`. Running it again updates the same rows instead of adding duplicates. If Discogs or the database fails, it prints what went wrong, keeps nothing from the failed save, and exits with status 1.
+
 ## Reset the local database
 
 Schema changes apply only when the data volume is created. To reapply `db/schema.sql` from scratch, this deletes the local database volume and its data:
@@ -154,3 +164,13 @@ Schema changes apply only when the data volume is created. To reapply `db/schema
 docker compose down -v
 docker compose up -d
 ```
+
+## Run the tests
+
+```bash
+python -m pytest
+```
+
+The tests need no `.env` and never use your token or your database: `tests/conftest.py` sets fake settings, and Discogs is faked with the [`responses`](https://github.com/getsentry/responses) library.
+
+The database tests start their own throwaway PostgreSQL 16 container with [Testcontainers](https://testcontainers-python.readthedocs.io/), load `db/schema.sql`, and remove the container when the run ends. Docker must be running for them. Without Docker they are skipped with a reason, except in CI (`CI=true`), where they fail so a run can't pass without them. Your local database on port 5432 is never touched.
