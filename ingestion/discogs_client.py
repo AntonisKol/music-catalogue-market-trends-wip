@@ -17,7 +17,19 @@ def get_release(release_id: int) -> dict:
     return response.json()
 
 
-...
+def get_marketplace_stats(release_id: int, currency: str) -> dict:
+    """Copies for sale and the lowest price, in the currency asked for.
+
+    /releases/{id} also has a lowest_price, but always in the token owner's
+    account currency and without saying which, so prices come from here.
+    """
+    response = session.get(
+        f"{BASE_URL}/marketplace/stats/{release_id}",
+        params={"curr_abbr": currency},
+    )
+    response.raise_for_status()
+    return response.json()
+
 
 def get_label_releases(label_id: int) -> list[dict]:
     releases = []
