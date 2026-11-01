@@ -1,6 +1,8 @@
 certifi==2026.6.17
 charset-normalizer==3.4.9
 idna==3.18
+anthropic==0.125.0
+pytest==8.4.2
 psycopg==3.3.4
 psycopg-binary==3.3.4
 python-dotenv==1.2.2
