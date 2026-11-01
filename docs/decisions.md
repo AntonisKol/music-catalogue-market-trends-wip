@@ -1428,6 +1428,91 @@ The real server (gunicorn with two workers) ran against a throwaway database wit
 
 ---
 
+## Task #12: The question box on adnsaudio.com
+
+*November 2026 · [issue #12](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12)*
+
+**Goal.** A clear, accessible question box on the website. It shows example questions, distinct loading, answer and error states, the model that answered and the data behind an answer. It works on phone and desktop, never sends a question twice, and never holds a secret.
+
+**Result.** [`widget/ask.js`](../widget/ask.js) and [`widget/ask.css`](../widget/ask.css), with a local demo page. It was checked in a real browser (Chromium through Playwright) on desktop and phone, and once end to end with the real API, Cloudflare and Claude.
+
+### Decision 1: Where the box lives
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **A widget placed on the site** | Built and tested here; added to adnsaudio.com/market-trends/, calling the API across domains | **Chosen** |
+| Served by the API | A separate page on the API's own domain, linked from the site | Rejected |
+| An iframe | The API's page shown inside a frame on the site | Rejected |
+
+**In plain words.** The box belongs where visitors already are, on the Market Trends page, in the site's own style. adnsaudio.com is a static site published with GitHub Pages, so the box is two files the page includes. The API's `ALLOWED_ORIGINS` setting lets that page, and only that page, call it from the browser.
+
+### Decision 2: What it is built with
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Plain HTML, CSS and JavaScript** | One module and one stylesheet, no build step | **Chosen** |
+| React and Vite | Components and a build step | Rejected |
+| Preact and Vite | React-style components, much smaller, still a build step | Rejected |
+| htmx | The server returns HTML fragments | Rejected: the API returns JSON |
+
+**In plain words.** For one form and one answer area, a framework would add about 140 KB of JavaScript, a build step and a set of packages to keep updated on a public site. Plain JavaScript is about 13 KB to read, and publishing it means copying two files.
+
+### Decision 3: Showing formatted answers safely
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Our own small renderer** | Paragraphs, bold, code, lists and tables, built from text nodes | **Chosen** |
+| A Markdown library and a sanitizer | Full Markdown, cleaned with DOMPurify | Rejected: two third-party scripts |
+| Plain text only | Show the answer as written | Rejected: tables become unreadable |
+
+**In plain words.** An answer is text written by a model about data from Discogs users, so it must never become code on the page. Building it from text nodes makes that impossible by construction, not by cleaning afterwards. The browser test sends an answer containing `<img onerror=…>` and `<script>`, and both appear as plain text and never run.
+
+### Decision 4: Showing the data behind an answer
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Always visible | A table under every answer | Rejected: crowded |
+| Not shown | Only the answer | Rejected: the warning would point at nothing |
+| **Collapsible "Show the data"** | Closed by default, opened automatically when there is a warning | **Chosen** |
+
+**In plain words.** The rows are what make an answer checkable instead of "the AI says so", and the step 8 warning asks the visitor to compare the figures with them. Keeping them one click away keeps the page calm.
+
+### In the code
+
+- **Accessibility:**
+  - a real `<label>` for the question;
+  - the status message in an `aria-live` region, so screen readers announce "Looking it up…" and errors;
+  - the form marked `aria-busy` while waiting, and focus moved to the answer's heading when it arrives;
+  - keyboard focus always visible;
+  - example questions are real buttons;
+  - Cmd/Ctrl+Enter sends.
+- **No double submits:** the button is disabled while a question is answered, and a second submit is ignored. The browser test double-clicks and checks that one request was sent.
+- **Turnstile:** the widget is rendered explicitly in the box and reset after each question, because a token can be used only once. Without a token, the box asks the visitor to complete the check instead of sending.
+- **Errors:** the API's messages are shown as they are. A limit adds "You can ask again in about 30 minutes", worked out from `Retry-After`. A network failure or a request taking longer than 90 seconds gets its own message.
+- **Model name:** `claude-haiku-5-5` is shown as "Claude Haiku 5.5", together with a note on what the prices mean.
+
+### How it was checked
+
+A script drove the demo page in Chromium, on a desktop window and an iPhone-sized one, with the API faked at the network level. It checked:
+- the empty-question message;
+- the button text and its disabled state while loading;
+- one request for a double click;
+- an injected `<img>` and `<script>` shown as text, without running;
+- the model line;
+- focus on the answer;
+- "Show the data" opening for a warning;
+- the limit message with its wait time;
+- no JavaScript errors.
+
+Screenshots were reviewed for layout. Then the same page ran against the real API, Cloudflare's Turnstile test keys, real Claude and a throwaway database with label 2. The answer about the three most wanted Earthtones records was correct, with its list, data table and model line. Lasting automated browser tests are step 11 (issue 13).
+
+### Still open
+
+- **Hosting:** the API has to run on a public address before the box can go live on adnsaudio.com. That needs a server for the API and its database, plus the nightly ingestion.
+- **The live site:** adding the box to the Market Trends page is then a small change in the site's repository. It needs the real Turnstile site key and the API address.
+
+---
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.
@@ -1467,5 +1552,8 @@ The real server (gunicorn with two workers) ran against a throwaway database wit
 - **HMAC**: a keyed one-way hash; the same input always gives the same code, but without the key the input cannot be recovered or checked.
 - **CORS**: the browser rule that decides which websites may call an API from a page.
 - **Fail closed**: when a safety check cannot run, refuse instead of letting the request through.
+- **Widget**: a self-contained piece of a web page (here the question box) that can be placed on any page.
+- **Text node**: a piece of a web page that the browser always shows as text, never runs as code.
+- **aria-live**: a marker that tells screen readers to announce changes in part of the page.
 - **Advisory lock**: a named lock kept by the database, used here so only one ingestion run works at a time; it is released automatically when the run's connection closes.
 - **Savepoint**: a checkpoint inside an open database transaction; nothing in it is permanent until the outer transaction is committed.
