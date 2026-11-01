@@ -779,12 +779,163 @@ Label 800000 was ingested into a throwaway database, the reader role was created
 
 ### Something the live check revealed
 
-Label 800000 turned out to be a recording studio (W.A.V.E.S. Santa Barbara). Discogs' label list includes every release where a name appears in *any* credit, including "Recorded At", "Licensed From" and "Distributed By". The database also stores only a release's *first* label. For a real label, the pipeline therefore takes in releases where the label is only credited, and a co-release where it is the second label is filed under the first. This comes from #5 and #6, not from #11, so it was not changed here. It is documented and will be decided before the question feature (#7), because it affects answers such as "cheapest records on this label".
+Label 800000 turned out to be a recording studio (W.A.V.E.S. Santa Barbara). Discogs' label list includes every release where a name appears in *any* credit, including "Recorded At", "Licensed From" and "Distributed By". The database also stores only a release's *first* label. For a real label, the pipeline therefore takes in releases where the label is only credited, and a co-release where it is the second label is filed under the first. This comes from #5 and #6, not from #11, so it was not changed here. Releases only credited to a label are skipped since [issue #27](#issue-27-fixes-from-a-review-of-all-code-so-far); co-releases are still stored under their first label only.
 
 ### Other actions
 
 - README: `.env` gets the two reader settings, there is a new "Query the data read-only" section, #11 is marked done, and #7 is unblocked.
 - `requirements.txt`: pinned `pydantic`, `pydantic_core`, `annotated-types` and `typing-inspection`.
+
+---
+
+## Issue #27: Fixes from a review of all code so far
+
+*November 2026 · [issue #27](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/27)*
+
+**Goal.** After step 6 every file was read again, looking for bugs and for places where the code did less than the documents promised. The review found one real bug and several gaps, and it withdrew one suspected bug on a closer look. This section records what was fixed and why.
+
+**Result.** 18 new tests (195 in total). Eleven planted bugs were all caught, and a live check ran on two real labels.
+
+### Decision 1: Malformed data from Discogs
+
+**The need.** A Discogs answer with a missing or odd field, such as an artist without a name, raised an error the label run did not expect. The whole run stopped with a raw error message and no summary, breaking the promise that one bad release never stops a label.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Add the error types** | The pipeline also records `KeyError`, `TypeError`, `AttributeError` and decimal errors as a failed release | **Chosen by the owner** |
+| Convert in the mapping | The mapping turns any malformed answer into its own `MappingError` with a clear message | Recommended in the debate |
+| Catch everything | Any error at all becomes a failed release | Rejected |
+
+**The choice.** Add the error types, kept by the owner after a debate.
+
+**In plain words.** Both fixes stop one bad record from ending the night's run. The debate was about *where* the net hangs. Converting in the mapping would also have protected the two single-release commands, given clearer messages, and still let a typo in our own code stop the run loudly. The chosen fix is the smallest change and protects the label run, which is the one that runs unattended. Its limits are known: the two single-release commands still stop on malformed data, and a programming mistake that raises one of these error types is recorded per release instead of stopping the run. The run still exits with status 1 and lists every failure, so neither goes unnoticed. The tests immediately proved the debate's point that a list can miss a case: a wrong data type raised `AttributeError`, which was then added.
+
+**Risk avoided.** A whole label's daily data lost because of one malformed record.
+
+**In the code.** [`ingestion/pipeline.py`](../ingestion/pipeline.py):
+
+```python
+RELEASE_ERRORS = (
+    requests.RequestException, MappingError, psycopg.Error,
+    KeyError, TypeError, AttributeError, decimal.InvalidOperation,
+)
+```
+
+The failure message now starts with the error's type, for example `KeyError: 'name'`.
+
+### Decision 2: Keeping non-vinyl out of answers
+
+**The need.** The label pipeline saves only vinyl, but `save_release` and `save_snapshot` save any release. A CD saved that way showed up in the query tools, which describe every result as vinyl.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Refuse at the door | The single-release commands refuse non-vinyl, so the database only holds vinyl | Recommended in the debate |
+| **Filter in the tools** | Every query tool only returns releases whose formats include "Vinyl" | **Chosen by the owner** |
+| Rename the field | Stop calling the results vinyl | Rejected |
+
+**The choice.** Filter in the tools, kept by the owner after a debate.
+
+**In plain words.** The debate's worry was a rule copied into many places, where one copy is eventually forgotten. The fix answers that with a single shared condition. Every tool builds its query from it, and a test checks every tool. Filtering at read time also keeps the single-release commands useful for looking at any release, and anything saved earlier is covered too.
+
+**Risk avoided.** CD or download prices quietly mixed into vinyl answers.
+
+**In the code.** [`queries/tools.py`](../queries/tools.py):
+
+```python
+VINYL = sql.SQL("""r.formats @> '[{"name": "Vinyl"}]'::jsonb""")
+```
+
+It replaces the always-true starting condition of the shared filters, and it is added to `release_history` and `compare_labels`.
+
+### Decision 3: Releases Discogs no longer has
+
+**The need.** Discogs sometimes keeps a deleted release on a label's list. Its details then answer 404, every night.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Keep as failure | The run exits 1 until someone acts | Rejected after debate |
+| **Report as gone** | A warning, plus a separate "gone" list in the summary; the run still exits 0 | **Chosen** |
+| Remember and skip | Store deleted ids and never ask again | Rejected |
+
+**The choice.** Report as gone. "Keep as failure" was picked first, and it was changed after debate.
+
+**In plain words.** A smoke alarm that beeps every night because of one burnt toast from last year gets its battery removed, and then it misses the real fire. One deleted record would have made every nightly run fail, so people would learn to ignore failures. "Gone" keeps the fact visible without crying wolf. Remembering deleted ids would need a new table, and it could not notice if a release came back.
+
+**Risk avoided.** Real failures hidden among permanent false alarms.
+
+**In the code.** [`ingestion/pipeline.py`](../ingestion/pipeline.py) checks for a 404 before the general error handling, and the summary reads `... 0 not on this label, 1 gone, 0 failed`.
+
+### Decision 4: Releases only credited to a label
+
+**The need.** The step 6 live check showed that a label's Discogs list includes releases where the name only appears in a credit, such as a studio under "Recorded At". The pipeline saved them as if the label had released them.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Skip credit-only** | Keep a release only if its own label list includes the label being ingested | **Chosen** |
+| Skip and store all labels | The same, plus a new table so a co-release counts for every label | Later |
+| Leave until step 7 | Decide when the question service is built | Rejected |
+
+**The choice.** Skip credit-only.
+
+**In plain words.** A label's list on Discogs is like an index of every page a name appears on, footnotes included. A release's own details separate the labels it was released on from companies that are only credited, so checking costs no extra request. Storing every label of a co-release needs a schema change, and it remains a known gap: a co-release is filed under its first label only.
+
+**Risk avoided.** A studio's or distributor's list filling the catalogue with other labels' records.
+
+**In the code.** [`ingestion/pipeline.py`](../ingestion/pipeline.py):
+
+```python
+def is_on_label(discogs_release, label_id):
+    return any(label.get("id") == label_id for label in discogs_release.get("labels") or [])
+```
+
+### Fixed without a decision
+
+- **One run at a time.** Request pacing only works within one run, so two runs together would exceed Discogs' limit. [`ingestion/ingest_label.py`](../ingestion/ingest_label.py) now takes a PostgreSQL *advisory lock* first, and a second run refuses to start. The database releases the lock when the first run's connection closes, even after a crash. This covers one of step 5's (issue 10) requirements early.
+- **Readable timeouts.** A query stopped by the 5-second limit now becomes a `ToolError` that says what happened and how to narrow the question.
+- **What the price means.** Every tool description now tells the AI that prices are the cheapest copy on sale in any condition, without shipping, in EUR converted by Discogs. The `market_changes` description also says that a falling or rising lowest price can mean a cheap copy sold or a change in exchange rates.
+- **No temporary tables for the reader.** By default every login may create temporary tables. That right is now taken from all logins except the database's owner, and the tests prove the reader is refused even after switching read-only off.
+- **Documents corrected.** `release_history` is bounded by days (up to 90 rows), not by the 50-row cap.
+
+### A suspected bug that was not one
+
+The review first flagged that `market_changes` looks back one day more than `release_history`. In fact it compares today with the snapshot from exactly N days earlier, which needs N + 1 days. `release_history` lists N days. Both are right for what they do.
+
+### Still open
+
+- A co-release is stored under its first label only (see Decision 4).
+- The "latest snapshot" lookup reads every snapshot on each query. That is fine at today's size, but it will need a stored "latest" view as the history grows.
+
+### How we proved the tests work
+
+| Planted bug | Caught |
+| --- | --- |
+| New error types not recorded | Yes |
+| `AttributeError` not recorded | Yes |
+| 404 counted as a failure | Yes |
+| Label check always passes | Yes |
+| Lock never refuses a second run | Yes |
+| Lock leaves a transaction open | Yes |
+| No vinyl condition in the shared filters | Yes |
+| No vinyl condition in `release_history` | Yes |
+| No vinyl condition in `compare_labels` | Yes |
+| Timeout not turned into a `ToolError` | Yes |
+| Reader may create temporary tables | Yes |
+
+### Live check
+
+Against the real Discogs API and a throwaway database:
+
+- **Label 800000, the recording studio.** 11 listed, 2 not vinyl, and all 9 vinyl releases skipped as "not on this label". Before the fix they would have been saved under other labels.
+- **Label 2, Earthtones Recordings.** 27 listed, 23 saved, 4 not vinyl, none wrongly skipped, exit 0.
+- **The reader login.** The tools ranked the 23 releases, `compare_labels` counted 23 vinyl releases, and creating a temporary table was refused.
 
 ---
 
@@ -814,4 +965,5 @@ Label 800000 turned out to be a recording studio (W.A.V.E.S. Santa Barbara). Dis
 - **SQL injection**: tricking a program into running database commands hidden inside text a user typed.
 - **Denial of wallet**: running up someone's cloud or AI bill by sending many expensive requests.
 - **JSON schema**: a machine-readable description of what arguments a tool accepts, used to explain the tools to the AI.
+- **Advisory lock**: a named lock kept by the database, used here so only one ingestion run works at a time; it is released automatically when the run's connection closes.
 - **Savepoint**: a checkpoint inside an open database transaction; nothing in it is permanent until the outer transaction is committed.
