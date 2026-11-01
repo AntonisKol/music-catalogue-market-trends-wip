@@ -21,9 +21,9 @@ TURNSTILE_SECRET_KEY = os.environ["TURNSTILE_SECRET_KEY"]
 # Visitors are counted by a keyed hash of their IP address, never the address itself.
 VISITOR_HASH_SECRET = os.environ["VISITOR_HASH_SECRET"]
 
-QUESTIONS_PER_VISITOR_HOUR = int(os.environ.get("QUESTIONS_PER_VISITOR_HOUR", "10"))
-QUESTIONS_PER_VISITOR_DAY = int(os.environ.get("QUESTIONS_PER_VISITOR_DAY", "30"))
-QUESTIONS_PER_SITE_DAY = int(os.environ.get("QUESTIONS_PER_SITE_DAY", "500"))
+QUESTIONS_PER_VISITOR_HOUR = int(os.environ.get("QUESTIONS_PER_VISITOR_HOUR", "5"))
+QUESTIONS_PER_VISITOR_DAY = int(os.environ.get("QUESTIONS_PER_VISITOR_DAY", "15"))
+QUESTIONS_PER_SITE_DAY = int(os.environ.get("QUESTIONS_PER_SITE_DAY", "200"))
 
 # Web pages on these origins may call the API from the browser, e.g.
 # "https://adnsaudio.com,https://www.adnsaudio.com". Empty: same origin only.

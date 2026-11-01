@@ -238,8 +238,8 @@ PY
 
 The API is what the question page calls. Every question passes three guards before anything is sent to Claude:
 1. **A human check:** [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/). The page shows Turnstile's widget, which gives the visitor a one-time token, and the API confirms it with Cloudflare.
-2. **Per-visitor limits:** by default 10 questions an hour and 30 a day.
-3. **A site-wide daily limit:** by default 500.
+2. **Per-visitor limits:** by default 5 questions an hour and 15 a day.
+3. **A site-wide daily limit:** by default 200.
 
 Visitors are counted by a keyed hash of their IP address, never the address itself, and counts are deleted after two days.
 

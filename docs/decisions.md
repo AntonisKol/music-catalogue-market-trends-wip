@@ -1345,8 +1345,8 @@ Seven were caught at once. The last survived, because the test's list markers 1 
 
 **In plain words.** Like a club door, each layer stops something the others do not:
 1. **The bouncer:** Cloudflare Turnstile, a "prove you're human" check that is usually invisible to people. It stops scripts.
-2. **The drinks limit:** 10 questions an hour and 30 a day per visitor. It stops one person who keeps asking.
-3. **The capacity limit:** 500 questions a day for the whole site. It stops everything else, such as a crowd at once or a bot that gets past the bouncer.
+2. **The drinks limit:** 5 questions an hour and 15 a day per visitor, enough for a visit with a few follow-up questions. It stops one person who keeps asking.
+3. **The capacity limit:** 200 questions a day for the whole site, to be raised once real use is known. It stops everything else, such as a crowd at once or a bot that gets past the bouncer.
 
 The order matters: the human check runs first, the limits second, and the AI only after both. A refused question costs nothing but a database lookup.
 
