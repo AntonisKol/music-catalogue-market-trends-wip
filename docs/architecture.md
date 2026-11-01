@@ -391,6 +391,7 @@ The same routine has been used on every task:
 | 8 | Two planted bugs survived | They changed nothing in the code's behaviour (a condition that was always true anyway, a proxy setting of zero), so they proved nothing | Replaced by bugs that really change what the code does; both were then caught |
 | 12 | The browser check could not open the demo page | `localhost` resolved to IPv6 while the test server listened on IPv4 | The demo uses `127.0.0.1` for the page and the API |
 | 12 | The faked API refused the page's request | The page and the API are on different origins, so the browser first asks permission (CORS), as on the real site | The fake answers that request with CORS headers, the same way the real API does |
+| 12 | Trying the demo on a Mac showed "Could not reach the question service" | macOS uses port 5000, Flask's default, for AirPlay Receiver, which answered instead of the API | The demo and README use port 5050 |
 | Setup | Commands could not start on a new machine | `.env` lacked most settings, and an appended line was glued onto the previous one | Added the settings and split the glued line, without displaying any values |
 
 ---

@@ -253,14 +253,14 @@ python -m ingestion.create_limits_role
 Then start the API:
 
 ```bash
-flask --app web.app run                                    # development, on port 5000
+flask --app web.app run --port 5050                        # development (macOS uses port 5000 for AirPlay)
 gunicorn --workers 2 --timeout 120 'web.app:create_app()'  # production
 ```
 
 Ask a question:
 
 ```bash
-curl -s -X POST localhost:5000/api/questions -H 'Content-Type: application/json' \
+curl -s -X POST localhost:5050/api/questions -H 'Content-Type: application/json' \
   -d '{"question": "Which is the cheapest Planet E record?", "captcha_token": "XXXX.DUMMY.TOKEN.XXXX"}'
 ```
 
@@ -314,12 +314,20 @@ What the box does:
 
 Answers are rendered from a small Markdown subset (paragraphs, bold, lists, tables) using text nodes only, so nothing in an answer can run as code.
 
-To try it locally, start the API with `ALLOWED_ORIGINS=http://127.0.0.1:8765` and Cloudflare's test secret `1x0000000000000000000000000000000AA`. Then serve the demo page, which uses the matching test site key:
+To try it locally, use two terminal windows. In the first, start the API on port 5050 with Cloudflare's test secret, which always passes, and allow the demo page to call it:
+
+```bash
+TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA ALLOWED_ORIGINS=http://127.0.0.1:8765 \
+  flask --app web.app run --host 127.0.0.1 --port 5050
+```
+
+In the second, serve the demo page, which uses the matching test site key and calls `http://127.0.0.1:5050`:
 
 ```bash
 cd widget && python -m http.server 8765 --bind 127.0.0.1
-# open http://127.0.0.1:8765
 ```
+
+Then open http://127.0.0.1:8765. Port 5000, Flask's default, is taken by AirPlay Receiver on macOS, so a page pointed at it gets "Could not reach the question service".
 
 ## Reset the local database
 
