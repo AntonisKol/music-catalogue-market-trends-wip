@@ -68,7 +68,9 @@
 
 .mt-ask-counter { white-space: nowrap; }
 
-.mt-ask-check { margin-top: 14px; min-height: 0; }
+/* Empty unless Cloudflare needs the visitor to interact; then it takes space. */
+.mt-ask-check:not(:empty) { margin-top: 14px; }
+.mt-ask-check iframe { max-width: 100%; }
 
 .mt-ask-actions { margin-top: 14px; }
 

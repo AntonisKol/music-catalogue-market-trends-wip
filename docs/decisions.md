@@ -1487,7 +1487,7 @@ The real server (gunicorn with two workers) ran against a throwaway database wit
   - example questions are real buttons;
   - Cmd/Ctrl+Enter sends.
 - **No double submits:** the button is disabled while a question is answered, and a second submit is ignored. The browser test double-clicks and checks that one request was sent.
-- **Turnstile:** the widget is rendered explicitly in the box and reset after each question, because a token can be used only once. Without a token, the box asks the visitor to complete the check instead of sending.
+- **Turnstile:** the check runs invisibly (`appearance: "interaction-only"`), so normal visitors never see it. Cloudflare shows its box only when it is unsure about a visitor. A question asked before the check has finished waits up to 8 seconds ("Checking you're not a bot…"). The check is reset after each question, because a token can be used only once.
 - **Errors:** the API's messages are shown as they are. A limit adds "You can ask again in about 30 minutes", worked out from `Retry-After`. A network failure or a request taking longer than 90 seconds gets its own message.
 - **Model name:** `claude-haiku-5-5` is shown as "Claude Haiku 5.5", together with a note on what the prices mean.
 

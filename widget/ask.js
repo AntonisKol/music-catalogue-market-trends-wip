@@ -14,6 +14,8 @@
 
 const MAX_QUESTION_LENGTH = 500;
 const REQUEST_TIMEOUT_MS = 90_000;
+// The human check runs invisibly; a question asked before it has finished waits this long.
+const CHECK_WAIT_MS = 8_000;
 
 const EXAMPLES = [
   "Which Planet E records are the most wanted?",
@@ -249,12 +251,22 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     widgetId = ts.render(check, {
       sitekey,
       theme: "dark",
+      // Invisible for normal visitors; Cloudflare shows the box only if it is unsure.
+      appearance: "interaction-only",
       callback: (value) => { token = value; },
       "expired-callback": () => { token = ""; },
       "error-callback": () => { token = ""; },
     });
   }
   renderCheck();
+
+  async function waitForToken() {
+    const started = Date.now();
+    while (!token && Date.now() - started < CHECK_WAIT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    return token;
+  }
 
   function resetCheck() {
     token = "";
@@ -299,11 +311,15 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       textarea.focus();
       return;
     }
-    if (!token) {
-      showStatus("Please complete the check above the Ask button.", "error");
-      return;
-    }
     setBusy(true);
+    if (!token) {
+      showStatus("Checking you're not a bot…");
+      if (!(await waitForToken())) {
+        setBusy(false);
+        showStatus("The human check hasn't finished. If a check appears above the Ask button, please complete it, then ask again.", "error");
+        return;
+      }
+    }
     output.hidden = true;
     showStatus("Looking it up… this can take a few seconds.");
     const controller = new AbortController();
