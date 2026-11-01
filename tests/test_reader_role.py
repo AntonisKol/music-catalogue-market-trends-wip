@@ -55,6 +55,15 @@ def test_database_applies_the_limits_without_the_clients_options(reader_role, po
         assert conn.execute("SHOW statement_timeout").fetchone() == ("5s",)
 
 
+def test_the_reader_connection_also_asks_for_the_limits_itself(reader):
+    """The second lock: set by the client, not only inherited from the role."""
+    rows = reader.execute(
+        "SELECT name, setting, source FROM pg_settings"
+        " WHERE name IN ('default_transaction_read_only', 'statement_timeout') ORDER BY name"
+    ).fetchall()
+    assert rows == [("default_transaction_read_only", "on", "client"), ("statement_timeout", "5000", "client")]
+
+
 def test_statement_timeout_cancels_slow_queries(reader):
     reader.execute("SET statement_timeout = '200ms'")
 
@@ -62,11 +71,14 @@ def test_statement_timeout_cancels_slow_queries(reader):
         reader.execute("SELECT pg_sleep(2)")
 
 
-def test_reader_can_read_tables_added_later(db, reader):
+def test_reader_can_read_but_not_write_tables_added_later(db, reader):
     db.execute("CREATE TABLE IF NOT EXISTS later_table (id int)")
     db.commit()
     try:
         assert reader.execute("SELECT count(*) FROM later_table").fetchone() == (0,)
+        reader.execute("SET default_transaction_read_only = off")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            reader.execute("INSERT INTO later_table VALUES (1)")
     finally:
         db.execute("DROP TABLE later_table")
         db.commit()
