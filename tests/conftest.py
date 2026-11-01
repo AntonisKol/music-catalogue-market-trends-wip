@@ -76,3 +76,24 @@ def db(postgres_url):
         admin.execute(f"TRUNCATE {TABLES} RESTART IDENTITY")
     with psycopg.connect(postgres_url) as conn:
         yield conn
+
+
+@pytest.fixture(autouse=True)
+def discogs_clock(monkeypatch):
+    """A fake clock for the Discogs client: pauses and retry waits are recorded, not waited.
+
+    Returns the list of waits, in seconds, in the order they happened.
+    """
+    from ingestion import discogs_client
+
+    clock = {"now": 0.0}
+    waits = []
+
+    def sleep(seconds):
+        waits.append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(discogs_client, "_sleep", sleep)
+    monkeypatch.setattr(discogs_client, "_now", lambda: clock["now"])
+    monkeypatch.setattr(discogs_client, "_last_request", None)
+    return waits

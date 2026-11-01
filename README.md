@@ -39,9 +39,9 @@ The tasks below are ordered so each step builds on working code from the previou
 | 1 | [#5 Persist Discogs vinyl release data in PostgreSQL](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/5) | P0 | Done | A Python/psycopg repository that maps Discogs records to the existing tables and writes them safely and repeatedly. |
 | 2 | [#2 Test Discogs ingestion and PostgreSQL pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/2) | P0 | Done | Automated tests for API handling and database mapping/upserts, using mocked HTTP and a test database. |
 | 3 | [#3 Capture daily vinyl price and demand snapshots](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) | P0 | Done | Fetch market supply/price and community demand, then store one snapshot per release per day. |
-| 4 | [#6 Build a repeatable Discogs-to-PostgreSQL ingestion pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) | P0 | Todo | A Python command that connects label pagination, release detail fetching, catalogue writes, and snapshot writes. |
-| 5 | [#10 Schedule and operate daily ingestion](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) | P2 | Todo; blocked by #6 | Run the pipeline daily, avoid overlapping runs, and document logs, failures, and safe retries. |
-| 6 | [#11 Add safe read-only query tools for the live dataset](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) | P1 | Todo; blocked by #6 | A restricted database role and a small set of parameterized query functions for release lookup and price/demand comparisons. |
+| 4 | [#6 Build a repeatable Discogs-to-PostgreSQL ingestion pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) | P0 | Done | A Python command that connects label pagination, release detail fetching, catalogue writes, and snapshot writes. |
+| 5 | [#10 Schedule and operate daily ingestion](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) | P2 | Todo | Run the pipeline daily, avoid overlapping runs, and document logs, failures, and safe retries. |
+| 6 | [#11 Add safe read-only query tools for the live dataset](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) | P1 | Todo | A restricted database role and a small set of parameterized query functions for release lookup and price/demand comparisons. |
 | 7 | [#7 Add Anthropic-powered natural-language queries over live data](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) | P1 | Todo; blocked by #11 | Use Anthropic tool use: the model selects an approved Python query tool, the app executes it, and the model explains the live results. |
 | 8 | [#9 Test the Anthropic query service and guardrails](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) | P1 | Todo; blocked by #7 | Test the assistant service, tool selection, read-only behavior, query limits, and grounded answers without live API calls. |
 | 9 | [#8 Expose natural-language questions through a Python web API](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) | P1 | Todo; blocked by #7 and #9 | Add a validated HTTP/JSON endpoint for the browser to call; keep Anthropic and database credentials server-side. |
@@ -82,9 +82,10 @@ An effective coding prompt is: *“Let's work only on roadmap Task 1. First expl
 - Discogs client functions for fetching a release and paginating through a label's release summaries.
 - Saving one release to PostgreSQL: its label, artists and the release itself, written in one transaction with repeatable upserts (`python -m ingestion.save_release <id>`).
 - A daily price and demand snapshot per release: lowest price (always in EUR) and copies for sale, plus want, have and rating, one row per release per UTC day (`python -m ingestion.save_snapshot <id>`).
+- Ingesting a whole label: every vinyl release on it and today's snapshot of each, with paced requests, retries for temporary Discogs errors, timestamped progress and a summary of any failures (`python -m ingestion.ingest_label <label_id>`).
 - Automated tests for the Discogs client, the mapping, saving releases and snapshots to PostgreSQL, and both commands (see [Run the tests](#run-the-tests)). The reasoning behind each decision is in [docs/decisions.md](docs/decisions.md).
 
-The full ingestion pipeline, scheduling and natural-language queries are roadmap work.
+Scheduling and natural-language queries are roadmap work.
 
 ## Requirements
 
@@ -147,7 +148,7 @@ print(len(summaries), summaries[0]["id"], summaries[0]["title"])
 PY
 ```
 
-The label endpoint returns summaries, not the full release records needed by the database; the future ingestion pipeline will fetch each release detail before writing it. The client pauses between pages to respect Discogs' authenticated request limit. A large catalogue can take a while.
+The label endpoint returns summaries, not the full release records needed by the database; the ingestion pipeline below fetches each release's details before writing it. Every Discogs request is paced at least 1.1 seconds apart, to stay under the authenticated limit of 60 a minute. A large catalogue can take a while.
 
 Save one release, with its label and artists, to PostgreSQL:
 
@@ -164,6 +165,18 @@ python -m ingestion.save_snapshot 249504
 ```
 
 It prints, for example, `Snapshot of 249504 on 2026-11-01 (UTC): 124 for sale from 0.59 EUR; want 594, have 4159; rated 3.88 by 249`. Prices come from Discogs' marketplace statistics and are always requested in EUR. "Today" is the UTC date, and running it again on the same day replaces that day's values. A release with nothing for sale is stored with no price, and one nobody has rated with no average (shown as "not rated"), rather than as 0.
+
+Ingest a whole label: every vinyl release on it, and today's snapshot of each:
+
+```bash
+python -m ingestion.ingest_label 800000
+```
+
+Progress is logged with timestamps, one line per release, for example `[1/11] 1832937 saved: 38 for sale from 2.99 EUR; want 39, have 328; rated 2.54 by 35`, and the run ends with a summary such as `Label 800000 done: 11 listed, 9 saved, 2 not vinyl, 0 failed`. It takes about 2 seconds per vinyl release, so a label with 500 releases takes roughly 15 minutes.
+
+- **Vinyl only.** Releases whose list entry is clearly CD, file, cassette or video are skipped without a request. Every other release is kept only if its details include the format "Vinyl". Releases listed twice are ingested once.
+- **Failures.** Rate limits (429), Discogs server errors and dropped connections are retried after 5, 15 and 60 seconds. Anything still failing, or any other error, is logged for that release, and the run carries on with the rest. At the end every failed release is listed, and the command exits with status 1. If the database connection is lost, the run stops at once.
+- **Safe to rerun.** Each release is committed as soon as it is saved, so an interrupted run keeps what it finished. Running it again the same day updates the same rows.
 
 ## Reset the local database
 

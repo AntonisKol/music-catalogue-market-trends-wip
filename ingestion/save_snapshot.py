@@ -14,16 +14,8 @@ import requests
 from ingestion import config, database
 from ingestion.discogs_client import get_marketplace_stats, get_release
 from ingestion.mapping import MappingError
+from ingestion.pipeline import describe_snapshot
 from ingestion.repository import get_saved_snapshot, save_release, save_snapshots
-
-
-def describe(saved) -> str:
-    num_for_sale, lowest_price, currency, want, have, rating_count, rating_average = saved
-    supply = f"{num_for_sale} for sale"
-    if lowest_price is not None:
-        supply += f" from {lowest_price} {currency}"
-    rating = f"rated {rating_average} by {rating_count}" if rating_average is not None else "not rated"
-    return f"{supply}; want {want}, have {have}; {rating}"
 
 
 def main(argv: list) -> int:
@@ -52,7 +44,7 @@ def main(argv: list) -> int:
         print(f"Saving the snapshot of release {release_id} failed: {error}", file=sys.stderr)
         return 1
 
-    print(f"Snapshot of {release_id} on {snapshot_date} (UTC): {describe(saved)}")
+    print(f"Snapshot of {release_id} on {snapshot_date} (UTC): {describe_snapshot(saved)}")
     return 0
 
 
