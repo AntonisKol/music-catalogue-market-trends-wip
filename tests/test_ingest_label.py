@@ -12,16 +12,22 @@ from ingestion.pipeline import DatabaseConnectionLost
 VINYL = [{"name": "Vinyl"}]
 
 
-def fake_label(release_ids, fail=()):
+def fake_label(release_ids, fail=(), gone=()):
     responses.get(
         f"{BASE_URL}/labels/1/releases",
         json={"pagination": {"page": 1, "pages": 1}, "releases": [{"id": i, "format": '12"'} for i in release_ids]},
     )
     for i in release_ids:
         if i in fail:
+            responses.get(f"{BASE_URL}/releases/{i}", json={"message": "Unauthorized."}, status=401)
+            continue
+        if i in gone:
             responses.get(f"{BASE_URL}/releases/{i}", json={"message": "Release not found."}, status=404)
             continue
-        responses.get(f"{BASE_URL}/releases/{i}", json={"id": i, "title": f"Release {i}", "formats": VINYL})
+        responses.get(
+            f"{BASE_URL}/releases/{i}",
+            json={"id": i, "title": f"Release {i}", "labels": [{"id": 1, "name": "Label 1"}], "formats": VINYL},
+        )
         responses.get(f"{BASE_URL}/marketplace/stats/{i}", json={"num_for_sale": 0, "lowest_price": None})
 
 
@@ -51,7 +57,7 @@ def test_all_saved_exits_0(postgres_url, db, connect_to, logs):
     connect_to(lambda: psycopg.connect(postgres_url))
 
     assert command.main(["1"]) == 0
-    assert "Label 1 done: 2 listed, 2 saved, 0 not vinyl, 0 failed" in logs.text
+    assert "Label 1 done: 2 listed, 2 saved, 0 not vinyl, 0 not on this label, 0 gone, 0 failed" in logs.text
 
 
 @responses.activate
@@ -60,10 +66,42 @@ def test_failed_releases_are_listed_and_exit_1(postgres_url, db, connect_to, log
     connect_to(lambda: psycopg.connect(postgres_url))
 
     assert command.main(["1"]) == 1
-    assert "Label 1 done: 3 listed, 2 saved, 0 not vinyl, 1 failed" in logs.text
+    assert "Label 1 done: 3 listed, 2 saved, 0 not vinyl, 0 not on this label, 0 gone, 1 failed" in logs.text
     assert any(
-        r.levelname == "ERROR" and r.message.startswith("Failed release 2: 404") for r in logs.records
+        r.levelname == "ERROR" and r.message.startswith("Failed release 2: 401") for r in logs.records
     )
+
+
+@responses.activate
+def test_gone_releases_are_listed_but_do_not_fail_the_run(postgres_url, db, connect_to, logs):
+    fake_label([1, 2], gone={2})
+    connect_to(lambda: psycopg.connect(postgres_url))
+
+    assert command.main(["1"]) == 0
+    assert "Label 1 done: 2 listed, 1 saved, 0 not vinyl, 0 not on this label, 1 gone, 0 failed" in logs.text
+    assert any(r.levelname == "WARNING" and r.message == "Gone from Discogs: release 2" for r in logs.records)
+
+
+@responses.activate
+def test_a_second_run_does_not_start_while_one_is_in_progress(postgres_url, db, connect_to, logs):
+    fake_label([1])
+    connect_to(lambda: psycopg.connect(postgres_url))
+
+    with psycopg.connect(postgres_url, autocommit=True) as first_run:
+        first_run.execute("SELECT pg_advisory_lock(%s)", (command.RUN_LOCK_ID,))
+        assert command.main(["1"]) == 1
+        assert "Another ingestion run is in progress" in logs.text
+        assert len(responses.calls) == 0
+
+    # Once the first run's connection has closed, a new run starts normally.
+    assert command.main(["1"]) == 0
+
+
+@responses.activate
+def test_the_run_lock_leaves_no_transaction_open(postgres_url, db):
+    with psycopg.connect(postgres_url) as conn:
+        assert command.take_run_lock(conn)
+        assert conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE
 
 
 @responses.activate
@@ -97,6 +135,7 @@ def test_lost_connection_exits_1(connect_to, monkeypatch, logs):
         raise DatabaseConnectionLost("server closed the connection")
 
     connect_to(Conn)
+    monkeypatch.setattr(command, "take_run_lock", lambda conn: True)
     monkeypatch.setattr(command, "ingest_label", lost)
 
     assert command.main(["1"]) == 1
