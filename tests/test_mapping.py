@@ -134,9 +134,13 @@ def test_maps_price_snapshot():
     }
 
 
-def test_nothing_for_sale_keeps_the_count_but_has_no_price():
-    # Live Discogs answer for a release with no copies listed.
-    stats = {"num_for_sale": 0, "lowest_price": None, "blocked_from_sale": False}
+@pytest.mark.parametrize(
+    "lowest_price",
+    [None, {"value": None, "currency": "EUR"}],
+    ids=["live answer: price null", "currency without a value"],
+)
+def test_nothing_for_sale_keeps_the_count_but_has_no_price(lowest_price):
+    stats = {"num_for_sale": 0, "lowest_price": lowest_price, "blocked_from_sale": False}
     row = map_price_snapshot(1, stats, DAY)
     assert row["num_for_sale"] == 0
     assert row["lowest_price"] is None and row["currency"] is None
