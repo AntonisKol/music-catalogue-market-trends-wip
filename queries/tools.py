@@ -64,7 +64,7 @@ class SearchReleases(ReleaseFilters):
 
 class ReleaseHistory(Arguments):
     release_id: int = Field(ge=1, description="Discogs release id, from another tool's result.")
-    days: int = Field(default=30, ge=1, le=90, description="How many days back from the latest snapshot.")
+    days: int = Field(default=30, ge=1, le=90, description="How many days back from the latest snapshot. A month back needs at least 31; choose more rather than less.")
 
 
 SortBy = Literal[
@@ -82,7 +82,7 @@ class RankReleases(ReleaseFilters):
 class MarketChanges(ReleaseFilters):
     metric: Literal["lowest_price", "num_for_sale", "want", "have"] = Field(description="The value to compare.")
     direction: Literal["up", "down"] = Field(default="up", description="Biggest rises or biggest falls.")
-    days: int = Field(default=30, ge=1, le=365, description="Period, counted back from the latest snapshot.")
+    days: int = Field(default=30, ge=1, le=365, description="Period, counted back from the latest snapshot. A month back needs at least 31; choose more rather than less.")
     limit: int = Limit
 
 
