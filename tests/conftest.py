@@ -22,6 +22,8 @@ FAKE_SETTINGS = {
     "POSTGRES_USER": "test",
     "POSTGRES_PASSWORD": "test",
     "POSTGRES_DB": "test",
+    "POSTGRES_READER_USER": "catalogue_reader",
+    "POSTGRES_READER_PASSWORD": "reader-test-password",
 }
 
 os.environ.update(FAKE_SETTINGS)
@@ -97,3 +99,30 @@ def discogs_clock(monkeypatch):
     monkeypatch.setattr(discogs_client, "_now", lambda: clock["now"])
     monkeypatch.setattr(discogs_client, "_last_request", None)
     return waits
+
+
+@pytest.fixture(scope="session")
+def reader_role(postgres_url):
+    """The read-only login, created in the test database exactly as in production."""
+    import psycopg
+
+    from ingestion.create_reader_role import create_reader_role
+
+    with psycopg.connect(postgres_url) as conn:
+        create_reader_role(conn, FAKE_SETTINGS["POSTGRES_READER_USER"], FAKE_SETTINGS["POSTGRES_READER_PASSWORD"])
+    return FAKE_SETTINGS["POSTGRES_READER_USER"]
+
+
+@pytest.fixture
+def reader(db, reader_role, postgres_url, monkeypatch):
+    """A connection from queries.database.connect_reader(), pointed at the test database."""
+    from psycopg.conninfo import conninfo_to_dict
+
+    from queries import config, database
+
+    info = conninfo_to_dict(postgres_url)
+    monkeypatch.setattr(config, "POSTGRES_HOST", info["host"])
+    monkeypatch.setattr(config, "POSTGRES_PORT", str(info["port"]))
+    monkeypatch.setattr(config, "POSTGRES_DB", info["dbname"])
+    with database.connect_reader() as conn:
+        yield conn
