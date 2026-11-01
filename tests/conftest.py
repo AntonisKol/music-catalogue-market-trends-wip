@@ -30,6 +30,27 @@ FAKE_SETTINGS = {
 
 os.environ.update(FAKE_SETTINGS)
 
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--live", action="store_true",
+        help="also run the before-release tests, which call the real Anthropic API and cost money",
+    )
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "live: calls the real Anthropic API (costs money); runs only with --live")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Live tests never run by accident: not in a plain pytest run, and not in CI."""
+    if config.getoption("--live"):
+        return
+    skip = pytest.mark.skip(reason="calls the real Anthropic API; run with --live")
+    for item in items:
+        if "live" in item.keywords:
+            item.add_marker(skip)
+
 SCHEMA = Path(__file__).resolve().parent.parent / "db" / "schema.sql"
 TABLES = "release_artists, price_snapshots, demand_snapshots, releases, artists, labels"
 
