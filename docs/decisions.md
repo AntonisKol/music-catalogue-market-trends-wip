@@ -607,6 +607,192 @@ All tests share a fake clock (the `discogs_clock` fixture in [`tests/conftest.py
 
 ---
 
+## Task #11: Safe read-only query tools
+
+*November 2026 · [issue #11](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11)*
+
+**Goal.** Build the only path through which the future question feature (#7) may read the database. The AI must be able to look data up, but must never be able to change it, run its own SQL, or pull out more than a small, useful answer, even if the code has a bug or someone tries to trick the model.
+
+**Result.**
+- A read-only database login, created by `python -m ingestion.create_reader_role`.
+- A separate `queries/` package with five query tools.
+- 70 new tests (177 in total), and a live check on real data.
+
+### Decision 1: How "read-only" is enforced
+
+**The need.** The question feature runs on the web server, the most exposed part of the system. Whatever goes wrong there must not be able to change the data.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Code only uses SELECT | Same login as the nightly job; reviewers make sure the queries only read | Rejected |
+| Read-only session | Same login, but each connection switches PostgreSQL into read-only mode | Rejected alone, kept as a second layer |
+| **Separate reader role + read-only session** | A second login granted nothing but SELECT, whose sessions are also read-only | **Chosen** |
+
+**The choice.** A separate reader role, with read-only sessions on top. The read-only session alone was picked first, and it was changed after debate.
+
+**In plain words.** A read-only session is like handing a visitor the master key and asking them to only open the front door. Any code holding that connection can switch the mode off again with one command, and the login underneath can still insert, update and delete. It also leaves the nightly job's password on the web server, so if that server's settings ever leak, the leak can wipe the database. A separate role is a key that only fits the front door: the database itself refuses any write, whatever the code does. The read-only session stays as a second lock (*defence in depth*).
+
+**Risk avoided.** A bug, a trick played on the AI, or a leaked web-server password changing or deleting data.
+
+**In the code.** [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) runs once per database, as the owner:
+
+```sql
+CREATE ROLE catalogue_reader WITH LOGIN PASSWORD '…';
+ALTER ROLE catalogue_reader SET default_transaction_read_only = on;
+ALTER ROLE catalogue_reader SET statement_timeout = '5s';
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO catalogue_reader;
+ALTER DEFAULT PRIVILEGES … GRANT SELECT ON TABLES TO catalogue_reader;  -- tables added later, too
+```
+
+[`queries/database.py`](../queries/database.py) connects as the reader and asks for read-only mode and the 5-second limit again from its side. [`queries/config.py`](../queries/config.py) reads only the reader's settings, so the web side never holds the Discogs token or the writer's password. The tests prove that every kind of write (insert, update, delete, truncate, drop, create, alter) is refused *even after* the session switches read-only off.
+
+### Decision 2: The shape of the toolset
+
+**The need.** The AI answers questions only by calling our functions. The set of functions decides which questions can be answered, and how reliably the AI picks the right one.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| One flexible tool | The model picks table, columns, filters and sort from lists | Rejected |
+| **About five focused tools** | One per kind of question, with filter and sort parameters | **Chosen** |
+| A tool per question | About 20 tools such as `cheapest_on_label` or `most_wanted` | Rejected |
+
+**The choice.** Five focused tools. A tool per question was picked first, and it was changed after debate.
+
+**In plain words.** A restaurant menu. Twenty single-purpose tools are a 20-page menu with a separate dish for every combination: the waiter (the AI) has to find the exact page, and "fish with chips" isn't on it if nobody wrote that dish. Combinations such as "the most wanted Planet E records from the 90s" would have no tool. Many tools overlap, so the AI picks the wrong one more often. Every tool's description is sent with every question, which costs money. And "cheapest", "most wanted" and "best rated" are the same query sorted differently, so 20 copies would mean 20 places to forget a safety check. One flexible tool goes the other way: it slowly becomes SQL by another name and is hard to keep safe and fast. Five tools with options are a short menu: pick the main, pick the side.
+
+**Risk avoided.** Unanswerable questions, wrong tool choices, and duplicated, drifting code.
+
+**In the code.** [`queries/tools.py`](../queries/tools.py):
+
+| Tool | For questions like |
+| --- | --- |
+| `search_releases` | "Which Carl Craig records from the 90s are in the catalogue?" |
+| `rank_releases` | "Cheapest, most wanted, best rated, scarcest, most wanted per owner?" |
+| `release_history` | "How has this record's price moved?" (up to 90 days) |
+| `market_changes` | "What got more expensive, or sold out, this month?" (up to 365 days) |
+| `compare_labels` | "How do these labels compare?" (up to 5) |
+
+`search_releases`, `rank_releases` and `market_changes` share one set of filters: title, label, artist, genre, style, country and year range. Sort orders and metrics come from fixed lists, so each one maps to a hand-written piece of SQL:
+
+```python
+RANKINGS = {
+    "lowest_price": ("latest.lowest_price IS NOT NULL", "latest.lowest_price ASC"),
+    "best_rated": ("latest.rating_average IS NOT NULL AND latest.rating_count >= %(min_ratings)s", ...),
+    ...
+}
+```
+
+### Decision 3: Checking the AI's arguments
+
+**The need.** Arguments come from the AI, so they can be wrong or odd: a year of 99999, a limit of 10,000, a sort option that doesn't exist, or text where a number belongs. In #7 each tool must also be described to the AI as a JSON schema.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Hand-written checks | An if-statement per argument | Rejected |
+| **Pydantic models** | Each tool's arguments described once; this validates the input and generates the JSON schema | **Chosen** |
+| Let PostgreSQL reject | Pass the arguments straight into the query | Rejected |
+
+**The choice.** Pydantic models.
+
+**In plain words.** One rulebook that both checks every traveller and is printed on the sign outside, so the rules and what the AI is told can never disagree. Hand-written checks keep the rules in two places that drift apart. Leaving it to the database misses "valid but harmful" values: a limit of 10,000 is fine to PostgreSQL. A sort option can't be a query parameter at all, so it would have to be pasted into the SQL text, which is exactly how SQL injection happens. Pydantic was already installed as part of the Anthropic library; it is now pinned explicitly.
+
+**Risk avoided.** SQL injection, oversized requests, and confusing errors from rules that disagree.
+
+**In the code.**
+
+```python
+class RankReleases(ReleaseFilters):
+    sort_by: SortBy                      # only the 7 listed options
+    min_ratings: int = Field(default=5, ge=1, le=1000)
+    limit: int = Field(default=25, ge=1, le=50)
+```
+
+`extra="forbid"` refuses unexpected fields such as `{"sql": "…"}`. `run_tool()` turns any problem into a `ToolError` with a readable reason, for example *"sort_by: Input should be 'lowest_price', 'highest_price', …"*. The AI can read that and correct itself.
+
+### Decision 4: Bounding the results
+
+**The need.** The issue requires "bounded result sizes". Everything a tool returns is read by the AI before it answers, and the data grows every night.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Cap rows + time limit** | At most 25 rows by default and 50 maximum, with the total matched; a 5-second limit per query | **Chosen** |
+| Pages on request | First 25 rows plus a "next page" token | Rejected |
+| Return everything | Let the AI summarise | Rejected |
+
+**The choice.** Cap rows plus a time limit. "Return everything" was picked first, and it was changed after debate.
+
+**In plain words.** Asking a librarian for good jazz books and getting a forklift with the whole section. One label adds about 500 snapshot rows a day, roughly 180,000 a year, so "small enough today" soon stops being true. On a public website anyone could ask "list everything with full history" again and again and run up the AI bill (*denial of wallet*). Answers also get *worse* when the AI skims thousands of rows. With no time limit, one heavy question could slow the database while the nightly job writes. Paging looks bounded, but the AI can keep asking for the next page. The tools do the ranking in SQL, so the top 25 are the right 25, and each result says how many more matched.
+
+**Risk avoided.** Runaway costs, weaker answers, and a slowed-down database.
+
+**In the code.** Every result has the same shape:
+
+```python
+{"rows": [...], "returned": 25, "total": 311, "truncated": True}
+```
+
+`count(*) OVER ()` gives the total in the same query. The 5-second limit is set on the reader role and again by the connection.
+
+### Decision 5: Matching names
+
+**The need.** People type names loosely ("planet e", "carl craig"), and the AI passes those words on.
+
+**Options considered**
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Exact name | Only "Planet E", capitals and all | Rejected |
+| **Contains, any case** | "planet e" finds "Planet E"; typed `%` and `_` are plain text | **Chosen** |
+| Discogs ids only | The AI must know the numeric id first | Rejected |
+
+**The choice.** Contains, any case.
+
+**In plain words.** It works like any search box. Exact names fail on capitals and small typos, and ids force an extra lookup for every question. Because "contains" can match more than intended ("planet e" also matches "Planet Earth Records"), every row carries its full label and artist names, so the AI can see the difference and say which one it means.
+
+**Risk avoided.** Empty answers for loosely typed names, and wildcard tricks.
+
+**In the code.** In SQL `LIKE`, `%` and `_` are wildcards. A user typing `%` would otherwise match everything, so they are escaped first:
+
+```python
+def contains(text):
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+```
+
+### What the tests check
+
+| File | What it proves |
+| --- | --- |
+| [`tests/test_reader_role.py`](../tests/test_reader_role.py) | The reader can read. Every kind of write is refused, first by the read-only session and **then by the permissions, even after read-only is switched off**. The database applies read-only mode and the 5 s limit by itself, and the connection asks for them too. Slow queries are cancelled. Tables added later are readable but not writable. Rerunning changes the password, and unsafe role names are refused. |
+| [`tests/test_query_tools.py`](../tests/test_query_tools.py) | Each tool against a small dataset over three days: name matching, combined filters, the latest snapshot, capping with totals, every ranking (sold-out and unrated records handled), history windows, rises and falls, and label comparison with a vote-weighted rating. Safety: 15 kinds of invalid call are refused with a reason, SQL typed into a text field is only text, wildcards match literally, every result is valid JSON, and every tool has a strict schema. |
+
+### How we proved the tests work
+
+Fourteen bugs were planted, including granting the reader all rights, removing read-only mode, connecting as the writer, not escaping wildcards, removing the row cap, allowing extra fields, hiding truncation, and taking the oldest snapshot as the latest. All fourteen were caught. Two got through at first: making *future* tables writable for the reader, and dropping the connection's own read-only options, because the database's role setting covered for it. A test was added for each.
+
+### Live check
+
+Label 800000 was ingested into a throwaway database, the reader role was created with the real command, and each tool was run through the reader login. Search, rankings, history and label comparison returned the expected rows. `market_changes` correctly returned nothing, as there was only one day of history. A sort argument of `"price; DELETE FROM releases"` was refused with the list of allowed values, and a raw `DELETE` on the reader connection was refused by the database (read-only transaction).
+
+### Something the live check revealed
+
+Label 800000 turned out to be a recording studio (W.A.V.E.S. Santa Barbara). Discogs' label list includes every release where a name appears in *any* credit, including "Recorded At", "Licensed From" and "Distributed By". The database also stores only a release's *first* label. For a real label, the pipeline therefore takes in releases where the label is only credited, and a co-release where it is the second label is filed under the first. This comes from #5 and #6, not from #11, and was raised as its own task rather than changed here.
+
+### Other actions
+
+- README: `.env` gets the two reader settings, there is a new "Query the data read-only" section, #11 is marked done, and #7 is unblocked.
+- `requirements.txt`: pinned `pydantic`, `pydantic_core`, `annotated-types` and `typing-inspection`.
+
+---
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.
@@ -627,4 +813,10 @@ All tests share a fake clock (the `discogs_clock` fixture in [`tests/conftest.py
 - **Retry / back-off**: trying a failed request again after waiting, and waiting longer each time.
 - **Exit status**: the number a command reports when it ends; 0 means success, anything else tells a scheduler that something went wrong.
 - **Logging**: writing timestamped, graded messages (INFO, WARNING, ERROR) about what a program is doing, so they can be read and filtered later.
+- **Role / login**: a database user with its own password and its own permissions.
+- **Least privilege**: giving each part of a system only the access it needs, and nothing more.
+- **Defence in depth**: several independent safeguards, so one failing does not expose everything.
+- **SQL injection**: tricking a program into running database commands hidden inside text a user typed.
+- **Denial of wallet**: running up someone's cloud or AI bill by sending many expensive requests.
+- **JSON schema**: a machine-readable description of what arguments a tool accepts, used to explain the tools to the AI.
 - **Savepoint**: a checkpoint inside an open database transaction; nothing in it is permanent until the outer transaction is committed.

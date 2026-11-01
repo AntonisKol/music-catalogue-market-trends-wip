@@ -41,8 +41,8 @@ The tasks below are ordered so each step builds on working code from the previou
 | 3 | [#3 Capture daily vinyl price and demand snapshots](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) | P0 | Done | Fetch market supply/price and community demand, then store one snapshot per release per day. |
 | 4 | [#6 Build a repeatable Discogs-to-PostgreSQL ingestion pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) | P0 | Done | A Python command that connects label pagination, release detail fetching, catalogue writes, and snapshot writes. |
 | 5 | [#10 Schedule and operate daily ingestion](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) | P2 | Todo | Run the pipeline daily, avoid overlapping runs, and document logs, failures, and safe retries. |
-| 6 | [#11 Add safe read-only query tools for the live dataset](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) | P1 | Todo | A restricted database role and a small set of parameterized query functions for release lookup and price/demand comparisons. |
-| 7 | [#7 Add Anthropic-powered natural-language queries over live data](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) | P1 | Todo; blocked by #11 | Use Anthropic tool use: the model selects an approved Python query tool, the app executes it, and the model explains the live results. |
+| 6 | [#11 Add safe read-only query tools for the live dataset](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) | P1 | Done | A restricted database role and a small set of parameterized query functions for release lookup and price/demand comparisons. |
+| 7 | [#7 Add Anthropic-powered natural-language queries over live data](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) | P1 | Todo | Use Anthropic tool use: the model selects an approved Python query tool, the app executes it, and the model explains the live results. |
 | 8 | [#9 Test the Anthropic query service and guardrails](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) | P1 | Todo; blocked by #7 | Test the assistant service, tool selection, read-only behavior, query limits, and grounded answers without live API calls. |
 | 9 | [#8 Expose natural-language questions through a Python web API](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) | P1 | Todo; blocked by #7 and #9 | Add a validated HTTP/JSON endpoint for the browser to call; keep Anthropic and database credentials server-side. |
 | 10 | [#12 Build the natural-language question web frontend](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) | P1 | Todo; blocked by #8 | Build the user-facing question form and answer view, including loading, validation, and error states. |
@@ -83,9 +83,10 @@ An effective coding prompt is: *“Let's work only on roadmap Task 1. First expl
 - Saving one release to PostgreSQL: its label, artists and the release itself, written in one transaction with repeatable upserts (`python -m ingestion.save_release <id>`).
 - A daily price and demand snapshot per release: lowest price (always in EUR) and copies for sale, plus want, have and rating, one row per release per UTC day (`python -m ingestion.save_snapshot <id>`).
 - Ingesting a whole label: every vinyl release on it and today's snapshot of each, with paced requests, retries for temporary Discogs errors, timestamped progress and a summary of any failures (`python -m ingestion.ingest_label <label_id>`).
-- Automated tests for the Discogs client, the mapping, saving releases and snapshots to PostgreSQL, and both commands (see [Run the tests](#run-the-tests)). The reasoning behind each decision is in [docs/decisions.md](docs/decisions.md).
+- A read-only database login for the question feature, and five validated, capped query tools in `queries/tools.py`: `search_releases`, `rank_releases`, `release_history`, `market_changes` and `compare_labels` (see [Query the data read-only](#query-the-data-read-only)).
+- Automated tests for the Discogs client, the mapping, saving releases and snapshots to PostgreSQL, the commands, the reader login and the query tools (see [Run the tests](#run-the-tests)). The reasoning behind each decision is in [docs/decisions.md](docs/decisions.md).
 
-Scheduling and natural-language queries are roadmap work.
+Scheduling, the natural-language question service, the web API and the frontend are roadmap work.
 
 ## Requirements
 
@@ -107,6 +108,8 @@ POSTGRES_PORT=5432
 POSTGRES_USER=catalogue
 POSTGRES_PASSWORD=catalogue
 POSTGRES_DB=catalogue
+POSTGRES_READER_USER=catalogue_reader
+POSTGRES_READER_PASSWORD=choose_a_different_password
 ```
 
 `DISCOGS_USER_AGENT` must identify this app. Discogs rejects generic clients. Use your own token and password; these values are examples for local development, not production credentials. Do not commit `.env`.
@@ -177,6 +180,38 @@ Progress is logged with timestamps, one line per release, for example `[1/11] 18
 - **Vinyl only.** Releases whose list entry is clearly CD, file, cassette or video are skipped without a request. Every other release is kept only if its details include the format "Vinyl". Releases listed twice are ingested once.
 - **Failures.** Rate limits (429), Discogs server errors and dropped connections are retried after 5, 15 and 60 seconds. Anything still failing, or any other error, is logged for that release, and the run carries on with the rest. At the end every failed release is listed, and the command exits with status 1. If the database connection is lost, the run stops at once.
 - **Safe to rerun.** Each release is committed as soon as it is saved, so an interrupted run keeps what it finished. Running it again the same day updates the same rows.
+
+## Query the data read-only
+
+The question feature never uses the login above. It has its own PostgreSQL login that may only read. Create it once per database, with the reader settings from `.env`:
+
+```bash
+python -m ingestion.create_reader_role
+```
+
+Running it again updates the password. The database itself refuses every write from this login, also on tables added later, opens its sessions read-only, and stops any query after 5 seconds. The web side (`queries/`) only ever needs `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB` and the two reader settings, never the Discogs token or the writing login's password.
+
+The five query tools are the only way the question feature reads data:
+
+```bash
+python - <<'PY'
+from queries.database import connect_reader
+from queries.tools import run_tool
+
+with connect_reader() as conn:
+    print(run_tool(conn, "rank_releases", {"sort_by": "most_wanted", "label": "planet e", "limit": 5}))
+PY
+```
+
+| Tool | Answers questions like |
+| --- | --- |
+| `search_releases` | "Which Carl Craig records from the 90s are in the catalogue?" |
+| `rank_releases` | "Cheapest / most wanted / best rated / scarcest records on this label?" |
+| `release_history` | "How has this record's price moved over the last 90 days?" |
+| `market_changes` | "Which records got more expensive, or sold out, this month?" |
+| `compare_labels` | "How do these labels compare on prices and demand?" |
+
+Arguments are checked before any query runs: wrong types, out-of-range numbers, unknown sort options and unexpected fields are refused with a clear reason. Text filters match any part of a name, ignoring case. Every result returns at most 50 rows (25 by default) and says how many matched in total. Prices are each release's cheapest copy on sale, in EUR, from its latest snapshot.
 
 ## Reset the local database
 
