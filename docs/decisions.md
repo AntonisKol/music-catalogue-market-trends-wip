@@ -52,7 +52,7 @@ def test_requests_identify_the_app_and_send_the_token():
     assert headers["Authorization"] == "Discogs token=test-token"
 ```
 
-Error cases use `status=404` (also 401, 429, 500) and check that a real `requests.HTTPError` is raised. Pagination tests answer page 1, 2 and 3 separately, using `matchers.query_param_matcher`. The one-second pause between pages is swapped for a recorder (`monkeypatch.setattr(discogs_client.time, "sleep", pauses.append)`), so the test checks the pauses happen without waiting for them.
+Error cases use `status=404` (also 401, 429, 500) and check that a real `requests.HTTPError` is raised. Pagination tests answer page 1, 2 and 3 separately, using `matchers.query_param_matcher`. The one-second pause between pages is swapped for a recorder, so the test checks the pauses happen without waiting for them. *(Since task #6 every request is paced 1.1 s apart, and all tests share a fake clock instead: the `discogs_clock` fixture in [`tests/conftest.py`](../tests/conftest.py).)*
 
 ### Decision 2: How the tests get their settings
 
@@ -222,7 +222,7 @@ Every planted bug was caught. The code was restored afterwards.
 
 ## Task #3: Capture daily price and demand snapshots
 
-*November 2026 · [issue #3](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3)*
+*November 2026 · [issue #3](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) · [pull request #17](https://github.com/AntonisKol/music-catalogue-market-trends-wip/pull/17)*
 
 **Goal.** Once a day, record for each release how the market looks: the cheapest copy on sale and how many copies are for sale (**price and supply**), and how many people want it, own it, and how they rate it (**demand**). Over time these daily rows become the price and demand history that the question feature will answer from.
 
@@ -261,16 +261,11 @@ Discogs allows 60 requests a minute for an authenticated app.
 
 **Risk avoided.** An empty demand history, and prices of unknown currency.
 
-**In the code.** [`ingestion/discogs_client.py`](../ingestion/discogs_client.py) gets a second request function:
+**In the code.** [`ingestion/discogs_client.py`](../ingestion/discogs_client.py) gets a second request function. Since task #6 it goes through the shared, paced and retrying `_get` helper:
 
 ```python
 def get_marketplace_stats(release_id: int, currency: str) -> dict:
-    response = session.get(
-        f"{BASE_URL}/marketplace/stats/{release_id}",
-        params={"curr_abbr": currency},
-    )
-    response.raise_for_status()
-    return response.json()
+    return _get(f"{BASE_URL}/marketplace/stats/{release_id}", params={"curr_abbr": currency})
 ```
 
 [`ingestion/mapping.py`](../ingestion/mapping.py) turns its answer into a `price_snapshots` row (`map_price_snapshot`), and the release's `community` block into a `demand_snapshots` row (`map_demand_snapshot`).
@@ -418,7 +413,7 @@ The last one survived at first: no test had covered Discogs sending a currency w
 
 ## Task #6: Ingest a whole Discogs label
 
-*November 2026 · [issue #6](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6)*
+*November 2026 · [issue #6](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) · [pull request #22](https://github.com/AntonisKol/music-catalogue-market-trends-wip/pull/22)*
 
 **Goal.** One command that takes a record label and does everything from the earlier tasks for each of its releases: fetch the details, save the release, and record today's price and demand snapshot. It must be safe to rerun, polite to Discogs, and honest about anything that went wrong.
 
@@ -609,7 +604,7 @@ All tests share a fake clock (the `discogs_clock` fixture in [`tests/conftest.py
 
 ## Task #11: Safe read-only query tools
 
-*November 2026 · [issue #11](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11)*
+*November 2026 · [issue #11](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) · [pull request #23](https://github.com/AntonisKol/music-catalogue-market-trends-wip/pull/23)*
 
 **Goal.** Build the only path through which the future question feature (#7) may read the database. The AI must be able to look data up, but must never be able to change it, run its own SQL, or pull out more than a small, useful answer, even if the code has a bug or someone tries to trick the model.
 
@@ -784,7 +779,7 @@ Label 800000 was ingested into a throwaway database, the reader role was created
 
 ### Something the live check revealed
 
-Label 800000 turned out to be a recording studio (W.A.V.E.S. Santa Barbara). Discogs' label list includes every release where a name appears in *any* credit, including "Recorded At", "Licensed From" and "Distributed By". The database also stores only a release's *first* label. For a real label, the pipeline therefore takes in releases where the label is only credited, and a co-release where it is the second label is filed under the first. This comes from #5 and #6, not from #11, and was raised as its own task rather than changed here.
+Label 800000 turned out to be a recording studio (W.A.V.E.S. Santa Barbara). Discogs' label list includes every release where a name appears in *any* credit, including "Recorded At", "Licensed From" and "Distributed By". The database also stores only a release's *first* label. For a real label, the pipeline therefore takes in releases where the label is only credited, and a co-release where it is the second label is filed under the first. This comes from #5 and #6, not from #11, so it was not changed here. It is documented and will be decided before the question feature (#7), because it affects answers such as "cheapest records on this label".
 
 ### Other actions
 
