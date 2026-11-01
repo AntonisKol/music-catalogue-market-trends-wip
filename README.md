@@ -306,7 +306,7 @@ To put it on a page, copy the two files next to it and add:
 The page's address must be in the API's `ALLOWED_ORIGINS`. The Turnstile *site* key is public and belongs in the page. Its *secret* key stays in the API's `.env`.
 
 What the box does:
-- shows example questions, the human check, and a character count up to 500;
+- shows example questions and a character count up to 500. The human check is invisible: Cloudflare shows its box only if it is unsure about a visitor;
 - disables the button while a question is answered, so a double click sends one question;
 - shows the answer, any warning, and "Show the data" with the rows behind it, opened automatically when there is a warning;
 - names the model that answered;

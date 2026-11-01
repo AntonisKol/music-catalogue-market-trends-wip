@@ -50,7 +50,7 @@ flowchart TB
         TL["Five query tools, step 6 and issue 27<br/>Code: queries/tools.py<br/>How: fixed SQL, arguments checked<br/>by Pydantic, capped results, vinyl only<br/>Achieved: safe, predictable reads<br/>an AI can call"]
         QS["Question service, steps 7 and 8<br/>Code: queries/questions.py, queries/verify.py<br/>How: Claude Haiku 5.5 via the SDK tool runner,<br/>gets only the question and tool descriptions,<br/>our code checks and runs each tool it picks,<br/>then checks every figure against the rows<br/>Achieved: answers from our rows, returned<br/>with their sources, a warning when a figure<br/>cannot be found, clear errors for failures"]
         API["Web API, step 9<br/>Code: web/app.py, limits.py, captcha.py<br/>How: Flask under gunicorn, JSON in and out;<br/>Turnstile human check, limits per visitor<br/>and for the site, counted in PostgreSQL<br/>Achieved: questions checked and limited<br/>before the AI, clear JSON errors,<br/>keys and passwords stay on the server"]
-        UI["Question box, step 10<br/>Code: widget/ask.js, widget/ask.css<br/>How: plain JavaScript on adnsaudio.com,<br/>Turnstile widget, safe Markdown subset<br/>as text nodes, collapsible data table<br/>Achieved: anyone can ask about vinyl prices<br/>on phone or desktop, with the model named"]
+        UI["Question box, step 10<br/>Code: widget/ask.js, widget/ask.css<br/>How: plain JavaScript on adnsaudio.com,<br/>invisible Turnstile check, safe Markdown subset<br/>as text nodes, collapsible data table<br/>Achieved: anyone can ask about vinyl prices<br/>on phone or desktop, with the model named"]
     end
 
     USER(["Visitor"])
