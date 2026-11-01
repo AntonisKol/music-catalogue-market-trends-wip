@@ -1311,6 +1311,123 @@ Seven were caught at once. The last survived, because the test's list markers 1 
 
 ---
 
+## Task #8: A web API for the question page
+
+*November 2026 · [issue #8](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8)*
+
+**Goal.** Give the browser one HTTP endpoint for asking questions. It has to stay safe on a public website: request shape and length checked, secrets kept on the server, clear errors, and protection against overuse and bots before any question reaches the AI.
+
+**Result.**
+- `POST /api/questions` in [`web/app.py`](../web/app.py), with Cloudflare Turnstile, per-visitor and site-wide limits in PostgreSQL, and JSON errors.
+- 49 new tests (293 in total).
+- A live end-to-end run with gunicorn, Cloudflare and Claude.
+
+### Decision 1: Web framework
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Flask** | The classic minimal framework | **Chosen** |
+| FastAPI | Built around Pydantic, with automatic API documentation | Rejected |
+| The standard library | `http.server`: no dependency, but not meant for production | Rejected |
+
+**In plain words.** One endpoint needs no more than a small, mature framework with a large community. Flask does not check requests by itself, so the endpoint passes the body to a Pydantic model (`QuestionRequest`), the same way the query tools check their arguments: one place for the rules. Production runs it under gunicorn.
+
+### Decision 2: Protection against overuse and bots
+
+**The need.** Every question is real work for the AI service, and a public box can be hammered by scripts or by one keen visitor. The aim was the safest protection practical without user accounts.
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Per-visitor limits only | Each visitor limited; many visitors together are not | Rejected |
+| Per-visitor limits and a site-wide cap | Two layers, no third party | Rejected |
+| **Human check, per-visitor limits and a site-wide cap** | Three layers | **Chosen** |
+| Sign-in required | Questions only for account holders | Rejected for now: accounts, passwords and a login system are a project of their own |
+
+**In plain words.** Like a club door, each layer stops something the others do not:
+1. **The bouncer:** Cloudflare Turnstile, a "prove you're human" check that is usually invisible to people. It stops scripts.
+2. **The drinks limit:** 5 questions an hour and 15 a day per visitor, enough for a visit with a few follow-up questions. It stops one person who keeps asking.
+3. **The capacity limit:** 200 questions a day for the whole site, to be raised once real use is known. It stops everything else, such as a crowd at once or a bot that gets past the bouncer.
+
+The order matters: the human check runs first, the limits second, and the AI only after both. A refused question costs nothing but a database lookup.
+
+**Risk avoided.** Bots and heavy users exhausting the service for everyone else.
+
+### Decision 3: Where the counts live
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| In memory | Inside the API process | Rejected: reset on every restart or deploy, and not shared between API processes |
+| **A PostgreSQL table** | `question_counts`, written by its own login | **Chosen** |
+| Redis | A dedicated key-value store | Rejected: a new service to run for one small table |
+
+**In plain words.** Counts kept in memory would be wiped by every deploy, which is exactly when a bot could start over. PostgreSQL already runs. The counter table gets its own login, which may read and change that table and nothing else, so the reader login stays read-only and the AI's path can still change nothing.
+
+**In the code.** [`ingestion/create_limits_role.py`](../ingestion/create_limits_role.py) creates the table and the login. [`web/limits.py`](../web/limits.py) takes one unit from three counts in a single transaction: the visitor's hour, the visitor's day and the site's day.
+
+```sql
+INSERT INTO question_counts (visitor, period, window_start, count)
+VALUES (%(visitor)s, %(period)s, %(window_start)s, 1)
+ON CONFLICT (visitor, period, window_start) DO UPDATE SET count = question_counts.count + 1
+RETURNING count
+```
+
+If any count goes over its limit, the transaction is undone, so a refused question uses up nothing. Two simultaneous requests cannot both slip under a limit, because the row is locked while it is counted. Windows are fixed UTC hours and days, and the answer's `Retry-After` header says how long to wait.
+
+**Privacy.** Visitors are identified by an HMAC, a keyed one-way hash of their IP address. Without the secret, the address cannot be recovered or checked, and rows are deleted after two days. The API reads `X-Forwarded-For` only when `TRUSTED_PROXIES` says a proxy sets it. Otherwise anyone could put a fake address in the header and start a fresh count with every request, and a test proves they can't.
+
+### Decision 4: What the browser receives
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Everything | Answer, sources, warning, model, rounds and token usage | Rejected |
+| **Answer, sources, warning, model** | What the page shows | **Chosen** |
+| Answer and model only | No sources or warning | Rejected |
+
+**In plain words.** Rounds and token usage are internal figures. Published with every answer, they would act as a meter, letting someone search for the questions that make the service work hardest and then send those again and again. The page has no use for them. They stay in the server log.
+
+### Other choices in the code
+
+- **Errors.** Every error is `{"error": {"code", "message"}}` with a fitting status. Examples: 400 for a bad request, 403 for a failed human check, 429 for a limit, 503 with `Retry-After` for temporary trouble. An unexpected exception returns a generic 500 and is logged in full. Its details, which could include paths or settings, never reach the browser.
+- **Fail closed.** If Cloudflare cannot be reached, or the counter table cannot, the question is refused rather than let through unchecked.
+- **Headers.** Browsers may call the API only from the origins in `ALLOWED_ORIGINS`. Responses are never cached (`Cache-Control: no-store`), and request bodies over 8 KB are refused.
+
+### How we proved the tests work
+
+Sixteen bugs were planted, and all were caught:
+- a failed human check ignored;
+- a Cloudflare outage letting questions through;
+- answering before the limits;
+- a counter failure ignored;
+- usage sent to the browser;
+- the forwarded header always trusted;
+- the raw IP address stored;
+- no site cap;
+- an over-limit question still counted;
+- a limit off by one;
+- old counts kept;
+- any origin allowed;
+- no body size limit;
+- the counting login allowed to read every table;
+- error details leaked;
+- a Cloudflare error page taken as an answer.
+
+Two of the first attempts changed nothing in the code's behaviour, so they proved nothing. They were replaced by bugs that really change what the code does.
+
+### Live check
+
+The real server (gunicorn with two workers) ran against a throwaway database with label 2, Cloudflare's real Turnstile service using its published test keys, and the real Claude:
+
+| Request | Result |
+| --- | --- |
+| A real question | 200, with exactly `answer`, `sources`, `warning`, `model`: "Sincere, The Sky Be" at €3.56 |
+| A third question within the hour (limit set to 2) | 429 "You can ask 2 questions an hour", with `Retry-After` |
+| A missing human check token | 400 `invalid_request` |
+| A browser preflight from `https://adnsaudio.com` | Allowed |
+| Cloudflare's always-fail test key | 403 `captcha_failed` |
+| The counter table afterwards | Only a 32-character hash and the site total; no IP address |
+
+---
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.
@@ -1345,5 +1462,10 @@ Seven were caught at once. The last survived, because the test's list markers 1 
 - **Prompt caching**: the API reusing an identical beginning of a request (here the instructions and tool list) at a fraction of the price.
 - **AI judge**: a second, usually stronger model asked to check another model's answer against the sources.
 - **Grounded answer**: an answer whose every claim comes from the data it was given, not from the model's general knowledge.
+- **Rate limit (per visitor)**: a cap on how many requests one visitor may make in a period.
+- **Captcha / human check**: a test that tells people from scripts; Cloudflare Turnstile usually passes people without any puzzle.
+- **HMAC**: a keyed one-way hash; the same input always gives the same code, but without the key the input cannot be recovered or checked.
+- **CORS**: the browser rule that decides which websites may call an API from a page.
+- **Fail closed**: when a safety check cannot run, refuse instead of letting the request through.
 - **Advisory lock**: a named lock kept by the database, used here so only one ingestion run works at a time; it is released automatically when the run's connection closes.
 - **Savepoint**: a checkpoint inside an open database transaction; nothing in it is permanent until the outer transaction is committed.
