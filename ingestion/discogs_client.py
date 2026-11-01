@@ -77,6 +77,10 @@ def get_marketplace_stats(release_id: int, currency: str) -> dict:
     return _get(f"{BASE_URL}/marketplace/stats/{release_id}", params={"curr_abbr": currency})
 
 
+def get_label(label_id: int) -> dict:
+    return _get(f"{BASE_URL}/labels/{label_id}")
+
+
 def get_label_releases(label_id: int) -> list[dict]:
     releases = []
     page = 1

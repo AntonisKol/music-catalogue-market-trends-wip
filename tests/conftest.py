@@ -56,7 +56,8 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 SCHEMA = Path(__file__).resolve().parent.parent / "db" / "schema.sql"
-TABLES = "release_artists, price_snapshots, demand_snapshots, releases, artists, labels"
+TABLES = ("release_artists, price_snapshots, demand_snapshots, releases, artists, labels, "
+          "tracked_labels, ingestion_run_labels, ingestion_runs")
 
 
 def docker_is_running() -> bool:

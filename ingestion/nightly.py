@@ -1,0 +1,171 @@
+"""Update every tracked label: today's releases, prices and demand.
+
+    python -m ingestion.nightly
+
+Started each night by the system scheduler (launchd on a Mac, cron on a server;
+see ops/). It takes the same lock as ingest_label, so it never runs alongside
+another ingestion run. For each active label in tracked_labels it runs the label
+pipeline, and records the run and every label's result in ingestion_runs and
+ingestion_run_labels. A label that fails does not stop the others.
+
+Exit 0 when every label was updated without failures, 1 otherwise (the run is
+recorded as failed and an alert is emailed, if configured). Rerunning on the
+same day is safe: it updates the same rows. Progress goes to stderr and to a
+rotating log file (logs/nightly.log, or LOG_FILE).
+"""
+import logging
+import os
+import sys
+from datetime import date, datetime, timedelta, timezone
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+import psycopg
+import requests
+
+from ingestion import database
+from ingestion.alerts import send_alert
+from ingestion.ingest_label import take_run_lock
+from ingestion.pipeline import DatabaseConnectionLost, ingest_label
+from ingestion.track_labels import tracked_labels
+
+log = logging.getLogger("ingestion.nightly")
+
+DEFAULT_LOG_FILE = Path(__file__).resolve().parent.parent / "logs" / "nightly.log"
+# A run is "missed" if the previous successful one started longer ago than this.
+MISSED_AFTER = timedelta(hours=36)
+
+
+def start_run(conn: psycopg.Connection, snapshot_date: date) -> int:
+    with conn.transaction():
+        # Only one run holds the lock, so any run still marked running was interrupted.
+        conn.execute(
+            "UPDATE ingestion_runs SET status = 'failed', finished_at = now(), "
+            "message = 'interrupted before it finished' WHERE status = 'running'"
+        )
+        return conn.execute(
+            "INSERT INTO ingestion_runs (snapshot_date, status) VALUES (%s, 'running') RETURNING id", (snapshot_date,)
+        ).fetchone()[0]
+
+
+def last_success(conn: psycopg.Connection):
+    with conn.transaction():
+        row = conn.execute(
+            "SELECT max(started_at) FROM ingestion_runs WHERE status = 'succeeded'"
+        ).fetchone()
+    return row[0]
+
+
+def record_label(conn, run_id: int, label_id: int, result=None, error: str = None) -> None:
+    counts = (0, 0, 0, 0, 0, 0) if result is None else (
+        result.listed, len(result.saved), len(result.not_vinyl), len(result.not_on_label),
+        len(result.gone), len(result.failed),
+    )
+    with conn.transaction():
+        conn.execute(
+            """
+            INSERT INTO ingestion_run_labels
+                (run_id, label_id, listed, saved, not_vinyl, not_on_label, gone, failed, error)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (run_id, label_id, *counts, error),
+        )
+
+
+def finish_run(conn, run_id: int, ok: bool, message: str) -> None:
+    with conn.transaction():
+        conn.execute(
+            "UPDATE ingestion_runs SET status = %s, finished_at = now(), message = %s WHERE id = %s",
+            ("succeeded" if ok else "failed", message, run_id),
+        )
+
+
+def run_nightly(conn: psycopg.Connection, snapshot_date: date, now: datetime) -> tuple:
+    """Update every active tracked label. Returns (ok, summary, problems)."""
+    problems = []
+    previous = last_success(conn)
+    if previous is not None and now - previous > MISSED_AFTER:
+        problems.append(f"The previous successful run started on {previous:%Y-%m-%d %H:%M} UTC; nights were missed.")
+    run_id = start_run(conn, snapshot_date)
+    labels = tracked_labels(conn, active_only=True)
+    if not labels:
+        log.warning("No active tracked labels; add some with python -m ingestion.track_labels add <id>")
+    totals = {"saved": 0, "failed": 0}
+    for number, (label_id, name, *_rest) in enumerate(labels, start=1):
+        log.info("[label %s/%s] %s (%s)", number, len(labels), name, label_id)
+        try:
+            result = ingest_label(conn, label_id, snapshot_date)
+        except requests.RequestException as error:
+            log.error("Label %s (%s): Discogs list failed: %s", label_id, name, error)
+            record_label(conn, run_id, label_id, error=str(error))
+            problems.append(f"{name} ({label_id}): the label list could not be fetched: {error}")
+            continue
+        except DatabaseConnectionLost as error:
+            problems.append(f"The database connection was lost during {name} ({label_id}): {error}")
+            raise
+        record_label(conn, run_id, label_id, result)
+        totals["saved"] += len(result.saved)
+        totals["failed"] += len(result.failed)
+        log.info(
+            "Label %s (%s): %s listed, %s saved, %s not vinyl, %s not on this label, %s gone, %s failed",
+            label_id, name, result.listed, len(result.saved), len(result.not_vinyl),
+            len(result.not_on_label), len(result.gone), len(result.failed),
+        )
+        if result.failed:
+            problems.append(f"{name} ({label_id}): {len(result.failed)} releases failed, e.g. "
+                            + "; ".join(f"{rid}: {err}" for rid, err in list(result.failed.items())[:3]))
+    summary = f"{len(labels)} labels, {totals['saved']} releases saved, {totals['failed']} failed"
+    ok = not problems
+    finish_run(conn, run_id, ok, summary if ok else summary + ". " + " ".join(problems))
+    return ok, summary, problems
+
+
+def configure_logging() -> None:
+    log_file = Path(os.environ.get("LOG_FILE") or DEFAULT_LOG_FILE)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    handlers = [logging.StreamHandler(), RotatingFileHandler(log_file, maxBytes=5_000_000, backupCount=10)]
+    for handler in handlers:
+        handler.setFormatter(formatter)
+    logging.basicConfig(level=logging.INFO, handlers=handlers)
+
+
+def main(argv: list) -> int:
+    if argv:
+        print("Usage: python -m ingestion.nightly", file=sys.stderr)
+        return 2
+    now = datetime.now(timezone.utc)
+    snapshot_date = now.date()
+    log.info("Nightly run, snapshot date %s (UTC)", snapshot_date)
+    try:
+        with database.connect() as conn:
+            if not take_run_lock(conn):
+                log.error("Another ingestion run is in progress; not starting the nightly run")
+                send_alert("Market Trends: nightly run skipped", "Another ingestion run held the lock, so tonight's run did not start.")
+                return 1
+            ok, summary, problems = run_nightly(conn, snapshot_date, now)
+    except DatabaseConnectionLost as error:
+        log.error("Stopped: the database connection was lost: %s", error)
+        send_alert("Market Trends: nightly run stopped", f"The database connection was lost: {error}\n\nRerun with: python -m ingestion.nightly")
+        return 1
+    except psycopg.Error as error:
+        log.error("Could not use PostgreSQL: %s", error)
+        send_alert("Market Trends: nightly run could not start", f"PostgreSQL could not be used: {error}\n\nIs the database running? Rerun with: python -m ingestion.nightly")
+        return 1
+    if ok:
+        log.info("Nightly run done: %s", summary)
+        return 0
+    log.error("Nightly run finished with problems: %s", summary)
+    for problem in problems:
+        log.error("  %s", problem)
+    send_alert(
+        "Market Trends: nightly run had problems",
+        f"{summary}\n\n" + "\n".join(f"- {p}" for p in problems)
+        + "\n\nRerunning is safe: python -m ingestion.nightly\nRecent runs: python -m ingestion.runs",
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    configure_logging()
+    sys.exit(main(sys.argv[1:]))
