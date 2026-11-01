@@ -6,6 +6,8 @@ pytest==8.4.2
 psycopg==3.3.4
 psycopg-binary==3.3.4
 python-dotenv==1.2.2
+PyYAML==6.0.3
 requests==2.34.2
+responses==0.26.3
 typing_extensions==4.16.0
 urllib3==2.7.0
