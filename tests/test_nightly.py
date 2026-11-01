@@ -107,20 +107,21 @@ def test_every_active_label_is_updated_and_recorded(db):
 
 @responses.activate
 def test_a_failing_label_does_not_stop_the_others(db):
-    discogs_label(1, "Planet E", list_status=500)
+    # Labels run in name order, so the failing one ("Axis") comes first.
+    discogs_label(4, "Axis", list_status=500)
     discogs_label(538, "Perlon", releases=[21])
-    add_label(db, 1)
+    add_label(db, 4)
     add_label(db, 538)
 
     ok, summary, problems = run_nightly(db, DAY, NOW)
 
     assert not ok
-    assert "Planet E (1): the label list could not be fetched" in problems[0]
+    assert "Axis (4): the label list could not be fetched" in problems[0]
     assert query(db, "SELECT label_id, saved, error IS NOT NULL FROM ingestion_run_labels ORDER BY label_id") == [
-        (1, 0, True), (538, 1, False),
+        (4, 0, True), (538, 1, False),
     ]
     [(status, message)] = query(db, "SELECT status, message FROM ingestion_runs")
-    assert status == "failed" and "Planet E" in message
+    assert status == "failed" and "Axis" in message
 
 
 @responses.activate
