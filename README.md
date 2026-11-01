@@ -47,8 +47,8 @@ The tasks below are ordered so each step builds on working code from the previou
 | 7 | [#7 Add Anthropic-powered natural-language queries over live data](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) | P1 | Done | Use Anthropic tool use: the model selects an approved Python query tool, the app executes it, and the model explains the live results. |
 | 8 | [#9 Test the Anthropic query service and guardrails](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) | P1 | Done | Test the assistant service, tool selection, read-only behavior, query limits, and grounded answers without live API calls. |
 | 9 | [#8 Expose natural-language questions through a Python web API](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) | P1 | Done | Add a validated HTTP/JSON endpoint for the browser to call; keep Anthropic and database credentials server-side. |
-| 10 | [#12 Build the natural-language question web frontend](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) | P1 | Todo | Build the user-facing question form and answer view, including loading, validation, and error states. |
-| 11 | [#13 Test web question frontend and accessibility](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) | P1 | Todo; blocked by #12 | Test the browser experience, API integration, keyboard interaction, focus, and accessibility announcements. |
+| 10 | [#12 Build the natural-language question web frontend](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) | P1 | Done | Build the user-facing question form and answer view, including loading, validation, and error states. |
+| 11 | [#13 Test web question frontend and accessibility](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) | P1 | Todo | Test the browser experience, API integration, keyboard interaction, focus, and accessibility announcements. |
 
 ### What each task teaches
 
@@ -78,8 +78,9 @@ The tasks below are ordered so each step builds on working code from the previou
 - A question service: Claude Haiku 5.5 picks among the five query tools, our code runs them through the read-only login, and the answer comes back with the rows it is based on (see [Ask a question](#ask-a-question)).
 
 - A web API (`POST /api/questions`) in front of the question service, with a human check, limits per visitor and for the whole site, and JSON errors (see [Run the web API](#run-the-web-api)).
+- A question box for adnsaudio.com: one JavaScript module and one stylesheet in [`widget/`](widget) (see [Add the question box to a page](#add-the-question-box-to-a-page)).
 
-Scheduling and the frontend are roadmap work.
+Scheduling and hosting the API publicly are roadmap work.
 
 ## Requirements
 
@@ -285,6 +286,40 @@ The response is `{"answer", "sources", "warning", "model"}`. Errors are `{"error
   - `TRUSTED_PROXIES`: how many proxies in front of the API set `X-Forwarded-For`. Leave it at 0 unless there is one, or visitors could fake their address to dodge the limits.
 
 `GET /api/health` answers `{"status": "ok"}` for uptime checks.
+
+## Add the question box to a page
+
+The question box is plain HTML, CSS and JavaScript, with no framework and no build step:
+- [`widget/ask.js`](widget/ask.js), the box;
+- [`widget/ask.css`](widget/ask.css), its look, which picks up adnsaudio.com's own colour and font variables;
+- [`widget/index.html`](widget/index.html), a demo page.
+
+To put it on a page, copy the two files next to it and add:
+
+```html
+<link rel="stylesheet" href="ask.css">
+<div class="mt-ask" data-api="https://API-ADDRESS" data-turnstile-sitekey="YOUR-TURNSTILE-SITE-KEY"></div>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
+<script type="module" src="ask.js"></script>
+```
+
+The page's address must be in the API's `ALLOWED_ORIGINS`. The Turnstile *site* key is public and belongs in the page. Its *secret* key stays in the API's `.env`.
+
+What the box does:
+- shows example questions, the human check, and a character count up to 500;
+- disables the button while a question is answered, so a double click sends one question;
+- shows the answer, any warning, and "Show the data" with the rows behind it, opened automatically when there is a warning;
+- names the model that answered;
+- turns errors and limits into plain messages ("You can ask again in about 30 minutes").
+
+Answers are rendered from a small Markdown subset (paragraphs, bold, lists, tables) using text nodes only, so nothing in an answer can run as code.
+
+To try it locally, start the API with `ALLOWED_ORIGINS=http://127.0.0.1:8765` and Cloudflare's test secret `1x0000000000000000000000000000000AA`. Then serve the demo page, which uses the matching test site key:
+
+```bash
+cd widget && python -m http.server 8765 --bind 127.0.0.1
+# open http://127.0.0.1:8765
+```
 
 ## Reset the local database
 
