@@ -486,3 +486,20 @@ def test_when_the_hour_and_the_day_are_both_used_up_the_day_is_reported(client, 
 
     assert "a day" in response.get_json()["error"]["message"]
     assert response.headers["Retry-After"] == str(11 * 3600 + 30 * 60 + 1)  # until midnight UTC
+
+
+def test_signed_in_questions_count_against_the_account_not_the_address(client, fakes, db):
+    sign_in(client, fakes)
+    ask(client)
+    ask(client)
+    client.post("/api/sign-out", json={})
+
+    anonymous = client.get("/api/account", environ_base={"REMOTE_ADDR": "203.0.113.7"}).get_json()
+
+    assert anonymous["remaining"] == {"hour": config.QUESTIONS_PER_VISITOR_HOUR, "day": config.QUESTIONS_PER_VISITOR_DAY}
+    db.commit()
+    questions = db.execute(
+        "SELECT visitor, count FROM question_counts"
+        " WHERE period = 'day' AND visitor <> 'site' AND visitor NOT LIKE 'sign-in-%'"
+    ).fetchall()
+    assert questions == [("account:1", 2)]
