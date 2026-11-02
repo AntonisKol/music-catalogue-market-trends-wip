@@ -130,6 +130,15 @@ def save_snapshots(
         cur.execute(UPSERT_DEMAND_SNAPSHOT, demand)
 
 
+def save_price_snapshot(
+    conn: psycopg.Connection, release_id: int, marketplace_stats: dict, snapshot_date: date
+) -> None:
+    """Save one day's price snapshot of a stored release, without its details."""
+    price = map_price_snapshot(release_id, marketplace_stats, snapshot_date)
+    with conn.transaction():
+        conn.execute(UPSERT_PRICE_SNAPSHOT, price)
+
+
 def get_saved_release(conn: psycopg.Connection, release_id: int):
     """The stored release with its label and artist names, or None."""
     with conn.cursor() as cur:
@@ -151,16 +160,42 @@ def get_saved_release(conn: psycopg.Connection, release_id: int):
 
 
 def get_saved_snapshot(conn: psycopg.Connection, release_id: int, snapshot_date: date):
-    """The stored price and demand snapshot of a release on a day, or None."""
+    """The stored price snapshot of a release on a day with its latest details, or None.
+
+    Prices are saved every night, want/have/ratings only on the nights a release's
+    details are fetched, so the details are the latest saved on or before the day.
+    The last value is the date of those details.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT p.num_for_sale, p.lowest_price, p.currency,
-                   d.want, d.have, d.rating_count, d.rating_average
+                   d.want, d.have, d.rating_count, d.rating_average, d.snapshot_date
             FROM price_snapshots p
-            JOIN demand_snapshots d USING (release_id, snapshot_date)
-            WHERE release_id = %s AND snapshot_date = %s
+            LEFT JOIN LATERAL (
+                SELECT * FROM demand_snapshots d
+                WHERE d.release_id = p.release_id AND d.snapshot_date <= p.snapshot_date
+                ORDER BY d.snapshot_date DESC LIMIT 1
+            ) d ON true
+            WHERE p.release_id = %s AND p.snapshot_date = %s
             """,
             (release_id, snapshot_date),
         )
         return cur.fetchone()
+
+
+def details_fetched_on(conn: psycopg.Connection, release_id: int, label_id: int):
+    """The UTC date a vinyl release of this label last had its details fetched, or None.
+
+    None also when the release is stored but not as a vinyl release of this label,
+    so the caller fetches its details and checks them again.
+    """
+    with conn.transaction():
+        row = conn.execute(
+            """
+            SELECT (fetched_at AT TIME ZONE 'UTC')::date FROM releases
+            WHERE id = %s AND label_id = %s AND formats @> '[{"name": "Vinyl"}]'::jsonb
+            """,
+            (release_id, label_id),
+        ).fetchone()
+    return row[0] if row else None

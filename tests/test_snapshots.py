@@ -5,7 +5,7 @@ from decimal import Decimal
 import psycopg
 import pytest
 
-from ingestion.repository import get_saved_snapshot, save_release, save_snapshots
+from ingestion.repository import get_saved_snapshot, save_price_snapshot, save_release, save_snapshots
 
 DAY = date(2026, 11, 1)
 RELEASE = {
@@ -46,7 +46,7 @@ def test_saves_price_and_demand_snapshot(db, saved_release, committed):
     assert committed(
         "SELECT release_id, snapshot_date, want, have, rating_count, rating_average FROM demand_snapshots"
     ) == [(249504, DAY, 594, 4159, 249, Decimal("3.88"))]
-    assert get_saved_snapshot(db, 249504, DAY) == (124, Decimal("0.59"), "EUR", 594, 4159, 249, Decimal("3.88"))
+    assert get_saved_snapshot(db, 249504, DAY) == (124, Decimal("0.59"), "EUR", 594, 4159, 249, Decimal("3.88"), DAY)
     assert get_saved_snapshot(db, 249504, date(2026, 11, 2)) is None
 
 
@@ -112,3 +112,20 @@ def test_failed_same_day_resave_keeps_the_earlier_snapshot(db, saved_release, co
         )
 
     assert committed("SELECT num_for_sale, lowest_price FROM price_snapshots") == [(124, Decimal("0.59"))]
+
+
+def test_a_price_only_snapshot_is_read_with_the_latest_details_before_it(db, saved_release, committed):
+    save_snapshots(db, saved_release, STATS, RELEASE, DAY)
+    later = date(2026, 11, 3)
+    save_price_snapshot(db, saved_release, {"num_for_sale": 7, "lowest_price": {"value": 2.5, "currency": "EUR"}}, later)
+
+    assert committed("SELECT snapshot_date FROM price_snapshots ORDER BY 1") == [(DAY,), (later,)]
+    assert committed("SELECT snapshot_date FROM demand_snapshots") == [(DAY,)]
+    assert get_saved_snapshot(db, 249504, later) == (7, Decimal("2.50"), "EUR", 594, 4159, 249, Decimal("3.88"), DAY)
+
+
+def test_details_saved_after_the_day_are_not_read_for_it(db, saved_release):
+    save_price_snapshot(db, saved_release, STATS, DAY)
+    save_snapshots(db, saved_release, STATS, RELEASE, date(2026, 11, 2))
+
+    assert get_saved_snapshot(db, 249504, DAY) == (124, Decimal("0.59"), "EUR", None, None, None, None, None)

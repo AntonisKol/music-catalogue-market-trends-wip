@@ -64,7 +64,7 @@ class SearchReleases(ReleaseFilters):
 
 class ReleaseHistory(Arguments):
     release_id: int = Field(ge=1, description="Discogs release id, from another tool's result.")
-    days: int = Field(default=30, ge=1, le=90, description="How many days back from the latest snapshot. A month back needs at least 31; choose more rather than less.")
+    days: int = Field(default=30, ge=1, le=90, description="How many days back from the latest snapshot. A month back needs at least 31; choose more rather than less. Want, have and ratings are saved once a week, so other days show them as null.")
 
 
 SortBy = Literal[
@@ -82,7 +82,7 @@ class RankReleases(ReleaseFilters):
 class MarketChanges(ReleaseFilters):
     metric: Literal["lowest_price", "num_for_sale", "want", "have"] = Field(description="The value to compare.")
     direction: Literal["up", "down"] = Field(default="up", description="Biggest rises or biggest falls.")
-    days: int = Field(default=30, ge=1, le=365, description="Period, counted back from the latest snapshot. A month back needs at least 31; choose more rather than less.")
+    days: int = Field(default=30, ge=1, le=365, description="Period, counted back from the latest snapshot. A month back needs at least 31; choose more rather than less. Want and have are saved once a week, so compare them over at least 14 days.")
     limit: int = Limit
 
 
@@ -106,15 +106,17 @@ class CompareLabels(Arguments):
 # but the single-release commands save any release, so every tool applies this.
 VINYL = sql.SQL("""r.formats @> '[{"name": "Vinyl"}]'::jsonb""")
 
-# Each release's most recent snapshot.
+# Each release's most recent price, with its most recent want/have/ratings.
+# Prices are saved every night and details once a week, so the two dates differ.
 LATEST = sql.SQL("""
     latest AS (
-        SELECT DISTINCT ON (p.release_id)
-               p.release_id, p.snapshot_date, p.num_for_sale, p.lowest_price, p.currency,
-               d.want, d.have, d.rating_count, d.rating_average
-        FROM price_snapshots p
-        LEFT JOIN demand_snapshots d USING (release_id, snapshot_date)
-        ORDER BY p.release_id, p.snapshot_date DESC
+        SELECT p.release_id, p.snapshot_date, p.num_for_sale, p.lowest_price, p.currency,
+               d.want, d.have, d.rating_count, d.rating_average, d.snapshot_date AS details_date
+        FROM (SELECT DISTINCT ON (release_id) release_id, snapshot_date, num_for_sale, lowest_price, currency
+              FROM price_snapshots ORDER BY release_id, snapshot_date DESC) p
+        LEFT JOIN (SELECT DISTINCT ON (release_id) release_id, snapshot_date, want, have, rating_count, rating_average
+                   FROM demand_snapshots ORDER BY release_id, snapshot_date DESC) d
+            ON d.release_id = p.release_id
     )
 """)
 
@@ -209,7 +211,7 @@ RELEASE_COLUMNS = sql.SQL("""
     r.id AS release_id, r.title, {artists}, l.name AS label, r.catno, r.year, r.country,
     r.genres, r.styles,
     latest.snapshot_date AS as_of, latest.num_for_sale, latest.lowest_price, latest.currency,
-    latest.want, latest.have, latest.rating_count, latest.rating_average
+    latest.details_date AS demand_as_of, latest.want, latest.have, latest.rating_count, latest.rating_average
 """).format(artists=ARTISTS)
 
 
@@ -322,6 +324,7 @@ def compare_labels(conn: psycopg.Connection, args: CompareLabels) -> dict:
                      / nullif(sum(latest.rating_count) FILTER (WHERE latest.rating_average IS NOT NULL), 0), 2)
                    AS average_rating,
                max(latest.snapshot_date) AS as_of,
+               max(latest.details_date) AS demand_as_of,
                count(*) OVER () AS total
         FROM labels l
         JOIN releases r ON r.label_id = l.id AND {vinyl}

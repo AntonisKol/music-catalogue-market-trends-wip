@@ -1,6 +1,6 @@
 """ingest_label against faked Discogs and a real, throwaway PostgreSQL (see conftest.py)."""
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 import psycopg
 import pytest
@@ -8,9 +8,10 @@ import requests
 import responses
 from responses import matchers
 
-from ingestion.discogs_client import BASE_URL
+from ingestion.discogs_client import BASE_URL, get_release
 from ingestion.mapping import is_clearly_not_vinyl, is_vinyl
-from ingestion.pipeline import DatabaseConnectionLost, ingest_label, is_on_label, unique_releases
+from ingestion.pipeline import DatabaseConnectionLost, details_due, ingest_label, is_on_label, unique_releases
+from ingestion.repository import details_fetched_on, save_release
 
 DAY = date(2026, 11, 1)
 VINYL = [{"name": "Vinyl", "qty": "1", "descriptions": ['12"']}]
@@ -312,3 +313,94 @@ def test_a_malformed_price_fails_that_release_only(db):
     assert list(run.failed) == [1]
     assert run.failed[1].startswith("InvalidOperation")
     assert run.saved == [2]
+
+
+# --- Prices every night, details once a week -------------------------------------
+
+SUNDAY = DAY  # 2026-11-01; release ids with id % 7 == 6 get their details on Sundays
+TUESDAY = date(2026, 11, 3)  # id % 7 == 1
+
+
+@pytest.mark.parametrize(
+    "release_id, fetched_on, night, due",
+    [
+        (2, None, TUESDAY, True),  # not stored yet
+        (1, SUNDAY, TUESDAY, True),  # its weekday
+        (2, SUNDAY, TUESDAY, False),  # another weekday, details 2 days old
+        (2, SUNDAY, SUNDAY + timedelta(days=6), False),
+        (2, SUNDAY, SUNDAY + timedelta(days=7), True),  # a week old: due whatever the weekday
+        (1, TUESDAY, TUESDAY, False),  # already fetched tonight
+        (1, date(2026, 11, 4), TUESDAY, False),  # fetched after tonight's date (a run past midnight UTC)
+    ],
+)
+def test_details_due(release_id, fetched_on, night, due):
+    assert details_due(release_id, fetched_on, night) is due
+
+
+def details_fetched(postgres_url, release_id, day):
+    with psycopg.connect(postgres_url) as conn:
+        conn.execute("UPDATE releases SET fetched_at = %s WHERE id = %s", (f"{day} 03:00+00", release_id))
+
+
+@responses.activate
+def test_a_stored_release_gets_only_its_price_on_other_nights(db, committed, postgres_url, caplog):
+    caplog.set_level(logging.INFO)
+    label_list(summary(2, '12"'))
+    details(2)
+    stats(2)
+    ingest_label(db, 1, SUNDAY)
+    details_fetched(postgres_url, 2, SUNDAY)
+    responses.calls.reset()
+
+    result = ingest_label(db, 1, TUESDAY)
+
+    assert requested("/releases/2") == 0
+    assert requested("/marketplace/stats/2") == 1
+    assert (result.saved, result.with_details) == ([2], [])
+    assert committed("SELECT snapshot_date FROM price_snapshots ORDER BY 1") == [(SUNDAY,), (TUESDAY,)]
+    assert committed("SELECT snapshot_date FROM demand_snapshots") == [(SUNDAY,)]
+    assert "want 10, have 20; rated 4.50 by 2 (details from 2026-11-01)" in caplog.text
+
+
+@responses.activate
+def test_a_stored_release_gets_its_details_on_its_weekday(db, committed, postgres_url):
+    label_list(summary(1, '12"'))
+    details(1)
+    stats(1)
+    ingest_label(db, 1, SUNDAY)
+    details_fetched(postgres_url, 1, SUNDAY)
+    responses.calls.reset()
+
+    result = ingest_label(db, 1, TUESDAY)
+
+    assert requested("/releases/1") == 1
+    assert (result.saved, result.with_details) == ([1], [1])
+    assert committed("SELECT snapshot_date FROM demand_snapshots ORDER BY 1") == [(SUNDAY,), (TUESDAY,)]
+
+
+@responses.activate
+def test_details_a_week_old_are_fetched_whatever_the_weekday(db, postgres_url):
+    label_list(summary(2, '12"'))
+    details(2)
+    stats(2)
+    ingest_label(db, 1, SUNDAY)
+    details_fetched(postgres_url, 2, SUNDAY)
+    responses.calls.reset()
+
+    assert ingest_label(db, 1, SUNDAY + timedelta(days=6)).with_details == []
+    assert ingest_label(db, 1, SUNDAY + timedelta(days=7)).with_details == [2]
+    assert requested("/releases/2") == 1
+
+
+@responses.activate
+def test_details_date_is_only_trusted_for_vinyl_of_the_same_label(db):
+    details(2)
+    details(3, formats=CD)
+    details(4, labels=[{"id": 9, "name": "Label 9", "catno": "L9"}])
+    for release_id in (2, 3, 4):
+        save_release(db, get_release(release_id))
+
+    assert details_fetched_on(db, 2, 1) is not None
+    assert details_fetched_on(db, 3, 1) is None  # stored, but not vinyl
+    assert details_fetched_on(db, 4, 1) is None  # stored under another label
+    assert details_fetched_on(db, 5, 1) is None  # not stored

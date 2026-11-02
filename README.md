@@ -80,7 +80,7 @@ The tasks below are ordered so each step builds on working code from the previou
 - A web API (`POST /api/questions`) in front of the question service, with a human check, limits per visitor and for the whole site, and JSON errors (see [Run the web API](#run-the-web-api)).
 - A question box for adnsaudio.com: one JavaScript module and one stylesheet in [`widget/`](widget) (see [Add the question box to a page](#add-the-question-box-to-a-page)).
 
-- A nightly update of every tracked label, with a record of each run and an email alert on problems (see [Update the data every night](#update-the-data-every-night)).
+- A nightly update of every tracked label, with a record of each run and an email alert on problems (see [Update the data every night](#update-the-data-every-night)). Prices are fetched every night; want, have and ratings once a week per release.
 
 Hosting the API publicly is roadmap work.
 
@@ -201,7 +201,7 @@ python -m ingestion.track_labels pause 538     # skip it at night, keep its data
 python -m ingestion.track_labels resume 538
 ```
 
-One command updates every active label: its vinyl releases, and that day's prices and demand.
+One command updates every active label: its vinyl releases, that day's prices, and want, have and ratings once a week.
 
 ```bash
 python -m ingestion.nightly
@@ -212,6 +212,7 @@ python -m ingestion.nightly
 - **Everything is recorded.** Each run, and each label within it, goes into `ingestion_runs` and `ingestion_run_labels`. Progress goes to `logs/nightly.log`, rotated at 5 MB with 10 kept.
 - **Missed nights are noticed.** If the last successful run started more than 36 hours earlier, the run reports it.
 - **Rerunning the same day is safe.** It updates the same rows, adding no duplicates.
+- **Prices every night, details once a week.** A release already stored costs one Discogs request a night (its price). Its details (want, have, ratings, and the catalogue fields) are fetched on one weekday of its own, taken from its id, so each night refreshes about a seventh of the catalogue. Details more than 7 days old are fetched whatever the weekday, so a missed night catches up the next. New releases always get their details. The log shows the date of older details, for example `saved: 22 for sale from 12.15 EUR; want 33, have 63; rated 4.89 by 9 (details from 2026-11-02)`, and each label's summary says how many releases had their details fetched. `ingest_label` follows the same rule; `save_snapshot` always fetches both.
 
 See how recent nights went:
 

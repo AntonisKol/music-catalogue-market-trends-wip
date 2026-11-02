@@ -1,4 +1,4 @@
-"""Update every tracked label: today's releases, prices and demand.
+"""Update every tracked label: tonight's prices, and details once a week.
 
     python -m ingestion.nightly
 
@@ -107,8 +107,8 @@ def run_nightly(conn: psycopg.Connection, snapshot_date: date, now: datetime) ->
         totals["saved"] += len(result.saved)
         totals["failed"] += len(result.failed)
         log.info(
-            "Label %s (%s): %s listed, %s saved, %s not vinyl, %s not on this label, %s gone, %s failed",
-            label_id, name, result.listed, len(result.saved), len(result.not_vinyl),
+            "Label %s (%s): %s listed, %s saved (%s with details), %s not vinyl, %s not on this label, %s gone, %s failed",
+            label_id, name, result.listed, len(result.saved), len(result.with_details), len(result.not_vinyl),
             len(result.not_on_label), len(result.gone), len(result.failed),
         )
         if result.failed:
