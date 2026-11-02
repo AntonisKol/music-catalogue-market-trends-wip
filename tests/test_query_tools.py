@@ -5,7 +5,7 @@ from datetime import date
 
 import pytest
 
-from ingestion.repository import save_release, save_snapshots
+from ingestion.repository import save_price_snapshot, save_release, save_snapshots
 from queries.tools import MAX_LIMIT, TOOLS, ToolError, run_tool
 
 OCT_1, OCT_15, NOV_1 = date(2026, 10, 1), date(2026, 10, 15), date(2026, 11, 1)
@@ -84,6 +84,17 @@ def test_search_includes_the_latest_snapshot(data, reader):
     assert row["as_of"] == "2026-11-01"
     assert (row["num_for_sale"], row["lowest_price"], row["currency"]) == (10, 15.0, "EUR")
     assert (row["want"], row["have"], row["rating_average"]) == (150, 500, 4.5)
+
+
+def test_prices_are_from_the_latest_night_and_want_have_from_the_latest_week(data, db, reader):
+    # Prices are saved every night, want/have/ratings once a week.
+    save_price_snapshot(db, 101, {"num_for_sale": 9, "lowest_price": {"value": 16.0, "currency": "EUR"}}, date(2026, 11, 3))
+    db.commit()
+
+    row = run_tool(reader, "search_releases", {"title": "throw"})["rows"][0]
+    assert (row["as_of"], row["num_for_sale"], row["lowest_price"]) == ("2026-11-03", 9, 16.0)
+    assert (row["demand_as_of"], row["want"], row["have"]) == ("2026-11-01", 150, 500)
+    assert 101 in ids(run_tool(reader, "rank_releases", {"sort_by": "most_wanted"}))
 
 
 def test_results_are_capped_and_say_how_many_matched(data, reader):

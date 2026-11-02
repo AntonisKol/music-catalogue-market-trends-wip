@@ -44,7 +44,7 @@ def main(argv: list) -> int:
         print(f"Saving the snapshot of release {release_id} failed: {error}", file=sys.stderr)
         return 1
 
-    print(f"Snapshot of {release_id} on {snapshot_date} (UTC): {describe_snapshot(saved)}")
+    print(f"Snapshot of {release_id} on {snapshot_date} (UTC): {describe_snapshot(saved, snapshot_date)}")
     return 0
 
 

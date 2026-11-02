@@ -1,14 +1,16 @@
 """Ingest one Discogs label: its vinyl releases and today's snapshot of each.
 
 Composes the tested pieces: the paginated label list, release details, the
-catalogue save and the snapshot save. A failed release is logged and listed in
+catalogue save and the snapshot save. Prices are fetched every night; a stored
+release's details (want, have, ratings and the catalogue fields) once a week,
+on a weekday of its own, so each night fetches about a seventh of them. A failed release is logged and listed in
 the result, and the run carries on with the others; only losing the database
 connection stops the run, since every later save would fail too.
 """
 import decimal
 import logging
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 import psycopg
 import requests
@@ -16,7 +18,9 @@ import requests
 from ingestion import config
 from ingestion.discogs_client import get_label_releases, get_marketplace_stats, get_release
 from ingestion.mapping import MappingError, is_clearly_not_vinyl, is_vinyl
-from ingestion.repository import get_saved_snapshot, save_release, save_snapshots
+from ingestion.repository import (
+    details_fetched_on, get_saved_snapshot, save_price_snapshot, save_release, save_snapshots,
+)
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +38,11 @@ NOT_VINYL = "not vinyl"
 NOT_ON_LABEL = "not on label"
 
 
+# Details older than this are fetched whatever the weekday, so a release whose
+# night was missed (a failure, the computer off) catches up on the next one.
+DETAILS_MAX_AGE = timedelta(days=7)
+
+
 class DatabaseConnectionLost(Exception):
     """The database connection broke during the run, so the run was stopped."""
 
@@ -46,6 +55,8 @@ class LabelRun:
     not_vinyl: list = field(default_factory=list)
     not_on_label: list = field(default_factory=list)
     gone: list = field(default_factory=list)
+    # Of the saved releases, those whose details were fetched as well as prices.
+    with_details: list = field(default_factory=list)
     failed: dict = field(default_factory=dict)
 
     @property
@@ -61,13 +72,30 @@ def unique_releases(summaries: list) -> list:
     return list(seen.values())
 
 
-def describe_snapshot(saved) -> str:
-    num_for_sale, lowest_price, currency, want, have, rating_count, rating_average = saved
+def describe_snapshot(saved, snapshot_date: date = None) -> str:
+    num_for_sale, lowest_price, currency, want, have, rating_count, rating_average, details_date = saved
     supply = f"{num_for_sale} for sale"
     if lowest_price is not None:
         supply += f" from {lowest_price} {currency}"
     rating = f"rated {rating_average} by {rating_count}" if rating_average is not None else "not rated"
-    return f"{supply}; want {want}, have {have}; {rating}"
+    details = f"want {want}, have {have}; {rating}"
+    if details_date is not None and details_date != snapshot_date:
+        details += f" (details from {details_date})"
+    return f"{supply}; {details}"
+
+
+def details_due(release_id: int, fetched_on, snapshot_date: date) -> bool:
+    """Whether tonight fetches the release's details, not only its price.
+
+    A release not stored yet always needs them. A stored one gets them on its own
+    weekday (from its id, so the catalogue is spread over the week), or as soon as
+    they are DETAILS_MAX_AGE old.
+    """
+    if fetched_on is None:
+        return True
+    if snapshot_date - fetched_on >= DETAILS_MAX_AGE:
+        return True
+    return release_id % 7 == snapshot_date.weekday() and fetched_on < snapshot_date
 
 
 def is_on_label(discogs_release: dict, label_id: int) -> bool:
@@ -84,6 +112,14 @@ def ingest_release(conn: psycopg.Connection, release_id: int, snapshot_date: dat
     """Fetch, check and save one release with its snapshot. Returns the saved snapshot,
     NOT_ON_LABEL when label_id is given and the release was not issued on it, or
     NOT_VINYL when the details show it is not vinyl."""
+    if label_id is not None and not details_due(
+        release_id, details_fetched_on(conn, release_id, label_id), snapshot_date
+    ):
+        # A stored vinyl release of this label whose details are recent: price only.
+        stats = get_marketplace_stats(release_id, config.SNAPSHOT_CURRENCY)
+        save_price_snapshot(conn, release_id, stats, snapshot_date)
+        with conn.transaction():
+            return get_saved_snapshot(conn, release_id, snapshot_date)
     discogs_release = get_release(release_id)
     if label_id is not None and not is_on_label(discogs_release, label_id):
         return NOT_ON_LABEL
@@ -137,6 +173,8 @@ def ingest_label(conn: psycopg.Connection, label_id: int, snapshot_date: date) -
             log.info("%s skipped, not vinyl (details)", step)
         else:
             run.saved.append(release_id)
-            log.info("%s saved: %s", step, describe_snapshot(saved))
+            if saved[-1] == snapshot_date:
+                run.with_details.append(release_id)
+            log.info("%s saved: %s", step, describe_snapshot(saved, snapshot_date))
 
     return run
