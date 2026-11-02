@@ -170,12 +170,12 @@ def limits_role(postgres_url):
 
 @pytest.fixture
 def limits_db(db, limits_role, postgres_url, monkeypatch):
-    """web.limits.connect_limits() pointed at the test database, with no questions counted yet."""
+    """web.limits.connect_limits() pointed at the test database, with no questions counted and no accounts."""
     from psycopg.conninfo import conninfo_to_dict
 
     from web import config
 
-    db.execute("TRUNCATE question_counts")
+    db.execute("TRUNCATE question_counts, sign_in_tokens, sessions, accounts RESTART IDENTITY")
     db.commit()
     info = conninfo_to_dict(postgres_url)
     monkeypatch.setattr(config, "POSTGRES_HOST", info["host"])
