@@ -1612,6 +1612,58 @@ A throwaway database was created with the old schema. Then:
 
 ---
 
+## Task #41: Prices every night, details once a week
+
+*November 2026 · [issue #41](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/41)*
+
+**Goal.** Fit every tracked label into one night. Each stored release cost two Discogs requests a night: its details (want, have, ratings and the catalogue fields) and its price. With 56 labels that is about 17 hours a night. Prices move daily; want and have move slowly.
+
+**Result.**
+- A stored vinyl release now costs one request on most nights (its price) and two once a week (price and details). Nights take roughly half as long, about 9 to 10 hours for 56 labels.
+- The question tools take each release's latest price and its latest want/have separately, and return both dates (`as_of` and `demand_as_of`).
+- 14 new tests (333 in total).
+
+### Decision: Which releases get their details on a given night
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| When 7 or more days old | Fetch a release's details once they are a week old | Rejected as the only rule: kept as a backstop |
+| **Spread over the week, with a 7-day backstop** | Each release has its own weekday (its id modulo 7); details over 7 days old are fetched anyway | **Chosen** |
+| All on one night | Every release's details on Sunday | Rejected |
+
+**In plain words.** A first import gives every release its details on the same night. With "7 days old" as the only rule, the whole catalogue would fall due on the same night every week, for good: one 17-hour night and six 8-hour ones. A failure on that night would roll the whole catalogue into the next. Giving each release its own weekday spreads the work evenly, like bins collected on different days for different streets. The 7-day rule stays as a backstop, so details are never more than a week old, even after a missed night.
+
+### In the code
+
+- **[`ingestion/pipeline.py`](../ingestion/pipeline.py):** `details_due(release_id, fetched_on, night)` decides. A release not stored yet always needs details, and so does one whose details are 7 days old. Otherwise a release gets them on its own weekday, unless they were already fetched that night. A release that isn't due gets only its price.
+- **[`ingestion/repository.py`](../ingestion/repository.py):**
+  - `details_fetched_on` reads the date of the last details from `releases.fetched_at`, but only for a vinyl release stored under the label being updated. Anything else is fetched and checked again.
+  - `save_price_snapshot` saves the price alone.
+  - `get_saved_snapshot` returns that night's price with the latest details saved on or before it, and their date.
+- **[`queries/tools.py`](../queries/tools.py):** the latest price and the latest want/have are taken separately, so "most wanted" still works on nights without details. Tool descriptions say want and have are weekly, so changes in them need at least 14 days.
+- **[`queries/questions.py`](../queries/questions.py)** and the question box name both dates.
+
+### How we proved the tests work
+
+Nine bugs were planted:
+- details fetched every night;
+- no 7-day backstop;
+- no weekday;
+- details fetched twice in one night;
+- details trusted for a release stored under another label;
+- details trusted for a release that isn't vinyl;
+- details from a later night read for an earlier one;
+- every saved release counted as having details;
+- the question tools joining price and want/have on the same night.
+
+All nine were caught.
+
+### Still open
+
+- Releases that turn out to be not vinyl, or only credited to the label, are still fetched every night, because they aren't stored. In the first label of the first import that was about 5% of entries, so it was left for now.
+
+---
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.
