@@ -83,7 +83,7 @@ The tasks below are ordered so each step builds on working code from the previou
 
 - A nightly update of every tracked label, with a record of each run and an email alert on problems (see [Update the data every night](#update-the-data-every-night)). Prices are fetched every night; want, have and ratings once a week per release.
 
-Hosting the API publicly is roadmap work.
+- Everything ready to run on a server: the database, the API behind HTTPS, the nightly update, nightly backups copied off the server, and one deploy command (see [Run it on a server](#run-it-on-a-server)).
 
 ## Requirements
 
@@ -373,7 +373,7 @@ Visitors who want more than the anonymous allowance sign in with a link sent by 
 - `SIGN_IN_RETURN_URL`: where the confirm page goes afterwards, by default `https://adnsaudio.com/market-trends/`.
 - For trying it on a laptop only: `SIGN_IN_LOG_LINKS=true` writes the links to the API's log instead of emailing them, and `COOKIE_SECURE=false` lets the cookie work over plain http.
 
-The cookie works on the live site only if the API is on a subdomain of adnsaudio.com, such as `api.adnsaudio.com`, which hosting will set up.
+The cookie works on the live site only if the API is on a subdomain of adnsaudio.com, such as `api.adnsaudio.com` (see [Run it on a server](#run-it-on-a-server)).
 
 ## Add the question box to a page
 
@@ -418,6 +418,60 @@ cd widget && python -m http.server 8765 --bind 127.0.0.1
 ```
 
 Then open http://127.0.0.1:8765. Port 5000, Flask's default, is taken by AirPlay Receiver on macOS, so a page pointed at it gets "Could not reach the question service".
+
+## Run it on a server
+
+The live setup runs on one small Hetzner server with Ubuntu 24.04. Docker Compose ([`deploy/compose.yml`](deploy/compose.yml)) runs three containers there:
+
+- **db:** PostgreSQL 16, with no port open to the internet.
+- **api:** the web API under gunicorn.
+- **caddy:** HTTPS for `api.adnsaudio.com`. Caddy gets and renews the certificate by itself.
+
+Cron starts the nightly update at 03:00 UTC and then the backup. The page itself is published by GitHub Pages from the [`market-trends`](https://github.com/AntonisKol/market-trends) repo at `adnsaudio.com/market-trends/`, like the site's other projects.
+
+### First setup
+
+1. **Server.** In the Hetzner Console, create a server: Ubuntu 24.04, a location in Germany, the smallest shared plan with 4 GB of memory, and your SSH key. Note its IPv4 address.
+2. **DNS.** In Cloudflare, add an `A` record `api` pointing to that address, with the proxy off (grey cloud). Caddy needs to answer on it directly to get its certificate, and the API then sees each visitor's real address for the limits. Don't add an `AAAA` (IPv6) record: Docker passes IPv6 visitors on under one shared address, so they would all share one limit.
+3. **Prepare the server.** From the project folder on your Mac:
+   ```bash
+   ssh root@<server-ip> 'sh -s' < deploy/setup-server.sh
+   ```
+   This installs Docker, turns on the firewall (SSH, 80 and 443 only) and automatic security updates, and creates the user `deploy`, who logs in with your key. It then turns off password and root logins, clones the project to `/srv/market-trends` and installs the cron job. At the end it prints a public key for the backups.
+4. **Storage Box.** Order a Storage Box in the Hetzner Console, switch on SSH access, and add the printed key to it ([Hetzner's guide](https://docs.hetzner.com/storage/storage-box/ssh-keys/add-ssh-keys/)).
+5. **Resend.** Add the domain `adnsaudio.com` in Resend and create the DNS records it lists in Cloudflare. They live on their own subdomain, so the site's existing email forwarding keeps working. Then create an API key.
+6. **Turnstile.** In Cloudflare, add a Turnstile widget for `adnsaudio.com` in invisible mode. It gives a public site key and a secret key.
+7. **Settings.** [`deploy/server.env.example`](deploy/server.env.example) lists every setting the server needs. Copy it over and fill it in on the server, taking the database, Discogs and Anthropic values from your Mac's `.env`:
+   ```bash
+   scp deploy/server.env.example deploy@<server-ip>:/srv/market-trends/.env
+   ssh deploy@<server-ip> 'chmod 600 /srv/market-trends/.env && nano /srv/market-trends/.env'
+   ```
+8. **Move the data.** Dump the Mac's database to the external drive, copy it to the server, and load it there:
+   ```bash
+   docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > /Volumes/musik/market-trends-$(date +%F).dump
+   scp /Volumes/musik/market-trends-<date>.dump deploy@<server-ip>:/srv/market-trends/backups/
+   ssh -t deploy@<server-ip> 'cd /srv/market-trends && sh deploy/restore.sh backups/market-trends-<date>.dump'
+   ```
+   The restore asks you to type `yes`, loads everything in one transaction, then sets up the reader and web logins again (a dump does not carry logins) and starts the API.
+9. **Stop the Mac's nightly run** with `sh ops/install-launchd.sh remove`. From now on the server's database is the one that grows, and Discogs is asked once a night, not twice.
+10. **The page.** Create the public repo `market-trends` on GitHub and switch on GitHub Pages for its `main` branch. Add `DEPLOY_SERVER=deploy@<server-ip>` and `TURNSTILE_SITE_KEY=<site key>` to your Mac's `.env`. Neither is secret: the address is public through DNS, and the site key is in the page. Then run the deploy command below.
+
+### After merging a pull request
+
+```bash
+sh deploy/deploy.sh          # the server, then the page
+sh deploy/deploy.sh server   # only the API
+sh deploy/deploy.sh page     # only the page
+```
+
+The command logs in as `deploy` and pulls `main`, then rebuilds and restarts the containers. It also adds any new tables and rights (`apply_schema` and `create_limits_role` are safe to run every time), so nothing has to be run by hand after a merge. It waits until `https://api.adnsaudio.com` answers. Last, it copies [`widget/`](widget) into the `market-trends` repo with the live API address and site key, and pushes it if anything changed.
+
+### Looking after it
+
+- **Nightly runs:** `ssh deploy@<server-ip> 'cd /srv/market-trends && docker compose --env-file .env -f deploy/compose.yml run --rm -T api python -m ingestion.runs'`. The logs are in `/srv/market-trends/logs/`: `nightly.log` for the update, `cron.log` for the backup.
+- **Backups:** each night [`deploy/backup.sh`](deploy/backup.sh) writes `backups/market-trends-<date>.dump`. It checks the dump can be read, deletes dumps older than 14 days, and copies the folder to the Storage Box named by `BACKUP_TARGET`. If anything fails, an alert is emailed. Run it by hand with `sh deploy/backup.sh`.
+- **Restoring** a backup works like moving the data: copy the dump into `backups/` (from the Storage Box if the server was lost) and run `sh deploy/restore.sh <file>`.
+- **A lost server** can be rebuilt with the first-setup steps above. Restore the newest dump from the Storage Box instead of the Mac's.
 
 ## Reset the local database
 
