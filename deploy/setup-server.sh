@@ -22,7 +22,8 @@ ufw allow 80/tcp
 ufw allow 443/tcp
 ufw --force enable
 
-id deploy > /dev/null 2>&1 || useradd --create-home --shell /bin/bash --groups docker deploy
+id deploy > /dev/null 2>&1 || useradd --create-home --shell /bin/bash deploy
+usermod -aG docker deploy
 install -d -m 700 -o deploy -g deploy /home/deploy/.ssh
 if [ ! -s /root/.ssh/authorized_keys ]; then
   echo "root has no SSH key in /root/.ssh/authorized_keys; add one before running this." >&2
