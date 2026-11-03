@@ -427,7 +427,7 @@ The live setup runs on one small Hetzner server with Ubuntu 24.04. Docker Compos
 - **api:** the web API under gunicorn.
 - **caddy:** HTTPS for `api.adnsaudio.com`. Caddy gets and renews the certificate by itself.
 
-Cron starts the nightly update at 03:00 UTC and then the backup. The page itself is published by GitHub Pages from the [`market-trends`](https://github.com/AntonisKol/market-trends) repo at `adnsaudio.com/market-trends/`, like the site's other projects.
+Cron starts the nightly update at 03:00 UTC and then the backup. The page is part of the website itself. adnsaudio.com is published by GitHub Pages from the [`adns-space`](https://github.com/AntonisKol/adns-space) repo, and the question box lives in its `market-trends/` folder.
 
 ### First setup
 
@@ -454,7 +454,7 @@ Cron starts the nightly update at 03:00 UTC and then the backup. The page itself
    ```
    The restore asks you to type `yes`, loads everything in one transaction, then sets up the reader and web logins again (a dump does not carry logins) and starts the API.
 9. **Stop the Mac's nightly run** with `sh ops/install-launchd.sh remove`. From now on the server's database is the one that grows, and Discogs is asked once a night, not twice.
-10. **The page.** Create the public repo `market-trends` on GitHub and switch on GitHub Pages for its `main` branch. Add `DEPLOY_SERVER=deploy@<server-ip>` and `TURNSTILE_SITE_KEY=<site key>` to your Mac's `.env`. Neither is secret: the address is public through DNS, and the site key is in the page. Then run the deploy command below.
+10. **The page.** Add `DEPLOY_SERVER=deploy@<server-ip>` to your Mac's `.env`. It isn't secret, because the address is public through DNS. Then run the deploy command below, and merge the `adns-space` pull request that swaps the page's "Coming soon" box for the question box. That page holds the live API address and the public Turnstile site key.
 
 ### After merging a pull request
 
@@ -464,7 +464,7 @@ sh deploy/deploy.sh server   # only the API
 sh deploy/deploy.sh page     # only the page
 ```
 
-The command logs in as `deploy` and pulls `main`, then rebuilds and restarts the containers. It also adds any new tables and rights (`apply_schema` and `create_limits_role` are safe to run every time), so nothing has to be run by hand after a merge. It waits until `https://api.adnsaudio.com` answers. Last, it copies [`widget/`](widget) into the `market-trends` repo with the live API address and site key, and pushes it if anything changed.
+The command logs in as `deploy` and pulls `main`, then rebuilds and restarts the containers. It also adds any new tables and rights (`apply_schema` and `create_limits_role` are safe to run every time), so nothing has to be run by hand after a merge. It waits until `https://api.adnsaudio.com` answers. Last, it copies `ask.js` and `ask.css` from [`widget/`](widget) into `adns-space/market-trends/` and pushes them to the website if anything changed. It signs in with your usual GitHub login.
 
 ### Looking after it
 

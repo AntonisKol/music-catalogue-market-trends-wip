@@ -28,7 +28,7 @@ flowchart TB
         AN["Anthropic API, Claude<br/>Reads a question and picks<br/>which query tool to call"]
         CF["Cloudflare Turnstile<br/>Confirms the visitor is a person"]
         RS["Resend<br/>Sends the sign-in emails<br/>from adnsaudio.com"]
-        GP["GitHub Pages<br/>Serves adnsaudio.com/market-trends/<br/>from the market-trends repo"]
+        GP["GitHub Pages<br/>Serves adnsaudio.com from the<br/>adns-space repo, the question box<br/>in its market-trends/ folder"]
         SB["Hetzner Storage Box<br/>Keeps a copy of the last<br/>14 nightly backups"]
     end
 
@@ -128,7 +128,7 @@ flowchart TD
     F24["Issue 24: Tracked techno shops<br/>How: chosen shops' Discogs inventories,<br/>city recorded by us, a sixth query tool<br/>Will achieve: questions by seller city,<br/>such as records sold from Berlin"]
     F27["Issue 27: Fixes from a code review<br/>Code: pipeline.py, ingest_label.py, tools.py<br/>How: one run at a time, credit-only and<br/>deleted releases handled, vinyl-only answers<br/>Achieved: the code does what the docs promise"]
     F38["Issue 38: Email sign-in and quotas<br/>Code: web/accounts.py, mailer.py, widget/<br/>How: one-time links by Resend, a confirm page,<br/>a sessions table, counts per account<br/>Achieved: 3 questions a day to try, 10 an hour<br/>and 50 a day signed in, no passwords,<br/>accounts deletable"]
-    F44["Issue 44: Hosting<br/>Code: Dockerfile, deploy/<br/>How: a Hetzner server with Docker Compose,<br/>Caddy for HTTPS, cron for the nightly update,<br/>backups to a Storage Box, one deploy command,<br/>the page on GitHub Pages<br/>Achieved: everything ready to run online;<br/>live once the server and accounts exist"]
+    F44["Issue 44: Hosting<br/>Code: Dockerfile, deploy/<br/>How: a Hetzner server with Docker Compose,<br/>Caddy for HTTPS, cron for the nightly update,<br/>backups to a Storage Box, one deploy command,<br/>the box on the site's own page<br/>Achieved: everything ready to run online;<br/>live once the server and accounts exist"]
     F18["Issues 18 and 25: Documentation<br/>Code: README, decisions.md, this page<br/>Achieved: decisions and architecture<br/>written down, updated with every step"]
 
     S0 --> S1
@@ -417,7 +417,7 @@ sequenceDiagram
 | Schema command | [`ingestion/apply_schema.py`](../ingestion/apply_schema.py) | PostgreSQL | Adds tables introduced since a database was created | Every statement is `CREATE TABLE IF NOT EXISTS`; existing data untouched |
 | Server setup | [`Dockerfile`](../Dockerfile), [`deploy/compose.yml`](../deploy/compose.yml), [`Caddyfile`](../deploy/Caddyfile), [`setup-server.sh`](../deploy/setup-server.sh), [`crontab`](../deploy/crontab), [`nightly.sh`](../deploy/nightly.sh) | Docker Compose, Caddy, cron, Ubuntu 24.04 | Runs the database, the API under gunicorn and Caddy; cron starts the nightly update at 03:00 UTC, then the backup | Only Caddy publishes ports; the database container gets only its own settings; `.env` never in the image; containers run as an ordinary user; firewall open for SSH, 80 and 443 only; SSH by key only, no root login; automatic security updates; tests check these |
 | Backups | [`deploy/backup.sh`](../deploy/backup.sh), [`restore.sh`](../deploy/restore.sh) | pg_dump, rsync over SSH | A dump after every nightly update, kept 14 days on the server and on a Storage Box; restoring also sets up the logins again | A dump is checked before it is kept; a half-written dump is never kept; a failed backup sends an alert; restoring asks for "yes" and runs in one transaction |
-| Deploy | [`deploy/deploy.sh`](../deploy/deploy.sh) | SSH, git, GitHub Pages | Updates the server from `main`, adds new tables, checks the API answers, then publishes the page | Pulls only fast-forward; the page gets the live API address and site key, never a secret |
+| Deploy | [`deploy/deploy.sh`](../deploy/deploy.sh) | SSH, git, GitHub Pages | Updates the server from `main`, adds new tables, checks the API answers, then copies the question box into the website repo | Pulls only fast-forward; only `ask.js` and `ask.css` are copied, so no secret can reach the website; a newer website commit is rebased onto, never overwritten |
 | CI | [`.github/workflows/tests.yml`](../.github/workflows/tests.yml), [`dependabot.yml`](../.github/dependabot.yml) | GitHub Actions, Dependabot | Runs every test on Python 3.10 and 3.13 for each pull request and push to main | Required to pass before merging; read-only token; actions pinned to exact commits; runs stop after 15 minutes |
 
 ---
@@ -484,6 +484,7 @@ The same routine has been used on every task:
 | 44 | The test copy's files could not be mounted into the containers | Colima shares only the home folder with its virtual machine, not the temporary folder | Ran the test copy from a folder in the home folder; the server has no such limit |
 | 44 | The setup script stopped on a clean Ubuntu 24.04: "UID 1000 is not unique" | The image already has a user with that id, the one the containers run as | The deploy user takes any free id, and the logs folder is shared by both through its group |
 | 44 | A deploy user that already existed would not have been able to run Docker | The docker group was only given when the user was created | The script now adds the user to the group every time it runs |
+| 44 | The planned page repo would have been published outside adnsaudio.com | Only the website repo (`adns-space`) carries the domain; other repos are served at `antoniskol.github.io` | Checked before creating it; the box goes into the website's existing Market Trends page, and the deploy command copies its files there |
 
 ---
 
