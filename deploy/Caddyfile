@@ -1,0 +1,6 @@
+# Caddy gets and renews the HTTPS certificate for the API's address by itself.
+{$API_DOMAIN} {
+	encode gzip
+	reverse_proxy api:8000
+	header -Server
+}

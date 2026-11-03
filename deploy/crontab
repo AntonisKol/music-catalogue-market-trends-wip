@@ -1,0 +1,2 @@
+# Market Trends on the server, installed by deploy/setup-server.sh. The server's clock is UTC.
+0 3 * * * cd /srv/market-trends && sh deploy/nightly.sh >> logs/cron.log 2>&1
