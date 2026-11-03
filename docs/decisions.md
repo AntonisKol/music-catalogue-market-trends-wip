@@ -1664,6 +1664,112 @@ All nine were caught.
 
 ---
 
+## Task #38: Email sign-in and quotas per account
+
+*November 2026 · [issue #38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38)*
+
+**Goal.** Let anyone try the question box without an account, and give people who sign in a larger quota, without passwords and while keeping bots out. The invisible human check came first, in pull request #39.
+
+**Result.**
+- Sign-in with a one-time link sent by email, and a 30-day session.
+- Quotas: 3 questions a day without an account, and 10 an hour and 50 a day signed in. The whole site is capped at 1,000 a day.
+- The question box shows the questions left, offers sign-in when they run out, and has **Sign out** and **Delete my account**.
+- 49 new tests (382 in total), and the whole flow checked in a real browser.
+
+### Decision 1: How people sign in
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **A link by email, built here** | No password; the link proves the person can read that inbox | **Chosen** |
+| Passwords | Accounts with a password to remember | Rejected: passwords to store, reset and leak |
+| A sign-in service | A hosted provider such as Auth0 or Clerk | Rejected: another account and another script on the page for a small feature |
+
+**In plain words.** A hotel that slips a key card under your door instead of asking for a password. Only the email address is stored.
+
+### Decision 2: Which service sends the emails
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Resend** | An email API; DNS records let mail come from adnsaudio.com | **Chosen** |
+| Plain SMTP from a mailbox | The same settings as the nightly alerts | Rejected: low sending limits, and sign-in mail often lands in spam |
+| Amazon SES | Amazon's email service | Rejected for now: an AWS account and an approval step before it can email anyone |
+
+**In plain words.** Sign-in mail has to arrive within seconds and not in spam. A service built for that, sending from the site's own domain, is the reliable choice.
+
+### Decision 3: What the link in the email does
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| Sign in as soon as it is opened | One click | Rejected |
+| **Open a confirm page served by the API** | "Sign in as you@…" with one button; the button signs in | **Chosen** |
+| Open the question box, which confirms | The same button inside the page | Rejected: adds a sign-in step to the page's code |
+
+**In plain words.** Many work and school mail systems open every link in an email to check it for malware before the person sees it. If opening the link signed you in, that check would use up the one-time link, and those people could never sign in. A scanner opens pages but never presses buttons, so the button keeps the link for the person. The button also means nobody can sign you in to *their* account just by getting you to open a link.
+
+### Decision 4: How the API remembers someone is signed in
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **A sessions table** | The cookie holds a random token; the database holds its hash | **Chosen** |
+| A signed cookie only | The cookie carries the account, signed with a server secret | Rejected |
+
+**In plain words.** With a table, signing out or deleting the account ends the session at once, on every device. A signed cookie keeps working until it expires, even after sign-out, if someone has a copy. The cost is one small lookup per question.
+
+### In the code
+
+- **[`web/accounts.py`](../web/accounts.py):** creates links, checks them without using them up (for the confirm page), signs in, looks up sessions, signs out and deletes accounts.
+  - A link is marked used in the same statement that checks it, so two presses or two tabs cannot both sign in with one link.
+  - Every token is 32 random bytes and stored only as its SHA-256 hash.
+- **[`web/app.py`](../web/app.py):**
+  - `POST /api/sign-in`, `GET` and `POST /api/sign-in/confirm`, `GET /api/account`, `POST /api/sign-out` and `POST /api/account/delete`.
+  - Signed-in questions skip Turnstile and count against the account.
+  - The confirm form carries a random value that must match a `SameSite=Strict` cookie the confirm page set, so a form posted from another site is refused.
+  - The confirm page has a strict Content Security Policy, and no response passes the link on as a referrer.
+- **[`web/limits.py`](../web/limits.py):** one counting function for questions and sign-in requests. When the hour and the day are both used up, the day is reported, so the visitor isn't told to come back in an hour when they can't.
+- **[`web/mailer.py`](../web/mailer.py):** sends through Resend. On a laptop it can write links to the log instead.
+- **[`ingestion/create_limits_role.py`](../ingestion/create_limits_role.py):** creates `accounts`, `sign_in_tokens` and `sessions`, and lets the web login use only those and `question_counts`.
+- **[`widget/ask.js`](../widget/ask.js):** the account line, the sign-in form with a short privacy note, and requests sent with the cookie.
+
+### How we proved the tests work
+
+Sixteen bugs were planted:
+- a link that works twice;
+- links that never expire;
+- the confirm page using up the link;
+- tokens stored in plain text;
+- sessions that never expire;
+- sign-out leaving the session alive;
+- deletion leaving question counts behind;
+- no cross-site check on the confirm form;
+- signed-in visitors still asked for the human check;
+- anonymous visitors let through without it;
+- sign-in links sent without the human check;
+- no per-address limit on links;
+- the address shown unescaped on the confirm page;
+- a weaker session cookie;
+- deletion accepted without a JSON request;
+- signed-in questions counted against the visitor's address instead of the account.
+
+Fifteen were caught at once. The last survived: the tests checked the account's limit, but not which count it was taken from. A new test checks that a signed-in visitor's questions leave their address's count untouched, and it catches the bug.
+
+### Browser check
+
+The real API ran against a throwaway database, with a fake AI and the links written to a file. In a headless browser:
+1. The box showed "3 questions left today" and counted down.
+2. The fourth question offered sign-in and moved the focus to the email field.
+3. A separate browser opened the link first, as a mail scanner would. The person could still sign in with it afterwards, and was returned to the question box as "Signed in as listener@example.com · 10 questions left this hour".
+4. A signed-in question needed no human check.
+5. The used link then showed "This link can't be used".
+6. Sign-out returned to the anonymous view.
+
+The layout was also checked at phone width.
+
+### Still open
+
+- Going live needs the API on a subdomain of adnsaudio.com (hosting), a Resend key, and Resend's DNS records.
+
+---
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.

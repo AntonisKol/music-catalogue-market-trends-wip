@@ -11,6 +11,10 @@
 // shows the answer, the model that wrote it, any warning, and the rows the answer
 // is based on. Everything from the API is added to the page as text (textContent),
 // never as HTML, so nothing in an answer can run as code.
+//
+// Visitors get a few questions without an account. For more they sign in with an
+// emailed link; the API then keeps them signed in with a cookie the page cannot
+// read, sent along because every request uses credentials: "include".
 
 const MAX_QUESTION_LENGTH = 500;
 const REQUEST_TIMEOUT_MS = 90_000;
@@ -186,6 +190,14 @@ export function renderSources(sources) {
 
 // --- The question box ------------------------------------------------------------------
 
+// {hour: 2, day: 2} -> "2 questions left today"
+export function remainingText(remaining) {
+  if (!remaining) return "";
+  const left = Math.min(remaining.hour, remaining.day);
+  const when = remaining.hour < remaining.day ? "this hour" : "today";
+  return `${left} ${left === 1 ? "question" : "questions"} left ${when}`;
+}
+
 function errorMessage(status, body, retryAfter) {
   const message = body?.error?.message;
   if (status === 429 && retryAfter) {
@@ -229,11 +241,99 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     check,
     el("div", { class: "mt-ask-actions" }, button),
   );
-  root.replaceChildren(form, status, examples, output);
+
+  // The account line: questions left, and sign in or the signed-in address.
+  const account = el("div", { class: "mt-ask-account", hidden: "" });
+  const email = el("input", {
+    id: `${id}-email`, type: "email", name: "email", autocomplete: "email", required: "",
+    placeholder: "you@example.com", maxlength: "254",
+  });
+  const signInButton = el("button", { type: "submit", class: "mt-ask-submit" }, "Email me a link");
+  const signInStatus = el("p", { class: "mt-ask-status", role: "status", "aria-live": "polite" });
+  const signInForm = el("form", { class: "mt-ask-sign-in", novalidate: "", hidden: "" },
+    el("label", { for: email.id, class: "mt-ask-label" }, "Sign in for more questions"),
+    el("p", { class: "mt-ask-hint" }, "We email you a link that signs you in. No password."),
+    el("div", { class: "mt-ask-sign-in-row" }, email, signInButton),
+    signInStatus,
+    el("p", { class: "mt-ask-privacy" },
+      "We store only your email address and when you signed in, plus how many questions you asked "
+      + "in the last two days. Sign-in links work once, within 15 minutes. You can delete your account at any time."),
+  );
+  root.replaceChildren(form, account, signInForm, status, examples, output);
 
   let token = "";
   let widgetId = null;
   let busy = false;
+  let state = null;  // from GET /api/account
+
+  function request(path, options = {}) {
+    return fetchImpl(`${api}${path}`, { credentials: "include", ...options });
+  }
+
+  function postJson(path, body, signal) {
+    return request(path, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+    });
+  }
+
+  function link(text, onclick) {
+    return el("button", { type: "button", class: "mt-ask-link", onclick }, text);
+  }
+
+  function showSignIn() {
+    signInForm.hidden = false;
+    email.focus();
+  }
+
+  function renderAccount() {
+    if (!state) {
+      account.hidden = true;
+      return;
+    }
+    const left = el("span", {}, remainingText(state.remaining));
+    if (state.signed_in) {
+      signInForm.hidden = true;
+      account.replaceChildren(
+        el("span", {}, "Signed in as ", el("strong", {}, state.email)), " · ", left, " · ",
+        link("Sign out", signOut), " · ", link("Delete my account", deleteAccount),
+      );
+    } else {
+      account.replaceChildren(left, " · ", link("Sign in for more", showSignIn));
+    }
+    account.hidden = false;
+  }
+
+  async function loadAccount() {
+    try {
+      const response = await request("/api/account");
+      state = response.ok ? await response.json() : null;
+    } catch {
+      state = null;
+    }
+    renderAccount();
+  }
+
+  async function signOut() {
+    try {
+      await postJson("/api/sign-out", {});
+      showStatus("You are signed out.");
+    } catch {
+      showStatus("Could not reach the question service. Please try again.", "error");
+    }
+    await loadAccount();
+  }
+
+  async function deleteAccount() {
+    if (!window.confirm("Delete your account? Your email address and question counts are removed. This cannot be undone.")) return;
+    try {
+      const response = await postJson("/api/account/delete", {});
+      const body = await response.json().catch(() => null);
+      showStatus(response.ok ? "Your account has been deleted." : errorMessage(response.status, body), response.ok ? "" : "error");
+    } catch {
+      showStatus("Could not reach the question service. Please try again.", "error");
+    }
+    await loadAccount();
+  }
 
   function update() {
     counter.textContent = `${textarea.value.length} / ${MAX_QUESTION_LENGTH}`;
@@ -303,6 +403,44 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     heading.focus();
   }
 
+  signInForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (busy) return;
+    const address = email.value.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) {
+      signInStatus.textContent = "Please type a valid email address.";
+      signInStatus.className = "mt-ask-status mt-ask-status-error";
+      email.focus();
+      return;
+    }
+    busy = true;
+    signInButton.disabled = true;
+    signInStatus.className = "mt-ask-status";
+    signInStatus.textContent = "Sending…";
+    try {
+      if (!token && !(await waitForToken())) {
+        signInStatus.textContent = "The human check hasn't finished. If a check appears above the Ask button, please complete it, then try again.";
+        signInStatus.className = "mt-ask-status mt-ask-status-error";
+        return;
+      }
+      const response = await postJson("/api/sign-in", { email: address, captcha_token: token });
+      const body = await response.json().catch(() => null);
+      if (response.ok) {
+        signInStatus.textContent = `Check your inbox: a sign-in link is on its way to ${address}. It works once, within 15 minutes.`;
+      } else {
+        signInStatus.textContent = errorMessage(response.status, body, response.headers.get("Retry-After"));
+        signInStatus.className = "mt-ask-status mt-ask-status-error";
+      }
+    } catch {
+      signInStatus.textContent = "Could not reach the question service. Please check your connection and try again.";
+      signInStatus.className = "mt-ask-status mt-ask-status-error";
+    } finally {
+      busy = false;
+      signInButton.disabled = false;
+      resetCheck();
+    }
+  });
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (busy) return;
@@ -313,7 +451,8 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       return;
     }
     setBusy(true);
-    if (!token) {
+    // Signed-in visitors skip the human check; the API knows them by their cookie.
+    if (!token && !state?.signed_in) {
       showStatus("Checking you're not a bot…");
       if (!(await waitForToken())) {
         setBusy(false);
@@ -326,19 +465,23 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const response = await fetchImpl(`${api}/api/questions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, captcha_token: token }),
-        signal: controller.signal,
-      });
+      const response = await postJson("/api/questions", { question, captcha_token: token }, controller.signal);
       const body = await response.json().catch(() => null);
       if (!response.ok || !body || typeof body.answer !== "string") {
         showStatus(errorMessage(response.status, body, response.headers.get("Retry-After")), "error");
+        if (body?.error?.code === "visitor_limit_reached") showSignIn();
+        if (state && response.status === 429) {
+          state.remaining = { hour: 0, day: 0 };
+          renderAccount();
+        }
         return;
       }
       showStatus("");
       showAnswer(body);
+      if (state && body.remaining) {
+        state.remaining = body.remaining;
+        renderAccount();
+      }
     } catch (error) {
       showStatus(error?.name === "AbortError"
         ? "The answer took too long. Please try again."
@@ -350,7 +493,9 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     }
   });
 
-  return { form, textarea, button, status, output };
+  loadAccount();
+
+  return { form, textarea, button, status, output, account, signInForm, email };
 }
 
 if (typeof document !== "undefined") {

@@ -64,6 +64,7 @@ def test_a_question_is_answered_with_what_the_page_needs(client, fakes):
     assert response.status_code == 200
     assert response.get_json() == {
         "answer": ANSWER.text, "sources": ANSWER.sources, "warning": None, "model": "claude-haiku-5-5",
+        "remaining": {"hour": config.QUESTIONS_PER_VISITOR_HOUR - 1, "day": config.QUESTIONS_PER_VISITOR_DAY - 1},
     }
     assert fakes.questions == ["Cheapest Planet E record?"]
     assert fakes.tokens == [("good-token", config.TURNSTILE_SECRET_KEY, "203.0.113.7")]
@@ -84,7 +85,6 @@ def test_an_unverified_answer_carries_its_warning(client, fakes):
 @pytest.mark.parametrize("send, code", [
     ({"data": "not json", "content_type": "text/plain"}, "invalid_request"),
     ({"json": ["a", "list"]}, "invalid_request"),
-    ({"json": {"question": "Hi?"}}, "invalid_request"),
     ({"json": {"question": "Hi?", "captcha_token": "t", "model": "claude-opus-5-5"}}, "invalid_request"),
     ({"json": {"question": "   ", "captcha_token": "t"}}, "invalid_question"),
     ({"json": {"question": "x" * (MAX_QUESTION_LENGTH + 1), "captcha_token": "t"}}, "invalid_question"),
@@ -116,6 +116,15 @@ def test_a_failed_human_check_is_refused_and_not_counted(client, fakes, db):
     assert db.execute("SELECT count(*) FROM question_counts").fetchone() == (0,)
 
 
+def test_a_question_without_a_human_check_token_is_refused_when_not_signed_in(client, fakes, db):
+    response = client.post("/api/questions", json={"question": "Hi?"})
+
+    assert response.status_code == 403
+    assert response.get_json()["error"]["code"] == "captcha_failed"
+    assert fakes.tokens == [] and fakes.questions == []
+    assert db.execute("SELECT count(*) FROM question_counts").fetchone() == (0,)
+
+
 def test_an_unreachable_cloudflare_refuses_the_question(client, fakes):
     fakes.human = captcha.CaptchaUnavailable("timeout")
 
@@ -133,6 +142,7 @@ def test_a_visitor_over_the_hourly_limit_is_refused_before_the_question_service(
     response = ask(client)
 
     assert response.get_json()["error"]["code"] == "visitor_limit_reached"
+    assert "Sign in with your email" in response.get_json()["error"]["message"]
     assert response.headers["Retry-After"] == str(30 * 60 + 1)
     assert len(fakes.questions) == 2
     assert ask(client, ip="198.51.100.1").status_code == 200  # another visitor
@@ -234,6 +244,7 @@ def test_only_allowed_origins_may_call_from_the_browser(client, monkeypatch):
 
     assert allowed.headers["Access-Control-Allow-Origin"] == "https://adnsaudio.com"
     assert "POST" in allowed.headers["Access-Control-Allow-Methods"]
+    assert allowed.headers["Access-Control-Allow-Credentials"] == "true"
     assert "Access-Control-Allow-Origin" not in other.headers
 
 

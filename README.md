@@ -77,7 +77,8 @@ The tasks below are ordered so each step builds on working code from the previou
 
 - A question service: Claude Haiku 5.5 picks among the five query tools, our code runs them through the read-only login, and the answer comes back with the rows it is based on (see [Ask a question](#ask-a-question)).
 
-- A web API (`POST /api/questions`) in front of the question service, with a human check, limits per visitor and for the whole site, and JSON errors (see [Run the web API](#run-the-web-api)).
+- A web API (`POST /api/questions`) in front of the question service, with a human check, limits per visitor, per account and for the whole site, and JSON errors (see [Run the web API](#run-the-web-api)).
+- Email sign-in with one-time links, for a larger quota; no passwords, and accounts can be deleted (see [Email sign-in](#email-sign-in)).
 - A question box for adnsaudio.com: one JavaScript module and one stylesheet in [`widget/`](widget) (see [Add the question box to a page](#add-the-question-box-to-a-page)).
 
 - A nightly update of every tracked label, with a record of each run and an email alert on problems (see [Update the data every night](#update-the-data-every-night)). Prices are fetched every night; want, have and ratings once a week per release.
@@ -303,13 +304,13 @@ PY
 ## Run the web API
 
 The API is what the question page calls. Every question passes three guards before anything is sent to Claude:
-1. **A human check:** [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/). The page shows Turnstile's widget, which gives the visitor a one-time token, and the API confirms it with Cloudflare.
-2. **Per-visitor limits:** by default 5 questions an hour and 15 a day.
-3. **A site-wide daily limit:** by default 200.
+1. **A human check:** [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/). The page runs Turnstile invisibly, which gives the visitor a one-time token, and the API confirms it with Cloudflare. Signed-in visitors skip it.
+2. **Limits per visitor or account:** by default 3 questions a day without an account, and 10 an hour and 50 a day when signed in.
+3. **A site-wide daily limit:** by default 1,000, for everyone together.
 
 Visitors are counted by a keyed hash of their IP address, never the address itself, and counts are deleted after two days.
 
-Create the counter table and its login once per database. Like the reader, this login is separate: it may only read and change the counter table.
+Create the web API's tables (question counts, accounts, sign-in links, sessions) and its login once per database. Run it again after updating, to add tables introduced since. Like the reader, this login is separate: it may only read and change those four tables.
 
 ```bash
 python -m ingestion.create_limits_role
@@ -329,28 +330,50 @@ curl -s -X POST localhost:5050/api/questions -H 'Content-Type: application/json'
   -d '{"question": "Which is the cheapest Planet E record?", "captcha_token": "XXXX.DUMMY.TOKEN.XXXX"}'
 ```
 
-The response is `{"answer", "sources", "warning", "model"}`. Errors are `{"error": {"code", "message"}}`, and the message is safe to show a visitor:
+The response is `{"answer", "sources", "warning", "model", "remaining"}`, where `remaining` is `{"hour", "day"}`: the questions left. Errors are `{"error": {"code", "message"}}`, and the message is safe to show a visitor:
 
 | Status | Codes |
 | --- | --- |
-| 400 | `invalid_request`, `invalid_question` |
+| 400 | `invalid_request`, `invalid_question`, `invalid_email` |
+| 401 | `not_signed_in` |
 | 403 | `captcha_failed` |
 | 413 | the request is over 8 KB |
-| 429 | `visitor_limit_reached`, `site_limit_reached`, with a `Retry-After` header |
+| 429 | `visitor_limit_reached`, `account_limit_reached`, `site_limit_reached`, `sign_in_limit_reached`, with a `Retry-After` header |
 | 500 | `configuration`, `internal_error` |
-| 503 | `captcha_unavailable`, `busy`, `unavailable`, `database`, with `Retry-After` |
+| 503 | `captcha_unavailable`, `busy`, `unavailable`, `database`, `sign_in_unavailable`, with `Retry-After` where waiting helps |
 
 **Settings in `.env`:**
 - **Required:**
   - `TURNSTILE_SECRET_KEY`: your Turnstile site's secret. For development, Cloudflare's [test keys](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) work: `1x0000000000000000000000000000000AA` always passes and `2x0000000000000000000000000000000AA` always fails.
   - `VISITOR_HASH_SECRET`: a long random string. Keep it secret and stable, or the visitor counts restart.
-  - `POSTGRES_LIMITS_USER` and `POSTGRES_LIMITS_PASSWORD`: the counting login.
+  - `POSTGRES_LIMITS_USER` and `POSTGRES_LIMITS_PASSWORD`: the web API's login.
 - **Optional:**
-  - `QUESTIONS_PER_VISITOR_HOUR`, `QUESTIONS_PER_VISITOR_DAY` and `QUESTIONS_PER_SITE_DAY`: the limits.
+  - `QUESTIONS_PER_VISITOR_HOUR` and `QUESTIONS_PER_VISITOR_DAY` (without an account, default 3 and 3), `QUESTIONS_PER_ACCOUNT_HOUR` and `QUESTIONS_PER_ACCOUNT_DAY` (signed in, 10 and 50), and `QUESTIONS_PER_SITE_DAY` (1,000): the limits.
+  - The sign-in settings, below.
   - `ALLOWED_ORIGINS`: the web pages that may call the API from a browser, comma-separated, for example `https://adnsaudio.com`. Empty means same origin only.
   - `TRUSTED_PROXIES`: how many proxies in front of the API set `X-Forwarded-For`. Leave it at 0 unless there is one, or visitors could fake their address to dodge the limits.
 
 `GET /api/health` answers `{"status": "ok"}` for uptime checks.
+
+### Email sign-in
+
+Visitors who want more than the anonymous allowance sign in with a link sent by email. There are no passwords.
+1. The question box sends `POST /api/sign-in` with the address and a Turnstile token. The API emails a link that works once, within 15 minutes. The answer is the same for every address, so nobody can find out who has an account. Links are limited to 3 an hour per address and 5 an hour per visitor.
+2. The link opens a small page served by the API: "Sign in as you@…" and a **Sign in** button. Opening the link alone signs nobody in. Mail systems that check links before the person sees them (common with work and school email) therefore cannot use the link up.
+3. The button starts a session and returns to the question box (`SIGN_IN_RETURN_URL`). The session lasts 30 days, in a cookie that the page's JavaScript cannot read (`HttpOnly`), sent only over HTTPS (`Secure`) and only from adnsaudio.com's own pages (`SameSite=Strict`).
+
+`GET /api/account` tells the page whether someone is signed in and how many questions are left. `POST /api/sign-out` ends the session. `POST /api/account/delete` deletes the account, its sessions, its unused links and its question counts.
+
+**What is stored:** the email address, when the account was created and last signed in, and question counts for two days. Links and sessions are stored only as SHA-256 hashes, so a copy of the database cannot be used to sign in.
+
+**Sign-in settings in `.env`:**
+- `RESEND_API_KEY`: a key from [Resend](https://resend.com), which sends the emails. Add Resend's DNS records for adnsaudio.com so the emails arrive from the site's own domain and don't land in spam. Without a key, sign-in is switched off and the API says so.
+- `SIGN_IN_EMAIL_FROM`: the sender, by default `Market Trends <sign-in@adnsaudio.com>`.
+- `PUBLIC_API_URL`: the API's public address used in the links, for example `https://api.adnsaudio.com`.
+- `SIGN_IN_RETURN_URL`: where the confirm page goes afterwards, by default `https://adnsaudio.com/market-trends/`.
+- For trying it on a laptop only: `SIGN_IN_LOG_LINKS=true` writes the links to the API's log instead of emailing them, and `COOKIE_SECURE=false` lets the cookie work over plain http.
+
+The cookie works on the live site only if the API is on a subdomain of adnsaudio.com, such as `api.adnsaudio.com`, which hosting will set up.
 
 ## Add the question box to a page
 
@@ -375,14 +398,16 @@ What the box does:
 - disables the button while a question is answered, so a double click sends one question;
 - shows the answer, any warning, and "Show the data" with the rows behind it, opened automatically when there is a warning;
 - names the model that answered;
+- shows how many questions are left, offers sign-in when the anonymous allowance runs out, and shows the signed-in address with **Sign out** and **Delete my account**;
 - turns errors and limits into plain messages ("You can ask again in about 30 minutes").
 
 Answers are rendered from a small Markdown subset (paragraphs, bold, lists, tables) using text nodes only, so nothing in an answer can run as code.
 
-To try it locally, use two terminal windows. In the first, start the API on port 5050 with Cloudflare's test secret, which always passes, and allow the demo page to call it:
+To try it locally, use two terminal windows. In the first, start the API on port 5050 with Cloudflare's test secret, which always passes, and allow the demo page to call it. The sign-in settings make sign-in links appear in this window instead of being emailed:
 
 ```bash
 TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA ALLOWED_ORIGINS=http://127.0.0.1:8765 \
+  SIGN_IN_LOG_LINKS=true COOKIE_SECURE=false SIGN_IN_RETURN_URL=http://127.0.0.1:8765/ \
   flask --app web.app run --host 127.0.0.1 --port 5050
 ```
 
