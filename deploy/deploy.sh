@@ -42,7 +42,7 @@ deploy_server() {
 deploy_page() {
   [ -n "$SITE_KEY" ] || { echo "Set TURNSTILE_SITE_KEY in .env first." >&2; exit 1; }
   rev=$(git rev-parse --short HEAD)
-  [ -d "$PAGE_DIR/.git" ] || git clone "git@github.com:$PAGE_REPO.git" "$PAGE_DIR"
+  [ -d "$PAGE_DIR/.git" ] || git clone "https://github.com/$PAGE_REPO.git" "$PAGE_DIR"
   git -C "$PAGE_DIR" pull --ff-only --quiet
   cp widget/ask.js widget/ask.css "$PAGE_DIR/"
   # The local demo page, pointed at the live API and the real site key.
