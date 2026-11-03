@@ -1,0 +1,53 @@
+# The live setup on the server: the database, the web API and Caddy in front of it.
+# Run from the project folder, so the settings come from its .env:
+#   docker compose --env-file .env -f deploy/compose.yml up -d --build
+# The nightly update and the backups are started by cron (deploy/crontab).
+name: market-trends
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    # Only the database's own settings, not the API keys.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # No published port: only the API and the nightly update reach the database.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ../db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+
+  api:
+    build: ..
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      # Caddy is the one proxy in front of the API, so visitor addresses come from it.
+      TRUSTED_PROXIES: "1"
+    volumes:
+      - ../logs:/app/logs
+    depends_on:
+      - db
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN:-api.adnsaudio.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

@@ -1770,6 +1770,138 @@ The layout was also checked at phone width.
 
 ---
 
+## Task #44: Running it on a server
+
+*November 2026 · [issue #44](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/44)*
+
+**Goal.** Move the API, the database and the nightly update from a laptop to a server, so the question box on adnsaudio.com works around the clock. The history collected so far comes along, and losing the server must not lose it.
+
+**Result.**
+- A container image, a production Compose file, Caddy for HTTPS, and a setup script for a fresh Ubuntu 24.04 server.
+- A nightly backup kept 14 days on the server and on a Hetzner Storage Box, and a restore script.
+- One deploy command for the server and the page.
+- 8 new tests (390 in total). The whole setup was run on Docker on the Mac, and the setup script on a clean Ubuntu 24.04.
+- It goes live once the server, the Storage Box and the accounts exist (the owner's steps are in the README).
+
+### Decision 1: Where it runs
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **A small rented server** | A Linux server running the same Docker Compose setup as the Mac, with cron for the nightly run | **Chosen** |
+| A managed app platform | A service such as Fly.io or Render runs the API, a managed database and scheduled jobs | Rejected: every part set up again through that service's own tools |
+| The Mac, through a Cloudflare Tunnel | The Mac stays the server | Rejected: the site would work only while the Mac is awake and online |
+
+**In plain words.** The server runs exactly what has run on the Mac for weeks: the same containers and the same nightly command. Nothing has to be rebuilt for a new platform, and moving elsewhere later means copying the same files.
+
+### Decision 2: Which provider
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Hetzner** | German provider, servers in Nuremberg and Falkenstein | **Chosen** |
+| DigitalOcean | US provider with a Frankfurt region | Rejected |
+
+**In plain words.** The data, including the email addresses of people who sign in, stays in the EU with a provider under German law. The same provider offers the Storage Box used for the backups.
+
+### Decision 3: How HTTPS works
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Caddy on the server** | A small web server in front of the API that gets and renews its certificate by itself | **Chosen** |
+| Cloudflare's proxy | Cloudflare handles HTTPS and hides the server | Rejected: visitor addresses would then come from a Cloudflare header the API must trust, a second way to get the limits wrong |
+| Nginx with certbot | The classic pair, plus a renewal timer | Rejected: more configuration for the same result |
+
+**In plain words.** Caddy's whole configuration is four lines. It is the only container reachable from the internet. It passes each visitor's real address on to the API, which trusts exactly that one proxy, so the limits count real visitors. A test planted six fake addresses, and the sixth request was still refused.
+
+### Decision 4: Moving the data
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **Dump the Mac's database to the external drive, restore it on the server** | One copy of everything collected so far | **Chosen** |
+| A fresh import on the server | Start empty and fetch everything again | Rejected: the price history collected so far would stay behind |
+
+**In plain words.** Discogs only shows today's prices, never yesterday's, so each night already collected exists nowhere else. The dump on the external drive is also a copy held on neither machine.
+
+### Decision 5: How updates reach the server
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **One deploy command** | `sh deploy/deploy.sh` logs in, pulls `main`, rebuilds, adds new tables, checks the API answers, then publishes the page | **Chosen** |
+| Automatic on every merge | A GitHub Actions job deploys after CI passes | Rejected for now: a key to the server stored at GitHub, and every merge goes live at once |
+| By hand | SSH in and follow the README | Rejected: easy to forget a step, such as new tables after a merge |
+
+**In plain words.** A merge and going live stay two separate, deliberate steps, but the second is a single command that cannot skip anything.
+
+### Decision 6: Where the page lives
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **A new repo `market-trends` on GitHub Pages** | Just the page files, at `adnsaudio.com/market-trends/`, like the site's other projects | **Chosen** |
+| GitHub Pages from this repo | The address would carry this repo's long name | Rejected |
+| Served by Caddy on the server | Everything in one place | Rejected: the page would live outside the adnsaudio.com site |
+
+**In plain words.** The page is plain files, so it belongs with the rest of the site. The deploy command fills in the live API address and the public site key, so the repo never needs editing by hand.
+
+### Decision 7: Backups
+
+| Option | What it means | Verdict |
+| --- | --- | --- |
+| **A nightly dump kept 14 days, copied to a Storage Box** | Separate storage at the same provider | **Chosen** |
+| A nightly dump, pulled down to the Mac | Copied each morning when the Mac is awake | Rejected: only as fresh as the Mac's last wake-up |
+| A nightly dump on the server only | Protects against mistakes | Rejected: lost together with the server |
+| The provider's whole-server snapshots | One switch | Rejected: restoring rolls back the whole server, and a copy taken mid-write may need repair |
+
+**In plain words.** Releases can be fetched from Discogs again, but the nightly price and want/have history cannot. That history is what "market trends" means, so a copy has to survive the server. A dump is only kept once it has been read back successfully, and a failed backup emails an alert.
+
+### In the code
+
+- **[`Dockerfile`](../Dockerfile):** one image for the API and the nightly update. It runs as an ordinary user, and `.dockerignore` keeps `.env` out.
+- **[`deploy/compose.yml`](../deploy/compose.yml):** the database, the API and Caddy. Only Caddy publishes ports. The database container gets only its own three settings, not the API keys.
+- **[`deploy/setup-server.sh`](../deploy/setup-server.sh):**
+  - installs Docker, the firewall (SSH, 80 and 443) and automatic security updates;
+  - creates the `deploy` user, then turns off password and root logins;
+  - clones the project and installs the cron job;
+  - creates the key for the Storage Box.
+- **[`deploy/nightly.sh`](../deploy/nightly.sh), [`backup.sh`](../deploy/backup.sh), [`restore.sh`](../deploy/restore.sh):**
+  - cron runs the nightly update, then the backup;
+  - a restore asks for `yes`, loads the dump in one transaction, then sets up the reader and web logins again.
+- **[`deploy/deploy.sh`](../deploy/deploy.sh):** the server, then the page.
+- **[`deploy/server.env.example`](../deploy/server.env.example):** every setting the server needs, without values.
+- **[`tests/test_deploy.py`](../tests/test_deploy.py):** checks that only Caddy is reachable, the database gets no API keys, one proxy is trusted, `.env` stays out of the image, the image does not run as root, cron runs the backup, and the template holds no values.
+
+### How we proved it works
+
+Eight bugs were planted:
+- the database port published;
+- the whole `.env` given to the database;
+- two proxies trusted;
+- `.env` no longer ignored;
+- the whole folder copied into the image;
+- the image running as root;
+- the backup dropped from the nightly job;
+- a key filled in the settings template.
+
+All eight were caught.
+
+The whole setup then ran on Docker on the Mac, with made-up settings:
+- HTTPS through Caddy, with CORS for adnsaudio.com;
+- no database port reachable from outside;
+- the limits holding against faked visitor addresses;
+- a backup copied to a stand-in for the Storage Box;
+- dumps older than 14 days deleted;
+- a restore bringing back a deleted row, with the reader login still read-only afterwards;
+- the nightly job followed by the backup;
+- an alert when the backup copy failed;
+- the page published to a stand-in repo, and left alone on a second run.
+
+The setup script ran twice on a clean Ubuntu 24.04 container (firewall and services stubbed, since a container has neither). This found two problems, both fixed: the image already has a user with id 1000, and a `deploy` user that already existed wasn't added to the docker group.
+
+### Still open
+
+- The owner creates the server, the Storage Box, the DNS records, the Resend domain and key, the live Turnstile widget and the `market-trends` repo, then follows the README's first-setup steps.
+- Once the server runs, the Mac's nightly job is removed.
+
+---
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.
@@ -1797,6 +1929,8 @@ The layout was also checked at phone width.
 - **Denial of wallet**: running up someone's cloud or AI bill by sending many expensive requests.
 - **JSON schema**: a machine-readable description of what arguments a tool accepts, used to explain the tools to the AI.
 - **GitHub Actions / workflow**: GitHub's built-in CI; a workflow file says when to run which steps on GitHub's machines.
+- **Reverse proxy**: a server that sits in front of an app and passes requests on to it; Caddy does this here, and adds HTTPS.
+- **Dump**: a file holding a database's tables and rows, which can be loaded into another database.
 - **Required check**: a rule that a pull request can only be merged when a named CI job has passed.
 - **Pinning**: referring to an exact version of a dependency, so it cannot change unnoticed.
 - **Tool use**: a model asking the program to run one of a fixed set of functions and reading the result, instead of answering from memory.

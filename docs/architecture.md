@@ -28,6 +28,13 @@ flowchart TB
         AN["Anthropic API, Claude<br/>Reads a question and picks<br/>which query tool to call"]
         CF["Cloudflare Turnstile<br/>Confirms the visitor is a person"]
         RS["Resend<br/>Sends the sign-in emails<br/>from adnsaudio.com"]
+        GP["GitHub Pages<br/>Serves adnsaudio.com/market-trends/<br/>from the market-trends repo"]
+        SB["Hetzner Storage Box<br/>Keeps a copy of the last<br/>14 nightly backups"]
+    end
+
+    subgraph SRV["Server, issue 44: a Hetzner server running deploy/compose.yml"]
+        CAD["Caddy<br/>Code: deploy/Caddyfile<br/>How: HTTPS for api.adnsaudio.com,<br/>certificate renewed by itself<br/>Achieved: the only open door; the<br/>database has no public port"]
+        BK["Backups<br/>Code: deploy/backup.sh, restore.sh<br/>How: nightly pg_dump after the update,<br/>kept 14 days, copied off the server<br/>Achieved: the price history survives<br/>losing the server"]
     end
 
     subgraph ING["Ingestion: writes data"]
@@ -77,18 +84,24 @@ flowchart TB
     API <-->|"verify token"| CF
     API <-->|"web login, only these tables"| LIM
     API -->|"sign-in link"| RS
-    API -->|"JSON answer"| UI
+    API -->|"JSON answer"| CAD
+    CAD -->|"HTTPS"| UI
+    GP -->|"the page"| UI
     USER -->|"types a question"| UI
+    SNAP -.->|"nightly dump"| BK
+    BK -->|"rsync over SSH"| SB
 
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200,stroke-dasharray: 4 3
-    class CLI,CL,MAP,REP,CAT,SNAP,RD,TL,QS,API,LIM,CF,RS,UI,TRK built
+    class CLI,CL,MAP,REP,CAT,SNAP,RD,TL,QS,API,LIM,CF,RS,UI,TRK,CAD,BK,GP,SB built
     class SCH built
     class SHOP,LST support
 ```
 
 Two separate logins protect the data. The **writer** (used only by ingestion) can change tables. The **reader** (used by everything a visitor can reach) can only read, and the database itself enforces that. The Discogs token, the Anthropic key and both passwords stay on the server and never reach the browser.
+
+On the server (issue 44) the database, the API and Caddy each run in their own container. Only Caddy is reachable from the internet, on ports 80 and 443. The page itself is plain files on GitHub Pages, like the rest of adnsaudio.com.
 
 ---
 
@@ -115,6 +128,7 @@ flowchart TD
     F24["Issue 24: Tracked techno shops<br/>How: chosen shops' Discogs inventories,<br/>city recorded by us, a sixth query tool<br/>Will achieve: questions by seller city,<br/>such as records sold from Berlin"]
     F27["Issue 27: Fixes from a code review<br/>Code: pipeline.py, ingest_label.py, tools.py<br/>How: one run at a time, credit-only and<br/>deleted releases handled, vinyl-only answers<br/>Achieved: the code does what the docs promise"]
     F38["Issue 38: Email sign-in and quotas<br/>Code: web/accounts.py, mailer.py, widget/<br/>How: one-time links by Resend, a confirm page,<br/>a sessions table, counts per account<br/>Achieved: 3 questions a day to try, 10 an hour<br/>and 50 a day signed in, no passwords,<br/>accounts deletable"]
+    F44["Issue 44: Hosting<br/>Code: Dockerfile, deploy/<br/>How: a Hetzner server with Docker Compose,<br/>Caddy for HTTPS, cron for the nightly update,<br/>backups to a Storage Box, one deploy command,<br/>the page on GitHub Pages<br/>Achieved: everything ready to run online;<br/>live once the server and accounts exist"]
     F18["Issues 18 and 25: Documentation<br/>Code: README, decisions.md, this page<br/>Achieved: decisions and architecture<br/>written down, updated with every step"]
 
     S0 --> S1
@@ -133,6 +147,8 @@ flowchart TD
     S10 --> S11
     S9 --> F38
     S10 --> F38
+    S5 --> F44
+    F38 --> F44
     S2 --> F19
     S4 --> F24
     S6 --> F24
@@ -142,7 +158,7 @@ flowchart TD
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
-    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,F27,F19,F41,F38 built
+    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,F27,F19,F41,F38,F44 built
     class S11 planned
     class F24,F18 support
 ```
@@ -164,6 +180,7 @@ flowchart TD
 | – | [27](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/27) Review fixes | Built | Malformed data, deleted and credit-only releases handled; one run at a time; vinyl-only answers | Python, PostgreSQL advisory lock |
 | – | [38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38) Email sign-in | Built | Sign-in by one-time email link and confirm page; quotas per account; account deletion | Flask, PostgreSQL, Resend |
 | – | [41](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/41) Weekly details | Built | Prices every night, want/have/ratings once a week per release, spread over the week; about half the requests a night | Python, PostgreSQL |
+| – | [44](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/44) Hosting | Built, not yet live | The API, database and nightly update on a server, HTTPS by Caddy, nightly backups off the server, one deploy command, the page on adnsaudio.com | Docker Compose, Caddy, cron, rsync, GitHub Pages |
 | – | [19](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/19) CI | Built | Every pull request runs all tests, including the database ones, and must pass to merge | GitHub Actions, Dependabot |
 | – | [24](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/24) Tracked shops | Planned | Questions by seller city, e.g. Berlin | Discogs inventory API |
 | – | [18](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/18), [25](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/25) Documentation | Ongoing | README, decisions and this page kept current | Markdown, Mermaid |
@@ -391,13 +408,16 @@ sequenceDiagram
 | Label pipeline | [`ingestion/pipeline.py`](../ingestion/pipeline.py), [`ingest_label.py`](../ingestion/ingest_label.py) | Python CLI, logging | Ingests every vinyl release of a label | One run at a time (advisory lock); duplicates dropped; credit-only releases skipped; deleted releases listed as gone; failures, malformed data included, listed and exit 1; commit per release; stops if the label list cannot be fetched or the database connection is lost |
 | Reader login | [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) | PostgreSQL roles | Creates the SELECT-only login | Read-only sessions and a 5 s limit set on the role; future tables readable, never writable; no temporary tables |
 | Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped; vinyl only; timeouts reported as a readable reason |
-| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 382 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock; a `--live` before-release test with the real Claude and an AI judge | Database tests skip without Docker on a laptop, fail in CI; live tests never run without `--live` |
+| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 390 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock; a `--live` before-release test with the real Claude and an AI judge | Database tests skip without Docker on a laptop, fail in CI; live tests never run without `--live` |
 | Question service | [`queries/questions.py`](../queries/questions.py) | Anthropic SDK tool runner, Claude Haiku 5.5 | Sends the question and tool descriptions to Claude, runs the tools it asks for, returns the answer with its sources | Claude never sees SQL or the database; refused arguments go back as errors; a database failure stops the run; every error becomes a visitor-safe `QuestionError`; instructions and tools cached |
 | Web API | [`web/app.py`](../web/app.py), [`limits.py`](../web/limits.py), [`captcha.py`](../web/captcha.py), [`create_limits_role.py`](../ingestion/create_limits_role.py) | Flask, gunicorn, Cloudflare Turnstile | `POST /api/questions`: checks the request, the human check and the limits, then asks the question service | Fails closed; limits counted in one transaction by a login that can only touch its four tables; visitors stored as a keyed hash, deleted after two days; forwarded addresses trusted only behind a configured proxy; usage never sent; 8 KB body limit; CORS only for listed origins |
 | Email sign-in | [`web/accounts.py`](../web/accounts.py), [`mailer.py`](../web/mailer.py) | PostgreSQL, Resend | One-time links, the confirm page, sessions, sign-out and account deletion | Tokens are 32 random bytes, stored only as hashes; links work once within 15 minutes; opening a link uses nothing; confirm form checked against a `SameSite=Strict` cookie; session cookie `HttpOnly`, `Secure`, `SameSite=Strict`; links limited per address and visitor; the same answer for every address; strict Content Security Policy and no referrer |
 | Question box | [`widget/ask.js`](../widget/ask.js), [`ask.css`](../widget/ask.css), [`index.html`](../widget/index.html) | HTML, CSS, JavaScript, Cloudflare Turnstile | The form, example questions, states, answer, warning, model and data table | Answers drawn from text nodes only; no double submits; token reset after each question; no secrets in the page; 90-second request timeout |
 | Nightly update | [`ingestion/nightly.py`](../ingestion/nightly.py), [`track_labels.py`](../ingestion/track_labels.py), [`runs.py`](../ingestion/runs.py), [`alerts.py`](../ingestion/alerts.py), [`ops/`](../ops) | launchd, cron, SMTP | Updates every active tracked label each night (prices nightly, details weekly per release) and records each run and label | Shares the ingestion lock; interrupted runs marked failed; missed nights flagged; one label's failure doesn't stop the rest; rotating log; alerts never break the run |
 | Schema command | [`ingestion/apply_schema.py`](../ingestion/apply_schema.py) | PostgreSQL | Adds tables introduced since a database was created | Every statement is `CREATE TABLE IF NOT EXISTS`; existing data untouched |
+| Server setup | [`Dockerfile`](../Dockerfile), [`deploy/compose.yml`](../deploy/compose.yml), [`Caddyfile`](../deploy/Caddyfile), [`setup-server.sh`](../deploy/setup-server.sh), [`crontab`](../deploy/crontab), [`nightly.sh`](../deploy/nightly.sh) | Docker Compose, Caddy, cron, Ubuntu 24.04 | Runs the database, the API under gunicorn and Caddy; cron starts the nightly update at 03:00 UTC, then the backup | Only Caddy publishes ports; the database container gets only its own settings; `.env` never in the image; containers run as an ordinary user; firewall open for SSH, 80 and 443 only; SSH by key only, no root login; automatic security updates; tests check these |
+| Backups | [`deploy/backup.sh`](../deploy/backup.sh), [`restore.sh`](../deploy/restore.sh) | pg_dump, rsync over SSH | A dump after every nightly update, kept 14 days on the server and on a Storage Box; restoring also sets up the logins again | A dump is checked before it is kept; a half-written dump is never kept; a failed backup sends an alert; restoring asks for "yes" and runs in one transaction |
+| Deploy | [`deploy/deploy.sh`](../deploy/deploy.sh) | SSH, git, GitHub Pages | Updates the server from `main`, adds new tables, checks the API answers, then publishes the page | Pulls only fast-forward; the page gets the live API address and site key, never a secret |
 | CI | [`.github/workflows/tests.yml`](../.github/workflows/tests.yml), [`dependabot.yml`](../.github/dependabot.yml) | GitHub Actions, Dependabot | Runs every test on Python 3.10 and 3.13 for each pull request and push to main | Required to pass before merging; read-only token; actions pinned to exact commits; runs stop after 15 minutes |
 
 ---
@@ -461,6 +481,9 @@ The same routine has been used on every task:
 | 10 | A planted bug (stop after the first failing label) survived | Labels run in name order, and the test's failing label happened to sort last | The failing label now sorts first; the bug is caught |
 | 10 | Existing databases would not get the new tables | Docker applies `db/schema.sql` only when a database is first created | Every statement became `CREATE TABLE IF NOT EXISTS`, and `ingestion.apply_schema` applies it to an existing database |
 | Setup | Commands could not start on a new machine | `.env` lacked most settings, and an appended line was glued onto the previous one | Added the settings and split the glued line, without displaying any values |
+| 44 | The test copy's files could not be mounted into the containers | Colima shares only the home folder with its virtual machine, not the temporary folder | Ran the test copy from a folder in the home folder; the server has no such limit |
+| 44 | The setup script stopped on a clean Ubuntu 24.04: "UID 1000 is not unique" | The image already has a user with that id, the one the containers run as | The deploy user takes any free id, and the logs folder is shared by both through its group |
+| 44 | A deploy user that already existed would not have been able to run Docker | The docker group was only given when the user was created | The script now adds the user to the group every time it runs |
 
 ---
 
