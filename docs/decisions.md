@@ -1779,7 +1779,7 @@ The layout was also checked at phone width.
 **Result.**
 - A container image, a production Compose file, Caddy for HTTPS, and a setup script for a fresh Ubuntu 24.04 server.
 - A nightly backup kept 14 days on the server and on a Hetzner Storage Box, and a restore script.
-- One deploy command for the server and the page.
+- One deploy command for the server and the question box on the website.
 - 8 new tests (390 in total). The whole setup was run on Docker on the Mac, and the setup script on a clean Ubuntu 24.04.
 - It goes live once the server, the Storage Box and the accounts exist (the owner's steps are in the README).
 
@@ -1835,11 +1835,12 @@ The layout was also checked at phone width.
 
 | Option | What it means | Verdict |
 | --- | --- | --- |
-| **A new repo `market-trends` on GitHub Pages** | Just the page files, at `adnsaudio.com/market-trends/`, like the site's other projects | **Chosen** |
-| GitHub Pages from this repo | The address would carry this repo's long name | Rejected |
+| **The website's own Market Trends page, filled by the deploy command** | `adns-space/market-trends/` gets the question box once; after that `deploy.sh` copies `ask.js` and `ask.css` there | **Chosen** |
+| The same, copied by GitHub Actions on every merge | How Techno Vinyls publishes, with a deploy key | Rejected: the page could change before the server has the matching API |
+| A separate repo with its own GitHub Pages | Its own site | Rejected: only the `adns-space` repo carries the adnsaudio.com domain, so the page would be on `antoniskol.github.io`. The sign-in cookie is only sent from adnsaudio.com's own pages, so signing in would not work there |
 | Served by Caddy on the server | Everything in one place | Rejected: the page would live outside the adnsaudio.com site |
 
-**In plain words.** The page is plain files, so it belongs with the rest of the site. The deploy command fills in the live API address and the public site key, so the repo never needs editing by hand.
+**In plain words.** The page already exists on the site, with its header, navigation and footer, so the question box goes into it. The page holds the live API address and the public site key. Only the box's two files change with new versions, and they go out with the same command as the server, so the two stay in step.
 
 ### Decision 7: Backups
 
@@ -1897,7 +1898,7 @@ The setup script ran twice on a clean Ubuntu 24.04 container (firewall and servi
 
 ### Still open
 
-- The owner creates the server, the Storage Box, the DNS records, the Resend domain and key, the live Turnstile widget and the `market-trends` repo, then follows the README's first-setup steps.
+- The owner creates the server, the Storage Box, the DNS records, the Resend domain and key, and the live Turnstile widget, then follows the README's first-setup steps.
 - Once the server runs, the Mac's nightly job is removed.
 
 ---
