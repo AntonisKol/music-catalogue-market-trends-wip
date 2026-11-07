@@ -404,7 +404,7 @@ What the box does:
 - shows how many questions are left, offers sign-up when the anonymous allowance runs out, and shows the signed-in address with a **Verified** badge, **Sign out** and **Delete my account**;
 - turns errors and limits into plain messages ("You can ask again in about 30 minutes").
 
-After signing up or in, it asks the browser to save the password where the browser allows that (Chrome and Edge). It says where questions go, and links to the site's privacy page at `/privacy/`.
+After signing up or in, it asks the browser to save the password where the browser allows that (Chrome and Edge), and remembers in that browser that the visitor has an account, so the form opens on **Sign in** next time and offers the saved password. It says where questions go, and links to the site's privacy page at `/privacy/`.
 
 Answers are rendered from a small Markdown subset (paragraphs, bold, italic, lists, tables) using text nodes only, so nothing in an answer can run as code.
 

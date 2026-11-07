@@ -19,6 +19,8 @@
 
 const MAX_QUESTION_LENGTH = 500;
 const MIN_PASSWORD_LENGTH = 12;
+// Remembered in this browser only, so a returning visitor sees the sign-in form first.
+const HAS_ACCOUNT_KEY = "mt-ask-has-account";
 const REQUEST_TIMEOUT_MS = 90_000;
 // The human check runs invisibly; a question asked before it has finished waits this long.
 const CHECK_WAIT_MS = 8_000;
@@ -342,11 +344,44 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       link(text, () => { setMode(target); email.focus(); }),
     ]);
     signInLinks.replaceChildren(...links);
+    if (name === "signIn" && !signInForm.hidden) fillSavedPassword();
+  }
+
+  function remembersAccount() {
+    try {
+      return window.localStorage.getItem(HAS_ACCOUNT_KEY) === "yes";
+    } catch {
+      return false;
+    }
+  }
+
+  function rememberAccount() {
+    try {
+      window.localStorage.setItem(HAS_ACCOUNT_KEY, "yes");
+    } catch {
+      // Private windows may refuse; the form then opens on sign-up.
+    }
+  }
+
+  // The form appears after a click, so the browser doesn't fill it by itself. Asking
+  // for a saved password lets the browser offer it (Chrome and Edge).
+  function fillSavedPassword() {
+    try {
+      if (!window.PasswordCredential || !navigator.credentials?.get || email.value || password.value) return;
+      navigator.credentials.get({ password: true, mediation: "optional" }).then((credential) => {
+        if (credential?.type !== "password" || mode !== "signIn" || email.value || password.value) return;
+        email.value = credential.id;
+        password.value = credential.password;
+      }).catch(() => {});
+    } catch {
+      // Filling is a convenience; typing still works.
+    }
   }
 
   function showSignIn() {
-    setMode("signUp");
+    setMode(remembersAccount() ? "signIn" : "signUp");
     signInForm.hidden = false;
+    if (mode === "signIn") fillSavedPassword();
     email.focus();
   }
 
@@ -535,7 +570,10 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
         showAccountProblem(errorMessage(response.status, body, response.headers.get("Retry-After")));
         return;
       }
-      if (settings.autocomplete) offerToSavePassword(address, typed);
+      if (settings.autocomplete) {
+        offerToSavePassword(address, typed);
+        rememberAccount();
+      }
       if (mode === "signIn") {
         signInStatus.textContent = "";
         showStatus("You are signed in.");
@@ -611,6 +649,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   if (arrival.has("verified")) showStatus("Your email is confirmed. You are signed in.");
   if (arrival.has("password_changed")) showStatus("Your password is changed. You are signed in.");
   if (arrival.has("verified") || arrival.has("password_changed")) {
+    rememberAccount();
     window.history.replaceState(null, "", window.location.pathname);
   }
 
