@@ -175,7 +175,7 @@ def limits_db(db, limits_role, postgres_url, monkeypatch):
 
     from web import config
 
-    db.execute("TRUNCATE question_counts, sessions, accounts RESTART IDENTITY")
+    db.execute("TRUNCATE question_counts, email_tokens, sessions, accounts RESTART IDENTITY")
     db.commit()
     info = conninfo_to_dict(postgres_url)
     monkeypatch.setattr(config, "POSTGRES_HOST", info["host"])
