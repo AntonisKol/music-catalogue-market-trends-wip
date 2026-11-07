@@ -11,6 +11,12 @@ question service, so nothing reaches the Anthropic API before every guard has
 passed. Errors come back as {"error": {"code", "message"}} with a fitting HTTP
 status and never contain secrets or internal details; those go to the log.
 
+GET /api/labels returns {"labels": [...]}, the labels the site follows, for the list
+on the page.
+
+Each request is written to the access log with a keyed hash of the visitor's
+address, never the address, so abuse can be spotted without keeping addresses.
+
 Sign-in with a username and password (see web/accounts.py). Accounts are created
 only with web/manage_accounts.py, so there is no way to register here:
     POST /api/sign-in            {"username", "password", "captcha_token"}: starts a session
@@ -19,6 +25,7 @@ only with web/manage_accounts.py, so there is no way to register here:
     POST /api/account/delete     deletes the account and everything stored for it
 """
 import logging
+import sys
 from datetime import datetime, timezone
 
 import psycopg
@@ -27,10 +34,16 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from queries.labels import tracked_label_names
 from queries.questions import MAX_QUESTION_LENGTH, QuestionError, answer_question
 from web import accounts, captcha, config, limits
 
 log = logging.getLogger(__name__)
+access_log = logging.getLogger("web.access")
+
+# How long browsers may reuse the list of labels, which changes rarely.
+LABELS_CACHE_SECONDS = 300
+LOGGED_TEXT_LENGTH = 200
 
 MAX_REQUEST_BYTES = 8 * 1024
 
@@ -72,9 +85,24 @@ def error(code: str, message: str, status: int, retry_after: int = None):
     return response
 
 
+def for_the_log(text: str) -> str:
+    """Visitors choose the path and the browser name, so they can't be allowed to fake a log line."""
+    return text[:LOGGED_TEXT_LENGTH].encode("unicode_escape").decode("ascii")
+
+
+def set_up_access_log() -> None:
+    if access_log.handlers:
+        return
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    access_log.addHandler(handler)
+    access_log.setLevel(logging.INFO)
+
+
 def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_limits=limits.connect_limits,
-               now=lambda: datetime.now(timezone.utc)) -> Flask:
+               now=lambda: datetime.now(timezone.utc), list_labels=tracked_label_names) -> Flask:
     """The app. The arguments exist so tests can replace the outside services."""
+    set_up_access_log()
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
     if config.TRUSTED_PROXIES:
@@ -227,6 +255,16 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
             return database_down(problem)
         return without_session(jsonify({"status": "deleted"}))
 
+    @app.get("/api/labels")
+    def labels():
+        try:
+            names = list_labels()
+        except psycopg.Error as problem:
+            return database_down(problem)
+        response = jsonify({"labels": names})
+        response.headers["Cache-Control"] = f"public, max-age={LABELS_CACHE_SECONDS}"
+        return response
+
     @app.get("/api/health")
     def health():
         return jsonify({"status": "ok"})
@@ -252,9 +290,17 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
             response.headers["Access-Control-Allow-Credentials"] = "true"
             response.headers["Access-Control-Max-Age"] = "600"
         response.headers["Vary"] = "Origin"
-        response.headers["Cache-Control"] = "no-store"
+        response.headers.setdefault("Cache-Control", "no-store")
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    @app.after_request
+    def write_access_log(response):
+        # The path only: a query string could hold anything. The same hash as the question counts.
+        visitor = limits.visitor_id(visitor_ip(), config.VISITOR_HASH_SECRET)
+        access_log.info("%s %s %s %s %s", visitor, request.method, for_the_log(request.path), response.status_code,
+                        for_the_log(request.headers.get("User-Agent", "-")))
         return response
 
     return app

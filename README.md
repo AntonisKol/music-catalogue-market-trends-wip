@@ -344,6 +344,8 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 
 `GET /api/health` answers `{"status": "ok"}` for uptime checks.
 
+`GET /api/labels` answers `{"labels": [...]}`, the names of the active tracked labels in alphabetical order, without the numbers Discogs adds to tell labels apart. Browsers may reuse the answer for 5 minutes.
+
 ### Signing in
 
 Visitors who want more than the anonymous allowance sign in with a username and password. Nobody can register from the web: you create each account with a command, and a forgotten password is reset the same way.
@@ -389,6 +391,7 @@ To put it on a page, copy the two files next to it and add:
 The page's address must be in the API's `ALLOWED_ORIGINS`. The Turnstile *site* key is public and belongs in the page. Its *secret* key stays in the API's `.env`.
 
 What the box does:
+- lists the labels the site tracks, read live from the API, and leaves the list out if it can't be loaded;
 - shows example questions and a character count up to 500. The human check is invisible: Cloudflare shows its box only if it is unsure about a visitor;
 - disables the button while a question is answered, so a double click sends one question;
 - shows the answer, any warning, and "Show the data" with the rows behind it, opened automatically when there is a warning;
@@ -464,6 +467,14 @@ The command logs in as `deploy` and pulls `main`, then rebuilds and restarts the
 
 - **Nightly runs:** `ssh deploy@<server-ip> 'cd /srv/market-trends && docker compose --env-file .env -f deploy/compose.yml run --rm -T api python -m ingestion.runs'`. The logs are in `/srv/market-trends/logs/`: `nightly.log` for the update, `cron.log` for the backup.
 - **Backups:** each night [`deploy/backup.sh`](deploy/backup.sh) writes `backups/market-trends-<date>.dump`. It checks the dump can be read, deletes dumps older than 14 days, and copies the folder to the Storage Box named by `BACKUP_TARGET`. If anything fails, it says so in `logs/cron.log`, and nothing is sent anywhere. Run it by hand with `sh deploy/backup.sh`.
+- **Spotting abuse:** the API's log has one line per request: the time, a keyed hash of the visitor's address (the same hash as the question limits), the method, the path, the status and the browser name. It never holds the address. Container logs are limited to three files of 10 MB each, and the oldest is deleted. From `/srv/market-trends`, the busiest visitors are:
+  ```bash
+  docker compose --env-file .env -f deploy/compose.yml logs --no-log-prefix api | awk '{print $3}' | sort | uniq -c | sort -rn | head
+  ```
+  To check whether one address is in the log, work out its hash and search for that:
+  ```bash
+  docker compose --env-file .env -f deploy/compose.yml run --rm -T api python -c 'from web import config, limits; print(limits.visitor_id("203.0.113.7", config.VISITOR_HASH_SECRET))'
+  ```
 - **Restoring** a backup works like moving the data: copy the dump into `backups/` (from the Storage Box if the server was lost) and run `sh deploy/restore.sh <file>`.
 - **A lost server** can be rebuilt with the first-setup steps above. Restore the newest dump from the Storage Box instead of the Mac's.
 
