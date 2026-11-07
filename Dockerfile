@@ -18,4 +18,4 @@ RUN useradd --create-home --uid 1000 app && mkdir logs && chown app logs
 USER app
 
 EXPOSE 8000
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120", "--access-logfile", "-", "web.app:create_app()"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120", "web.app:create_app()"]

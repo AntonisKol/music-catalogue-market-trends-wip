@@ -94,3 +94,11 @@ def test_a_backup_removes_what_a_failed_run_left_behind_before_copying(tmp_path)
     copied = (tmp_path / "copied.txt").read_text().split()
     assert len(copied) == 1 and copied[0].endswith(".dump")
     assert not list((tmp_path / "backups").glob("*.partial"))
+
+
+def test_the_server_never_logs_addresses_and_limits_its_logs():
+    # Gunicorn's own access log would hold every visitor's address; web/app.py writes a hashed one.
+    assert "access-logfile" not in (ROOT / "Dockerfile").read_text()
+    for name, service in SERVICES.items():
+        assert service["logging"]["options"]["max-size"], name
+        assert service["logging"]["options"]["max-file"], name

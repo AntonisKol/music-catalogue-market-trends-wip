@@ -1921,6 +1921,23 @@ The project no longer sends or stores email. Setting up a mail provider added a 
 
 **Moving an existing database.** `create_limits_role` drops the old email tables, and any accounts in them, because they have no passwords and could not be used. The deploy and restore scripts already run it, so a dump from before this change loses its email addresses when restored.
 
+## Task #48: The label list and logs without addresses
+
+Visitors need to know which labels the box can answer about, and the owner needs to spot abuse without keeping everyone's address.
+
+| Question | Choice | Rejected |
+| --- | --- | --- |
+| Where the list comes from | Live from the database, through `GET /api/labels` | A list written into the page: it would need editing every time a label is added |
+| Which login reads it | The read-only login | The web login: it may only touch question counts and accounts |
+| What the log holds about a visitor | The same keyed hash the question limits use | The address: not needed to spot one visitor making too many requests. No visitor detail at all: abuse could not be spotted |
+| How long logs stay | Three files of 10 MB, then the oldest is deleted | No limit, Docker's default: logs would stay forever and could fill the disk |
+
+**In plain words.** A hash works like a fingerprint of the address. The same visitor always gets the same fingerprint, so a burst of requests still stands out, but the address can't be read back from it without the server's secret.
+
+**What this costs.** A hash can't be blocked at the firewall. The limits per visitor stop most abuse without that, and a suspect address can still be hashed and searched for. A keyed hash can still count as personal data, so the box says how addresses are used. Size limits don't promise a number of days: with little traffic, a line can stay for a long time.
+
+**The list.** Paused labels are left out. A newly added label appears at once, before the next nightly run has brought in its data.
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.

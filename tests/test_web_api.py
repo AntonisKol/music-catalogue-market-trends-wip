@@ -11,7 +11,7 @@ import requests
 import responses
 
 from queries.questions import MAX_QUESTION_LENGTH, Answer, QuestionError
-from web import captcha, config
+from web import captcha, config, limits
 from web.app import create_app
 
 NOON = datetime(2026, 11, 1, 12, 30, tzinfo=timezone.utc)
@@ -284,3 +284,55 @@ def test_turnstile_trouble_is_reported_not_passed(reply):
 
     with pytest.raises(captcha.CaptchaUnavailable):
         captcha.verify("token", "our-secret")
+
+
+def test_the_labels_are_the_active_tracked_ones_in_alphabetical_order(client, db, reader):
+    db.execute("INSERT INTO tracked_labels (label_id, name, active) VALUES "
+               "(1, 'Tresor', true), (2, 'axis', true), (3, 'Paused Records', false)")
+    db.commit()
+
+    response = client.get("/api/labels", headers={"Origin": "https://adnsaudio.test"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"labels": ["axis", "Tresor"]}
+    assert response.headers["Cache-Control"] == "public, max-age=300"
+
+
+def test_the_labels_leave_out_the_numbers_discogs_adds(client, db, reader):
+    db.execute("INSERT INTO tracked_labels (label_id, name) VALUES "
+               "(1, 'Afterlife (6)'), (2, 'Wax (4)'), (3, 'Wax (9)'), (4, 'Studio (54) Records')")
+    db.commit()
+
+    assert client.get("/api/labels").get_json() == {"labels": ["Afterlife", "Studio (54) Records", "Wax"]}
+
+
+def test_other_answers_are_still_never_cached(client):
+    assert client.get("/api/health").headers["Cache-Control"] == "no-store"
+
+
+def test_the_labels_fail_with_a_plain_message_when_the_database_is_down(fakes, limits_db):
+    def broken():
+        raise psycopg.OperationalError("connection to 10.0.0.1 refused")
+
+    response = create_app(answer=fakes.answer, verify_captcha=fakes.verify, list_labels=broken).test_client().get("/api/labels")
+
+    assert response.status_code == 503
+    assert response.get_json()["error"]["code"] == "database"
+    assert "10.0.0.1" not in response.get_data(as_text=True)
+
+
+def test_the_access_log_has_the_visitors_hash_and_never_the_address(client, caplog):
+    client.get("/api/health?secret=in-the-query", environ_base={"REMOTE_ADDR": "203.0.113.7"},
+               headers={"User-Agent": "test-browser"})
+
+    line = next(record.getMessage() for record in caplog.records if record.name == "web.access")
+    assert line == f"{limits.visitor_id('203.0.113.7', config.VISITOR_HASH_SECRET)} GET /api/health 200 test-browser"
+    assert "203.0.113.7" not in caplog.text
+
+
+def test_a_visitor_cannot_fake_a_line_in_the_access_log(client, caplog):
+    client.get("/api/nothing%0Afake-line", headers={"User-Agent": "x" * 500})
+
+    line = next(record.getMessage() for record in caplog.records if record.name == "web.access")
+    assert "\n" not in line and "\\n" in line
+    assert " 404 " in line and len(line) < 500

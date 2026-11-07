@@ -235,6 +235,8 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
         textarea.focus();
       } }, example)))),
   );
+  // Filled in from the API, and stays hidden if the list can't be loaded.
+  const labels = el("aside", { class: "mt-ask-labels", "aria-label": "Labels this site tracks", hidden: "" });
   const form = el("form", { class: "mt-ask-form", novalidate: "" },
     el("label", { for: textarea.id, class: "mt-ask-label" }, "Ask about the vinyl market"),
     textarea,
@@ -265,7 +267,10 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       + "when you last signed in, and how many questions you asked in the last two days. "
       + "You can delete your account at any time."),
   );
-  root.replaceChildren(form, account, signInForm, status, examples, output);
+  const notice = el("p", { class: "mt-ask-privacy" },
+    "To spot abuse, our logs keep a scrambled version of your network address, never the address itself. "
+    + "Cloudflare's human check also sees your address.");
+  root.replaceChildren(labels, form, account, signInForm, status, examples, notice, output);
 
   let token = "";
   let widgetId = null;
@@ -317,6 +322,21 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       state = null;
     }
     renderAccount();
+  }
+
+  async function loadLabels() {
+    try {
+      const response = await request("/api/labels");
+      const names = response.ok ? (await response.json()).labels : [];
+      if (!names?.length) return;
+      labels.replaceChildren(
+        el("strong", {}, `Labels we track (${names.length}): `),
+        names.join(", "),
+      );
+      labels.hidden = false;
+    } catch {
+      // The box works without the list.
+    }
   }
 
   async function signOut() {
@@ -505,8 +525,9 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   });
 
   loadAccount();
+  loadLabels();
 
-  return { form, textarea, button, status, output, account, signInForm, username, password };
+  return { labels, form, textarea, button, status, output, account, signInForm, username, password };
 }
 
 if (typeof document !== "undefined") {
