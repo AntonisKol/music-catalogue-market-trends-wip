@@ -328,6 +328,9 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
             accounts.check_new_password(payload.password)
         except ValueError as problem:
             return error("invalid_password", str(problem), 400)
+        if accounts.is_disposable(email):
+            return error("disposable_email", "Please use a permanent email address. "
+                         "Temporary inbox services can't be used to sign up.", 400)
         if not mail_is_set_up():
             return error("sign_in_unavailable", "Signing up is not available yet.", 503)
         refused = human_check(payload.captcha_token)

@@ -324,7 +324,7 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 
 | Status | Codes |
 | --- | --- |
-| 400 | `invalid_request`, `invalid_question`, `invalid_email`, `invalid_password` |
+| 400 | `invalid_request`, `invalid_question`, `invalid_email`, `invalid_password`, `disposable_email` |
 | 401 | `not_signed_in`, `invalid_credentials` |
 | 403 | `captcha_failed` |
 | 413 | the request is over 8 KB |
@@ -356,7 +356,9 @@ Visitors who want more than the anonymous allowance sign up with an email addres
 4. **Later visits.** `POST /api/sign-in` takes the address, the password and a Turnstile token. A wrong password and an unknown address get the same `invalid_credentials` answer.
 5. **A forgotten password.** `POST /api/password-reset` emails a link that works once, within an hour, to an address with a confirmed account. It opens a page asking for the new password, then ends the account's other sessions and returns to the question box signed in.
 
-**Fake addresses.** An address nobody can open never gets a working account: it can't sign in, gets no larger quota, and is deleted after 7 days. Disposable addresses can still be confirmed, because their owner can open them. Someone signing up with another person's address can't do more than send that person an email, and emails are limited.
+**Fake addresses.** An address nobody can open never gets a working account: it can't sign in, gets no larger quota, and is deleted after 7 days. Sign-up also refuses addresses at known throwaway services, such as Mailinator, with a `disposable_email` answer. The list is in [`web/assets/disposable-email-domains.txt`](web/assets/disposable-email-domains.txt), from the public [disposable-email-domains](https://github.com/disposable-email-domains/disposable-email-domains) project. It catches the common services, not every one, and new ones appear all the time. Someone signing up with another person's address can't do more than send that person an email, and emails are limited.
+
+To refresh the list, replace the domains in that file with the project's `disposable_email_blocklist.conf`, keep the comment at the top, and update its date.
 
 **Limits:** 3 emails an hour and 5 a day per address, 5 and 10 per visitor. 10 tries at a password an hour and 30 a day, per address and per visitor.
 

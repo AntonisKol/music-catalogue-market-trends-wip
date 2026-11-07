@@ -16,6 +16,7 @@ import hmac
 import re
 import secrets
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import psycopg
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -32,6 +33,11 @@ MAX_PASSWORD_LENGTH = 256
 # Deliberately loose: one @, something before it, a dot in the domain, no spaces.
 # The real check is that the person can open the link sent to the address.
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+DISPOSABLE_FILE = Path(__file__).parent / "assets" / "disposable-email-domains.txt"
+DISPOSABLE_DOMAINS = frozenset(
+    line.strip() for line in DISPOSABLE_FILE.read_text(encoding="utf-8").splitlines()
+    if line.strip() and not line.startswith("#")
+)
 # Checked when the address is unknown, so that an unknown address takes as long as
 # a wrong password and the time taken does not reveal who has an account.
 UNUSABLE_HASH = generate_password_hash(secrets.token_urlsafe(32))
@@ -47,6 +53,12 @@ def normalize_email(text: str) -> str:
     if len(email) > MAX_EMAIL_LENGTH or not EMAIL.fullmatch(email):
         raise ValueError("not an email address")
     return email
+
+
+def is_disposable(email: str) -> bool:
+    """Is the address at a known throwaway service, or at a subdomain of one?"""
+    parts = email.rsplit("@", 1)[-1].split(".")
+    return any(".".join(parts[start:]) in DISPOSABLE_DOMAINS for start in range(len(parts) - 1))
 
 
 def check_new_password(password: str) -> None:

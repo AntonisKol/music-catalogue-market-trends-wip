@@ -1947,7 +1947,7 @@ The page should let visitors sign up themselves, confirm their address and come 
 | Question | Choice | Rejected |
 | --- | --- | --- |
 | How visitors sign up | An email address and a password, confirmed by a link | A sign-in link every visit with no password: tried first, then changed by the owner for the usual sign-up. Username and password with no email: no way to reset a password, and nothing proves the address |
-| What a confirmation proves | That the person can open that mailbox | Checking the address looks real, or blocking disposable-mail services: neither proves anything about the person, and block lists go out of date |
+| What a confirmation proves | That the person can open that mailbox | Checking the address looks real: it proves nothing about the person |
 | What happens to an unconfirmed account | It can't sign in and is deleted after 7 days | Keeping it: addresses nobody confirmed would stay stored for ever |
 | A forgotten password | A link by email, working for an hour | Reset by the owner: every visitor would depend on one person |
 | What email is used for | This page's sign-up only | Failure alerts too: they stay in the logs and run records |
@@ -1955,9 +1955,23 @@ The page should let visitors sign up themselves, confirm their address and come 
 
 **In plain words.** Fake addresses are handled by the link: an address nobody can open never gets a working account. Opening the link only shows a page with a button. Pressing it confirms the address and returns the person to the question box, so email systems that open links to check them can't confirm anyone by accident.
 
-**What this costs.** The site again depends on Resend, stores email addresses and needs Resend's DNS records. Anyone can sign up, including with a disposable address, so the limit of 1,000 questions a day across the site is what caps the Anthropic bill. Someone who signs up with another person's address could still get in if that person presses the confirm button without having signed up, and the email tells them to ignore it if it wasn't them.
+**What this costs.** The site again depends on Resend, stores email addresses and needs Resend's DNS records. Anyone can sign up, so the limit of 1,000 questions a day across the site is what caps the Anthropic bill. Someone who signs up with another person's address could still get in if that person presses the confirm button without having signed up, and the email tells them to ignore it if it wasn't them.
 
 **Moving an existing database.** `create_limits_role` replaces any older `accounts` table and removes its accounts, once. Deploying this removes the accounts made with `manage_accounts`.
+
+## Task #55: Refusing throwaway email services
+
+Throwaway inboxes let one person confirm many accounts and get more questions, which costs Anthropic credit.
+
+| Question | Choice | Rejected |
+| --- | --- | --- |
+| Which addresses are refused | Those on a maintained public list, and their subdomains | Writing our own list: it would be out of date at once |
+| How the list arrives | A copy kept in the repo | Fetching it at start-up: a change or an outage elsewhere could block real people without anyone reviewing it |
+| Where it applies | Sign-up only | Sign-in too: someone who already has an account should keep it if a domain is added later |
+
+**In plain words.** Sign-up checks the part after the @ against a list of about 10,000 throwaway services, before anything is counted or sent.
+
+**What this costs.** The list needs refreshing by hand now and then, and it doesn't catch everything: new services appear, and `name+1@gmail.com` addresses still count as separate. The limit of 1,000 questions a day across the site is still what caps the bill. A real person at a wrongly listed domain would be refused; the list can be edited if that happens.
 
 ## Glossary
 
