@@ -5,7 +5,7 @@ per fixed UTC hour and day, so they survive restarts and are shared by every API
 process. One question takes one unit from each of three counts at once: the
 visitor's (or, when signed in, the account's) hour and day, and the site's day.
 If any count would go over its limit, none is taken and the question is refused.
-Requests for sign-in links are counted the same way, per email and per visitor.
+Tries at a password and requested emails are counted the same way, per address and per visitor.
 """
 import hashlib
 import hmac
@@ -87,7 +87,7 @@ def take_question(conn: psycopg.Connection, who: str, now: datetime,
     """Count one question for a visitor or account, and for the site, or raise
     LimitReached without counting anything. Returns {"hour": left, "day": left}."""
     code = "account_limit_reached" if signed_in else "visitor_limit_reached"
-    later = "" if signed_in else " Sign in with your email to ask more, or"
+    later = "" if signed_in else " Sign up or sign in to ask more, or"
     left = take(conn, now, [
         (SITE, "day", site_per_day, "site_limit_reached",
          "The question box has reached today's limit. Please come back tomorrow."),
@@ -112,17 +112,32 @@ def remaining(conn: psycopg.Connection, who: str, now: datetime, per_hour: int, 
     return {"hour": max(0, per_hour - rows.get("hour", 0)), "day": max(0, per_day - rows.get("day", 0))}
 
 
-# Sign-in links a visitor may ask for, per email address and per visitor.
-SIGN_IN_PER_EMAIL = {"hour": 3, "day": 5}
-SIGN_IN_PER_VISITOR = {"hour": 5, "day": 10}
+# Tries at a password, per address and per visitor.
+SIGN_IN_PER_EMAIL = {"hour": 10, "day": 30}
+SIGN_IN_PER_VISITOR = {"hour": 10, "day": 30}
+# Emails a visitor can cause to be sent, per address and per visitor, so the box can't
+# be used to flood someone's inbox.
+MAIL_PER_EMAIL = {"hour": 3, "day": 5}
+MAIL_PER_VISITOR = {"hour": 5, "day": 10}
 
 
 def take_sign_in(conn: psycopg.Connection, email_key: str, visitor: str, now: datetime) -> None:
-    """Count one sign-in link request, or raise LimitReached without counting."""
-    message = "Too many sign-in links have been asked for. Please check your inbox, or try again later."
+    """Count one try at a password, or raise LimitReached without counting."""
+    message = "Too many sign-in attempts. Please try again later."
     take(conn, now, [
         *((f"sign-in-email:{email_key}", period, limit, "sign_in_limit_reached", message)
           for period, limit in SIGN_IN_PER_EMAIL.items()),
         *((f"sign-in-visitor:{visitor}", period, limit, "sign_in_limit_reached", message)
           for period, limit in SIGN_IN_PER_VISITOR.items()),
+    ])
+
+
+def take_mail(conn: psycopg.Connection, email_key: str, visitor: str, now: datetime) -> None:
+    """Count one email the visitor asked for, or raise LimitReached without counting."""
+    message = "Too many emails have been asked for. Please check your inbox, or try again later."
+    take(conn, now, [
+        *((f"mail-email:{email_key}", period, limit, "mail_limit_reached", message)
+          for period, limit in MAIL_PER_EMAIL.items()),
+        *((f"mail-visitor:{visitor}", period, limit, "mail_limit_reached", message)
+          for period, limit in MAIL_PER_VISITOR.items()),
     ])

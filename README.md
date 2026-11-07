@@ -78,7 +78,7 @@ The tasks below are ordered so each step builds on working code from the previou
 - A question service: Claude Haiku 5.5 picks among the five query tools, our code runs them through the read-only login, and the answer comes back with the rows it is based on (see [Ask a question](#ask-a-question)).
 
 - A web API (`POST /api/questions`) in front of the question service, with a human check, limits per visitor, per account and for the whole site, and JSON errors (see [Run the web API](#run-the-web-api)).
-- Sign-up and sign-in by one-time email link, for a larger quota; no passwords, and accounts can be deleted (see [Email sign-in](#email-sign-in)).
+- Sign-up with an email address and a password, confirmed by a link in an email, for a larger quota; accounts can be deleted (see [Signing up](#signing-up)).
 - A question box for adnsaudio.com: one JavaScript module and one stylesheet in [`widget/`](widget) (see [Add the question box to a page](#add-the-question-box-to-a-page)).
 
 - A nightly update of every tracked label, with a record of each run and a log of any problems (see [Update the data every night](#update-the-data-every-night)). Prices are fetched every night; want, have and ratings once a week per release.
@@ -324,8 +324,8 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 
 | Status | Codes |
 | --- | --- |
-| 400 | `invalid_request`, `invalid_question`, `invalid_email` |
-| 401 | `not_signed_in` |
+| 400 | `invalid_request`, `invalid_question`, `invalid_email`, `invalid_password` |
+| 401 | `not_signed_in`, `invalid_credentials` |
 | 403 | `captcha_failed` |
 | 413 | the request is over 8 KB |
 | 429 | `visitor_limit_reached`, `account_limit_reached`, `site_limit_reached`, `sign_in_limit_reached`, with a `Retry-After` header |
@@ -346,23 +346,32 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 
 `GET /api/labels` answers `{"labels": [...]}`, the names of the active tracked labels in alphabetical order, without the numbers Discogs adds to tell labels apart. Browsers may reuse the answer for 5 minutes.
 
-### Email sign-in
+### Signing up
 
-Visitors who want more than the anonymous allowance sign up with a link sent by email, and come back to the page signed in. There are no passwords, and anyone can sign up. The first link used creates the account.
-1. The question box sends `POST /api/sign-in` with the address and a Turnstile token. The API emails a link that works once, within 15 minutes. The answer is the same for every address, so nobody can find out who has an account. Links are limited to 3 an hour per address and 5 an hour per visitor.
-2. The link opens a small page served by the API: "Sign in as you@…" and a **Sign in** button. Opening the link alone signs nobody in. Mail systems that check links before the person sees them (common with work and school email) therefore cannot use the link up.
-3. The button starts a session and returns to the question box (`SIGN_IN_RETURN_URL`). The session lasts 30 days, in a cookie that the page's JavaScript cannot read (`HttpOnly`), sent only over HTTPS (`Secure`) and only from adnsaudio.com's own pages (`SameSite=Strict`).
+Visitors who want more than the anonymous allowance sign up with an email address and a password. The account can't be used until they press the button behind a link sent to that address.
 
-`GET /api/account` tells the page whether someone is signed in and how many questions are left. `POST /api/sign-out` ends the session. `POST /api/account/delete` deletes the account, its sessions, its unused links and its question counts.
+1. **Sign up.** The question box sends `POST /api/sign-up` with the address, a password of 12 to 256 characters and a Turnstile token. The API stores the account as unconfirmed and emails a link that works once, within 24 hours. The answer is the same for every address, so nobody can find out who has an account. If the address already has one, the email says so instead, and the account is not changed.
+2. **Confirm.** The link opens a small page served by the API, with a **Confirm my email** button. Opening the link alone changes nothing, so mail systems that check links before the person sees them (common with work and school email) can't use it up. The form is checked against a `SameSite=Strict` cookie, so it can't be posted from another site.
+3. **Return, verified.** The button confirms the address, starts a session and returns to the question box (`SIGN_IN_RETURN_URL`), which shows a **Verified** badge next to the address. The session lasts 30 days, in a cookie that the page's JavaScript cannot read (`HttpOnly`), sent only over HTTPS (`Secure`) and only from adnsaudio.com's own pages (`SameSite=Strict`).
+4. **Later visits.** `POST /api/sign-in` takes the address, the password and a Turnstile token. A wrong password and an unknown address get the same `invalid_credentials` answer.
+5. **A forgotten password.** `POST /api/password-reset` emails a link that works once, within an hour, to an address with a confirmed account. It opens a page asking for the new password, then ends the account's other sessions and returns to the question box signed in.
 
-**What is stored:** the email address, when the account was created and last signed in, and question counts for two days. Links and sessions are stored only as SHA-256 hashes, so a copy of the database cannot be used to sign in.
+**Fake addresses.** An address nobody can open never gets a working account: it can't sign in, gets no larger quota, and is deleted after 7 days. Disposable addresses can still be confirmed, because their owner can open them. Someone signing up with another person's address can't do more than send that person an email, and emails are limited.
 
-**Sign-in settings in `.env`:**
-- `RESEND_API_KEY`: a key from [Resend](https://resend.com), which sends the emails. Add Resend's DNS records for adnsaudio.com so the emails arrive from the site's own domain and don't land in spam. Without a key, sign-in is switched off and the API says so.
+**Limits:** 3 emails an hour and 5 a day per address, 5 and 10 per visitor. 10 tries at a password an hour and 30 a day, per address and per visitor.
+
+`GET /api/account` tells the page whether someone is signed in and how many questions are left. `POST /api/sign-out` ends the session. `POST /api/account/delete` deletes the account, its sessions, its links and its question counts.
+
+**What is stored:** the email address, a salted scrypt hash of the password, when the account was created, confirmed and last signed in, and question counts for two days. Links and sessions are stored only as SHA-256 hashes, so a copy of the database cannot be used to sign in.
+
+**Settings in `.env`:**
+- `RESEND_API_KEY`: a key from [Resend](https://resend.com), which sends the emails. Add Resend's DNS records for adnsaudio.com so the emails arrive from the site's own domain and don't land in spam. Without a key, signing up is switched off and the API says so.
 - `SIGN_IN_EMAIL_FROM`: the sender, by default `Market Trends <sign-in@adnsaudio.com>`.
 - `PUBLIC_API_URL`: the API's public address used in the links, for example `https://api.adnsaudio.com`.
-- `SIGN_IN_RETURN_URL`: where the confirm page goes afterwards, by default `https://adnsaudio.com/market-trends/`.
+- `SIGN_IN_RETURN_URL`: where the buttons go afterwards, by default `https://adnsaudio.com/market-trends/`.
 - For trying it on a laptop only: `SIGN_IN_LOG_LINKS=true` writes the links to the API's log instead of emailing them, and `COOKIE_SECURE=false` lets the cookie work over plain http.
+
+The emails carry the ADNS Audio logo from [`web/assets/`](web/assets) inside the message, because many mail apps block images fetched from the web.
 
 The cookie works on the live site only if the API is on a subdomain of adnsaudio.com, such as `api.adnsaudio.com` (see [Run it on a server](#run-it-on-a-server)).
 
@@ -390,7 +399,7 @@ What the box does:
 - disables the button while a question is answered, so a double click sends one question;
 - shows the answer, any warning, and "Show the data" with the rows behind it, opened automatically when there is a warning;
 - names the model that answered;
-- shows how many questions are left, offers sign-up when the anonymous allowance runs out, and shows the signed-in address with **Sign out** and **Delete my account**;
+- shows how many questions are left, offers sign-up when the anonymous allowance runs out, and shows the signed-in address with a **Verified** badge, **Sign out** and **Delete my account**;
 - turns errors and limits into plain messages ("You can ask again in about 30 minutes").
 
 Answers are rendered from a small Markdown subset (paragraphs, bold, lists, tables) using text nodes only, so nothing in an answer can run as code.
