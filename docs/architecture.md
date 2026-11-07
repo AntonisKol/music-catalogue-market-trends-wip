@@ -499,6 +499,7 @@ The same routine has been used on every task:
 | 9 | The first real answer warned that figures could not be checked, though every price and count was right | Claude numbered its table's rows, and the check counted those numbers as market figures | The first column of a table headed `#` or `Rank` is treated as layout; other figures in the table are still checked |
 | 12 | Titles in an answer showed with asterisks around them | The box handled `**bold**` but not `*italic*` | Italics are shown as italics; a lone asterisk stays as it is |
 | 49 | Browsers didn't offer to save the password | The box signs in without loading a new page, and the address field wasn't marked as the account's username | The field is marked, and the box asks the browser to save the password where it can |
+| 49 | A saved password wasn't filled in on the next visit | The form opened on sign-up, whose password field is for a new password, and it appears only after a click, so the browser doesn't fill it by itself | The box remembers in the browser that the visitor has an account, opens on sign-in, and asks the browser for the saved password |
 
 ---
 
