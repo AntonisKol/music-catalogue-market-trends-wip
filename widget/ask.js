@@ -112,15 +112,18 @@ export function modelName(id) {
   return [...words, version.join(".")].filter(Boolean).join(" ");
 }
 
-// --- Safe Markdown subset: paragraphs, bold, inline code, lists, tables ----------
+// --- Safe Markdown subset: paragraphs, bold, italic, inline code, lists, tables ----------
 
 function inline(text) {
   const fragment = document.createDocumentFragment();
-  const pattern = /\*\*(.+?)\*\*|`([^`]+)`/g;
+  // Bold, italic (a lone * as in "2 * 3" stays as it is), and inline code.
+  const pattern = /\*\*(.+?)\*\*|(?<![\w*])\*(?![\s*])([^*\n]*?[^\s*])\*(?![\w*])|`([^`]+)`/g;
   let last = 0;
   for (const match of text.matchAll(pattern)) {
     if (match.index > last) fragment.append(document.createTextNode(text.slice(last, match.index)));
-    fragment.append(match[1] !== undefined ? el("strong", {}, match[1]) : el("code", {}, match[2]));
+    if (match[1] !== undefined) fragment.append(el("strong", {}, match[1]));
+    else if (match[2] !== undefined) fragment.append(el("em", {}, match[2]));
+    else fragment.append(el("code", {}, match[3]));
     last = match.index + match[0].length;
   }
   if (last < text.length) fragment.append(document.createTextNode(text.slice(last)));

@@ -5,7 +5,7 @@ How the project fits together, what each part is made of, and how it was built s
 - **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
 - **Developers:** every box names its code file, and the components table goes into detail.
 
-*Last updated: 7 November 2026, after sign-up with email confirmation was added. 424 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
+*Last updated: 7 November 2026, after sign-up with email confirmation was added. 433 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
 
 **How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
 
@@ -495,6 +495,8 @@ The same routine has been used on every task:
 | 49 | Sign-up had to come back after #47 removed email, on a server that already had password accounts made by the owner | Those accounts have no email address, and creating a table that already exists changes nothing | `create_limits_role` replaces older accounts tables once, and a test checks that running it again keeps current accounts |
 | 49 | Someone could sign up with another person's address first and keep their own password | The address isn't proven until the link is used | Signing up again before confirming replaces the password and the link. A confirmed account is never changed by signing up |
 | 49 | Every sign-up and question failed the human check on the live site | The secret key on the server didn't belong to the Turnstile widget the page uses. The API's log didn't show Cloudflare's reason, because its messages below warning level were dropped | The key was replaced with the widget's own, checked with a real token. The API now logs those messages |
+| 9 | The first real answer warned that figures could not be checked, though every price and count was right | Claude numbered its table's rows, and the check counted those numbers as market figures | The first column of a table headed `#` or `Rank` is treated as layout; other figures in the table are still checked |
+| 12 | Titles in an answer showed with asterisks around them | The box handled `**bold**` but not `*italic*` | Italics are shown as italics; a lone asterisk stays as it is |
 
 ---
 

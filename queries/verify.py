@@ -16,12 +16,30 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 NUMBER = re.compile(r"(?<![\w.,\-/])(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?(?![\w\-/]|\.\d|,\d{3})")
 # Numbered list markers at the start of a line ("1. ", "2) ") are layout, not data.
 LIST_MARKER = re.compile(r"^\s*\d+[.)]\s", re.MULTILINE)
+# The first column of a table headed "#" or "Rank" only numbers the rows, so it is layout too.
+ROW_NUMBER_HEADER = re.compile(r"^\s*\|\s*(#|no\.?|nr\.?|rank)\s*\|", re.IGNORECASE)
+TABLE_RULE = re.compile(r"^\s*\|[\s:|-]*\|\s*$")
+ROW_NUMBER = re.compile(r"^\s*\|\s*\d+\s*\|")
 DIGITS = re.compile(r"\d+(?:\.\d+)?")
+
+
+def without_row_numbers(text: str) -> str:
+    """The text with the row numbers taken out of tables that have a column for them."""
+    lines = text.split("\n")
+    numbered = False
+    for index, line in enumerate(lines):
+        if ROW_NUMBER_HEADER.match(line) and index + 1 < len(lines) and TABLE_RULE.match(lines[index + 1]):
+            numbered = True
+        elif numbered and not line.lstrip().startswith("|"):
+            numbered = False
+        elif numbered:
+            lines[index] = ROW_NUMBER.sub("|", line)
+    return "\n".join(lines)
 
 
 def figures(text: str) -> list:
     """The numbers in a text, as (as written, value, decimal places)."""
-    text = LIST_MARKER.sub(" ", text)
+    text = LIST_MARKER.sub(" ", without_row_numbers(text))
     found = []
     for match in NUMBER.finditer(text):
         whole, fraction = match.group(1), match.group(2)
