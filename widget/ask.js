@@ -12,10 +12,9 @@
 // is based on. Everything from the API is added to the page as text (textContent),
 // never as HTML, so nothing in an answer can run as code.
 //
-// Visitors get a few questions without an account. For more they sign in with the
-// username and password the site's owner gave them; the API then keeps them signed
-// in with a cookie the page cannot read, sent along because every request uses
-// credentials: "include".
+// Visitors get a few questions without an account. For more they sign in with an
+// emailed link; the API then keeps them signed in with a cookie the page cannot
+// read, sent along because every request uses credentials: "include".
 
 const MAX_QUESTION_LENGTH = 500;
 const REQUEST_TIMEOUT_MS = 90_000;
@@ -247,24 +246,20 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
 
   // The account line: questions left, and sign in or the signed-in address.
   const account = el("div", { class: "mt-ask-account", hidden: "" });
-  const username = el("input", {
-    id: `${id}-username`, type: "text", name: "username", autocomplete: "username", required: "",
-    autocapitalize: "none", spellcheck: "false", placeholder: "Username", "aria-label": "Username", maxlength: "64",
+  const email = el("input", {
+    id: `${id}-email`, type: "email", name: "email", autocomplete: "email", required: "",
+    placeholder: "you@example.com", maxlength: "254",
   });
-  const password = el("input", {
-    id: `${id}-password`, type: "password", name: "password", autocomplete: "current-password", required: "",
-    placeholder: "Password", "aria-label": "Password", maxlength: "256",
-  });
-  const signInButton = el("button", { type: "submit", class: "mt-ask-submit" }, "Sign in");
+  const signInButton = el("button", { type: "submit", class: "mt-ask-submit" }, "Email me a link");
   const signInStatus = el("p", { class: "mt-ask-status", role: "status", "aria-live": "polite" });
   const signInForm = el("form", { class: "mt-ask-sign-in", novalidate: "", hidden: "" },
-    el("p", { class: "mt-ask-label" }, "Sign in for more questions"),
-    el("p", { class: "mt-ask-hint" }, "Accounts are set up by the site's owner. There is no sign-up form."),
-    el("div", { class: "mt-ask-sign-in-row" }, username, password, signInButton),
+    el("label", { for: email.id, class: "mt-ask-label" }, "Sign up or sign in for more questions"),
+    el("p", { class: "mt-ask-hint" }, "We email you a link. It creates your account the first time and brings you back here. No password."),
+    el("div", { class: "mt-ask-sign-in-row" }, email, signInButton),
     signInStatus,
     el("p", { class: "mt-ask-privacy" },
-      "We store your username, a scrambled copy of your password that can't be turned back into it, "
-      + "when you last signed in, and how many questions you asked in the last two days. "
+      "We store your email address and when you signed in, plus how many questions you asked "
+      + "in the last two days. Resend sends the email for us. Sign-in links work once, within 15 minutes. "
       + "You can delete your account at any time."),
   );
   const notice = el("p", { class: "mt-ask-privacy" },
@@ -293,7 +288,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
 
   function showSignIn() {
     signInForm.hidden = false;
-    username.focus();
+    email.focus();
   }
 
   function renderAccount() {
@@ -305,11 +300,11 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     if (state.signed_in) {
       signInForm.hidden = true;
       account.replaceChildren(
-        el("span", {}, "Signed in as ", el("strong", {}, state.username)), " · ", left, " · ",
+        el("span", {}, "Signed in as ", el("strong", {}, state.email)), " · ", left, " · ",
         link("Sign out", signOut), " · ", link("Delete my account", deleteAccount),
       );
     } else {
-      account.replaceChildren(left, " · ", link("Sign in for more", showSignIn));
+      account.replaceChildren(left, " · ", link("Sign up or sign in", showSignIn));
     }
     account.hidden = false;
   }
@@ -350,7 +345,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   }
 
   async function deleteAccount() {
-    if (!window.confirm("Delete your account? Your username, password and question counts are removed. This cannot be undone.")) return;
+    if (!window.confirm("Delete your account? Your email address and question counts are removed. This cannot be undone.")) return;
     try {
       const response = await postJson("/api/account/delete", {});
       const body = await response.json().catch(() => null);
@@ -432,30 +427,27 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   signInForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (busy) return;
-    if (!username.value.trim() || !password.value) {
-      signInStatus.textContent = "Please type your username and password.";
+    const address = email.value.trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) {
+      signInStatus.textContent = "Please type a valid email address.";
       signInStatus.className = "mt-ask-status mt-ask-status-error";
-      (username.value.trim() ? password : username).focus();
+      email.focus();
       return;
     }
     busy = true;
     signInButton.disabled = true;
     signInStatus.className = "mt-ask-status";
-    signInStatus.textContent = "Signing in…";
+    signInStatus.textContent = "Sending…";
     try {
       if (!token && !(await waitForToken())) {
         signInStatus.textContent = "The human check hasn't finished. If a check appears above the Ask button, please complete it, then try again.";
         signInStatus.className = "mt-ask-status mt-ask-status-error";
         return;
       }
-      const response = await postJson("/api/sign-in", {
-        username: username.value.trim(), password: password.value, captcha_token: token,
-      });
+      const response = await postJson("/api/sign-in", { email: address, captcha_token: token });
       const body = await response.json().catch(() => null);
       if (response.ok) {
-        signInStatus.textContent = "";
-        showStatus("You are signed in.");
-        await loadAccount();
+        signInStatus.textContent = `Check your inbox: a sign-in link is on its way to ${address}. It works once, within 15 minutes.`;
       } else {
         signInStatus.textContent = errorMessage(response.status, body, response.headers.get("Retry-After"));
         signInStatus.className = "mt-ask-status mt-ask-status-error";
@@ -464,8 +456,6 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       signInStatus.textContent = "Could not reach the question service. Please check your connection and try again.";
       signInStatus.className = "mt-ask-status mt-ask-status-error";
     } finally {
-      // The password is never kept on the page, whether it worked or not.
-      password.value = "";
       busy = false;
       signInButton.disabled = false;
       resetCheck();
@@ -527,7 +517,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   loadAccount();
   loadLabels();
 
-  return { labels, form, textarea, button, status, output, account, signInForm, username, password };
+  return { labels, form, textarea, button, status, output, account, signInForm, email };
 }
 
 if (typeof document !== "undefined") {

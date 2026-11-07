@@ -17,26 +17,30 @@ on the page.
 Each request is written to the access log with a keyed hash of the visitor's
 address, never the address, so abuse can be spotted without keeping addresses.
 
-Sign-in with a username and password (see web/accounts.py). Accounts are created
-only with web/manage_accounts.py, so there is no way to register here:
-    POST /api/sign-in            {"username", "password", "captcha_token"}: starts a session
+Email sign-in (see web/accounts.py). The first sign-in creates the account:
+    POST /api/sign-in            {"email", "captcha_token"}: emails a one-time link
+    GET  /api/sign-in/confirm    the link: a page with a confirm button
+    POST /api/sign-in/confirm    the button: starts a session, back to the site
     GET  /api/account            signed in or not, and the questions left
     POST /api/sign-out           ends this session
     POST /api/account/delete     deletes the account and everything stored for it
 """
+import hmac
 import logging
 import sys
 from datetime import datetime, timezone
+from urllib.parse import quote, urlsplit
 
 import psycopg
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, make_response, redirect, request
+from markupsafe import escape
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from queries.labels import tracked_label_names
 from queries.questions import MAX_QUESTION_LENGTH, QuestionError, answer_question
-from web import accounts, captcha, config, limits
+from web import accounts, captcha, config, limits, mailer
 
 log = logging.getLogger(__name__)
 access_log = logging.getLogger("web.access")
@@ -58,6 +62,7 @@ QUESTION_ERRORS = {
 
 
 SESSION_COOKIE = "mt_session"
+CONFIRM_COOKIE = "mt_confirm"
 
 
 class QuestionRequest(BaseModel):
@@ -69,12 +74,41 @@ class QuestionRequest(BaseModel):
 
 
 class SignInRequest(BaseModel):
-    # Spaces are not stripped: they can be part of a password.
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    username: str = Field(min_length=1, max_length=accounts.MAX_USERNAME_LENGTH)
-    password: str = Field(min_length=1, max_length=accounts.MAX_PASSWORD_LENGTH)
+    email: str = Field(min_length=3, max_length=accounts.MAX_EMAIL_LENGTH)
     captcha_token: str = Field(min_length=1, max_length=2048)
+
+
+PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark"><title>{title} · Market Trends</title>
+<style>
+body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; background: #07080b; color: #c9cdd6;
+       font: 400 16px/1.6 "Chakra Petch", system-ui, sans-serif; }}
+main {{ max-width: 440px; margin: 24px; padding: 28px; border: 1px solid #403553; background: #111318; }}
+h1 {{ margin: 0 0 12px; color: #eceef2; font-size: 22px; }}
+strong {{ color: #eceef2; word-break: break-all; }}
+button {{ min-height: 44px; margin-top: 12px; padding: 10px 20px; border: 1px solid #b19bdd; background: #392850;
+          color: #eceef2; font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }}
+a {{ color: #b19bdd; }}
+</style></head>
+<body><main><h1>{title}</h1>{body}</main></body></html>
+"""
+
+
+def page(title: str, body: str, status: int = 200):
+    """A small HTML page. Callers escape anything that came from outside."""
+    response = make_response(PAGE.format(title=escape(title), body=body), status)
+    response.headers["Content-Type"] = "text/html; charset=utf-8"
+    return response
+
+
+def link_used_page():
+    return page("This link can't be used", (
+        "<p>Sign-in links work once, within 15 minutes. This one has expired or was already used.</p>"
+        f'<p><a href="{escape(config.SIGN_IN_RETURN_URL)}">Back to the question box</a> to ask for a new one.</p>'
+    ), 400)
 
 
 def error(code: str, message: str, status: int, retry_after: int = None):
@@ -100,7 +134,8 @@ def set_up_access_log() -> None:
 
 
 def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_limits=limits.connect_limits,
-               now=lambda: datetime.now(timezone.utc), list_labels=tracked_label_names) -> Flask:
+               send_link=mailer.send_sign_in_link, now=lambda: datetime.now(timezone.utc),
+               list_labels=tracked_label_names) -> Flask:
     """The app. The arguments exist so tests can replace the outside services."""
     set_up_access_log()
     app = Flask(__name__)
@@ -193,40 +228,99 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
         except psycopg.Error as problem:
             return database_down(problem)
         return jsonify({
-            "signed_in": bool(account), "username": account[1] if account else None,
+            "signed_in": bool(account), "email": account[1] if account else None,
             "limits": {"hour": per_hour, "day": per_day}, "remaining": left,
         })
 
     @app.post("/api/sign-in")
-    def sign_in():
+    def ask_for_link():
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
-            return error("invalid_request", "Send a JSON object with a username and a password.", 400)
+            return error("invalid_request", "Send a JSON object with an email address.", 400)
         try:
             payload = SignInRequest.model_validate(body)
         except ValidationError as problem:
             fields = sorted({str(e["loc"][0]) for e in problem.errors() if e["loc"]})
+            if "email" in fields:
+                return error("invalid_email", "Please type a valid email address.", 400)
             return error("invalid_request", f"Invalid request: {', '.join(fields) or 'body'}.", 400)
+        try:
+            email = accounts.normalize_email(payload.email)
+        except ValueError:
+            return error("invalid_email", "Please type a valid email address.", 400)
+        if not (config.RESEND_API_KEY or config.SIGN_IN_LOG_LINKS):
+            return error("sign_in_unavailable", "Signing in is not available yet.", 503)
         refused = human_check(payload.captcha_token)
         if refused:
             return refused
         try:
             with connect_limits() as conn:
-                # Counted before the password is checked, right or wrong, so guessing is slow.
-                limits.take_sign_in(conn, accounts.username_key(payload.username, config.VISITOR_HASH_SECRET),
+                limits.take_sign_in(conn, accounts.email_key(email, config.VISITOR_HASH_SECRET),
                                     limits.visitor_id(visitor_ip(), config.VISITOR_HASH_SECRET), now())
-                signed_in = accounts.sign_in(conn, payload.username, payload.password, now())
+                token = accounts.create_sign_in_link(conn, email, now())
         except limits.LimitReached as reached:
             return error(reached.code, str(reached), 429, reached.retry_after)
         except psycopg.Error as problem:
             return database_down(problem)
+        base = config.PUBLIC_API_URL or request.host_url.rstrip("/")
+        try:
+            send_link(email, f"{base}/api/sign-in/confirm?token={quote(token)}")
+        except mailer.MailUnavailable as problem:
+            log.error("Sign-in email not sent: %s", problem)
+            return error("sign_in_unavailable", "The sign-in email could not be sent. Please try again later.", 503, 60)
+        # The same answer for every address, known or not.
+        response = jsonify({"status": "sent", "message": "A sign-in link is on its way to that address. "
+                            "It works once, within 15 minutes."})
+        response.status_code = 202
+        return response
+
+    @app.get("/api/sign-in/confirm")
+    def confirm_page():
+        token = request.args.get("token", "")[:200]
+        try:
+            with connect_limits() as conn:
+                email = accounts.link_email(conn, token, now()) if token else None
+        except psycopg.Error as problem:
+            log.error("Web database unavailable: %s", problem)
+            return page("Sign-in is unavailable", "<p>Please try again in a minute.</p>", 503)
+        if not email:
+            return link_used_page()
+        # A random value both in a cookie and in the form: a form posted from
+        # another site has no way to carry the cookie, so it is refused.
+        nonce = accounts.new_token()
+        response = page("Sign in to Market Trends", (
+            f"<p>Sign in to the question box on adnsaudio.com as <strong>{escape(email)}</strong>?</p>"
+            '<form method="post" action="/api/sign-in/confirm">'
+            f'<input type="hidden" name="token" value="{escape(token)}">'
+            f'<input type="hidden" name="nonce" value="{nonce}">'
+            "<button type=\"submit\">Sign in</button></form>"
+            "<p>If you didn't ask for this, close this page; nothing happens.</p>"
+        ))
+        response.set_cookie(CONFIRM_COOKIE, nonce, max_age=int(accounts.LINK_LIFETIME.total_seconds()),
+                            path="/api/sign-in", secure=config.COOKIE_SECURE, httponly=True, samesite="Strict")
+        return response
+
+    @app.post("/api/sign-in/confirm")
+    def confirm():
+        token = request.form.get("token", "")[:200]
+        nonce = request.form.get("nonce", "")
+        if not nonce or not hmac.compare_digest(nonce, request.cookies.get(CONFIRM_COOKIE, "")):
+            return page("Please open the link again", (
+                "<p>Open the sign-in link from your email again, then press Sign in.</p>"), 403)
+        try:
+            with connect_limits() as conn:
+                signed_in = accounts.sign_in(conn, token, now())
+        except psycopg.Error as problem:
+            log.error("Web database unavailable: %s", problem)
+            return page("Sign-in is unavailable", "<p>Please open the link again in a minute.</p>", 503)
         if not signed_in:
-            # The same answer for an unknown username and a wrong password.
-            return error("invalid_credentials", "That username and password don't match.", 401)
-        session, _account_id, username = signed_in
-        response = jsonify({"status": "signed_in", "username": username})
+            return link_used_page()
+        session, _account_id, _email = signed_in
+        response = redirect(config.SIGN_IN_RETURN_URL, 303)
         response.set_cookie(SESSION_COOKIE, session, max_age=int(accounts.SESSION_LIFETIME.total_seconds()),
                             path="/api", secure=config.COOKIE_SECURE, httponly=True, samesite="Strict")
+        response.delete_cookie(CONFIRM_COOKIE, path="/api/sign-in", secure=config.COOKIE_SECURE,
+                               httponly=True, samesite="Strict")
         return response
 
     @app.post("/api/sign-out")
@@ -292,7 +386,14 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
         response.headers["Vary"] = "Origin"
         response.headers.setdefault("Cache-Control", "no-store")
         response.headers["X-Content-Type-Options"] = "nosniff"
+        # Sign-in links carry their token in the address; never pass it on.
         response.headers["Referrer-Policy"] = "no-referrer"
+        if response.mimetype == "text/html":
+            site = urlsplit(config.SIGN_IN_RETURN_URL)
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; "
+                f"form-action 'self' {site.scheme}://{site.netloc}"
+            )
         return response
 
     @app.after_request
