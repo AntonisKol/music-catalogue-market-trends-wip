@@ -43,8 +43,9 @@ def html_message(title: str, paragraphs: list, button: tuple = None) -> str:
     return (
         '<div style="background:#07080b;padding:32px 16px"><div style="max-width:480px;margin:0 auto;padding:28px;'
         'background:#111318;border:1px solid #403553;color:#c9cdd6;font:16px/1.6 system-ui,-apple-system,Segoe UI,sans-serif">'
-        f'<img src="cid:{LOGO_ID}" alt="ADNS Audio" width="120" height="120" style="display:block;border:0;margin:0 0 20px">'
-        f'<h1 style="margin:0 0 16px;color:#eceef2;font-size:22px">{escape(title)}</h1>{body}{action}</div></div>'
+        f'<h1 style="margin:0 0 16px;color:#eceef2;font-size:22px">{escape(title)}</h1>{body}{action}'
+        f'<img src="cid:{LOGO_ID}" alt="ADNS Audio" width="80" height="80" style="display:block;border:0;margin:24px 0 0">'
+        '</div></div>'
     )
 
 

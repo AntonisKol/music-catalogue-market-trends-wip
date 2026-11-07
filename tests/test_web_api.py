@@ -3,6 +3,7 @@
 The question service and Cloudflare are replaced by fakes; the limits run against
 the real test database through the counting login.
 """
+import logging
 from datetime import datetime, timezone
 
 import psycopg
@@ -336,3 +337,8 @@ def test_a_visitor_cannot_fake_a_line_in_the_access_log(client, caplog):
     line = next(record.getMessage() for record in caplog.records if record.name == "web.access")
     assert "\n" not in line and "\\n" in line
     assert " 404 " in line and len(line) < 500
+
+
+def test_why_cloudflare_refused_a_token_reaches_the_log(client):
+    assert logging.getLogger("web.captcha").isEnabledFor(logging.INFO)
+    assert logging.getLogger("web").handlers

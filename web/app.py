@@ -171,20 +171,22 @@ def for_the_log(text: str) -> str:
     return text[:LOGGED_TEXT_LENGTH].encode("unicode_escape").decode("ascii")
 
 
-def set_up_access_log() -> None:
-    if access_log.handlers:
+def set_up_logging() -> None:
+    """The access log and the API's other messages, such as why Cloudflare refused a token."""
+    web_log = logging.getLogger("web")
+    if web_log.handlers:
         return
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    access_log.addHandler(handler)
-    access_log.setLevel(logging.INFO)
+    web_log.addHandler(handler)
+    web_log.setLevel(logging.INFO)
 
 
 def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_limits=limits.connect_limits,
                mail=mailer, now=lambda: datetime.now(timezone.utc),
                list_labels=tracked_label_names) -> Flask:
     """The app. The arguments exist so tests can replace the outside services."""
-    set_up_access_log()
+    set_up_logging()
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
     if config.TRUSTED_PROXIES:
