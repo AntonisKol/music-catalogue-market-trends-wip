@@ -1666,7 +1666,7 @@ All nine were caught.
 
 ## Task #38: Email sign-in and quotas per account
 
-*Replaced: email sign-in and email alerts were later removed. See "Removing email: passwords and accounts made by the owner". This section is kept as the record of the original choice.*
+*Email sign-in was removed and later came back, see "Removing email: passwords and accounts made by the owner" and "Task #49: Sign-up by email link". Email alerts stayed out.*
 
 *November 2026 · [issue #38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38)*
 
@@ -1907,6 +1907,8 @@ The setup script ran twice on a clean Ubuntu 24.04 container (firewall and servi
 
 ## Removing email: passwords and accounts made by the owner
 
+*Sign-in was later replaced again: see "Task #49: Sign-up by email link". Failure alerts stay as described here.*
+
 The project no longer sends or stores email. Setting up a mail provider added a cost and a dependency that a small site doesn't need.
 
 | Question | Choice | Rejected |
@@ -1937,6 +1939,23 @@ Visitors need to know which labels the box can answer about, and the owner needs
 **What this costs.** A hash can't be blocked at the firewall. The limits per visitor stop most abuse without that, and a suspect address can still be hashed and searched for. A keyed hash can still count as personal data, so the box says how addresses are used. Size limits don't promise a number of days: with little traffic, a line can stay for a long time.
 
 **The list.** Paused labels are left out. A newly added label appears at once, before the next nightly run has brought in its data.
+
+## Task #49: Sign-up by email link
+
+The page should let visitors sign up themselves and come back signed in. With accounts made only by the owner, a visitor had no way to get more questions without asking.
+
+| Question | Choice | Rejected |
+| --- | --- | --- |
+| How visitors sign up | A one-time email link, which creates the account the first time | Email and password: the most to build, including a reset flow. Username and password: no way to reset a password, and one person could make many accounts for more questions |
+| What email is used for | This page's sign-up only | Failure alerts too: they stay in the logs and run records |
+| The existing password accounts | Replaced when this is deployed | Keeping both sign-ins: two ways in to look after, for one owner's account |
+| How the code came back | Restored from before #47, with the labels and logs work kept | Writing it again: the old code and its tests had already been reviewed |
+
+**In plain words.** Opening the link only shows a page with a button. Pressing it signs the person in and returns them to the question box, so email systems that open links to check them can't use up the link.
+
+**What this costs.** The site again depends on Resend, stores email addresses, and needs Resend's DNS records. Anyone can now sign up, so the limit of 1,000 questions a day across the site is what caps the Anthropic bill.
+
+**Moving an existing database.** `create_limits_role` replaces a password-style `accounts` table and removes its accounts, once. Deploying this removes the accounts made with `manage_accounts`.
 
 ## Glossary
 

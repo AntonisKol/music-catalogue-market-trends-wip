@@ -78,7 +78,7 @@ The tasks below are ordered so each step builds on working code from the previou
 - A question service: Claude Haiku 5.5 picks among the five query tools, our code runs them through the read-only login, and the answer comes back with the rows it is based on (see [Ask a question](#ask-a-question)).
 
 - A web API (`POST /api/questions`) in front of the question service, with a human check, limits per visitor, per account and for the whole site, and JSON errors (see [Run the web API](#run-the-web-api)).
-- Sign-in with a username and password, for a larger quota; accounts are created only by the owner, with a command (see [Signing in](#signing-in)).
+- Sign-up and sign-in by one-time email link, for a larger quota; no passwords, and accounts can be deleted (see [Email sign-in](#email-sign-in)).
 - A question box for adnsaudio.com: one JavaScript module and one stylesheet in [`widget/`](widget) (see [Add the question box to a page](#add-the-question-box-to-a-page)).
 
 - A nightly update of every tracked label, with a record of each run and a log of any problems (see [Update the data every night](#update-the-data-every-night)). Prices are fetched every night; want, have and ratings once a week per release.
@@ -324,13 +324,13 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 
 | Status | Codes |
 | --- | --- |
-| 400 | `invalid_request`, `invalid_question` |
-| 401 | `not_signed_in`, `invalid_credentials` |
+| 400 | `invalid_request`, `invalid_question`, `invalid_email` |
+| 401 | `not_signed_in` |
 | 403 | `captcha_failed` |
 | 413 | the request is over 8 KB |
 | 429 | `visitor_limit_reached`, `account_limit_reached`, `site_limit_reached`, `sign_in_limit_reached`, with a `Retry-After` header |
 | 500 | `configuration`, `internal_error` |
-| 503 | `captcha_unavailable`, `busy`, `unavailable`, `database`, with `Retry-After` where waiting helps |
+| 503 | `captcha_unavailable`, `busy`, `unavailable`, `database`, `sign_in_unavailable`, with `Retry-After` where waiting helps |
 
 **Settings in `.env`:**
 - **Required:**
@@ -346,29 +346,23 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 
 `GET /api/labels` answers `{"labels": [...]}`, the names of the active tracked labels in alphabetical order, without the numbers Discogs adds to tell labels apart. Browsers may reuse the answer for 5 minutes.
 
-### Signing in
+### Email sign-in
 
-Visitors who want more than the anonymous allowance sign in with a username and password. Nobody can register from the web: you create each account with a command, and a forgotten password is reset the same way.
+Visitors who want more than the anonymous allowance sign up with a link sent by email, and come back to the page signed in. There are no passwords, and anyone can sign up. The first link used creates the account.
+1. The question box sends `POST /api/sign-in` with the address and a Turnstile token. The API emails a link that works once, within 15 minutes. The answer is the same for every address, so nobody can find out who has an account. Links are limited to 3 an hour per address and 5 an hour per visitor.
+2. The link opens a small page served by the API: "Sign in as you@…" and a **Sign in** button. Opening the link alone signs nobody in. Mail systems that check links before the person sees them (common with work and school email) therefore cannot use the link up.
+3. The button starts a session and returns to the question box (`SIGN_IN_RETURN_URL`). The session lasts 30 days, in a cookie that the page's JavaScript cannot read (`HttpOnly`), sent only over HTTPS (`Secure`) and only from adnsaudio.com's own pages (`SameSite=Strict`).
 
-```bash
-python -m web.manage_accounts add <username>            # asks for the password at a hidden prompt
-python -m web.manage_accounts set-password <username>   # also ends that account's sessions
-python -m web.manage_accounts delete <username>
-python -m web.manage_accounts list
-```
+`GET /api/account` tells the page whether someone is signed in and how many questions are left. `POST /api/sign-out` ends the session. `POST /api/account/delete` deletes the account, its sessions, its unused links and its question counts.
 
-On the server, run them from `/srv/market-trends` with `docker compose --env-file .env -f deploy/compose.yml run --rm api` in front. Usernames are 3 to 64 letters, digits, dots, dashes and underscores. Passwords are 12 to 256 characters.
+**What is stored:** the email address, when the account was created and last signed in, and question counts for two days. Links and sessions are stored only as SHA-256 hashes, so a copy of the database cannot be used to sign in.
 
-1. The question box sends `POST /api/sign-in` with the username, the password and a Turnstile token.
-2. Attempts are limited to 10 an hour and 30 a day, per username and per visitor, counted before the password is checked.
-3. A wrong password and an unknown username get the same `invalid_credentials` answer, so nobody can find out which usernames exist.
-4. A correct sign-in starts a session lasting 30 days, in a cookie that the page's JavaScript cannot read (`HttpOnly`), sent only over HTTPS (`Secure`) and only from adnsaudio.com's own pages (`SameSite=Strict`).
-
-`GET /api/account` tells the page whether someone is signed in and how many questions are left. `POST /api/sign-out` ends the session. `POST /api/account/delete` deletes the account, its sessions and its question counts.
-
-**What is stored:** the username, a salted scrypt hash of the password, when the account was created and last signed in, and question counts for two days. Sessions are stored only as SHA-256 hashes, so a copy of the database cannot be used to sign in.
-
-For trying it on a laptop only, `COOKIE_SECURE=false` lets the cookie work over plain http.
+**Sign-in settings in `.env`:**
+- `RESEND_API_KEY`: a key from [Resend](https://resend.com), which sends the emails. Add Resend's DNS records for adnsaudio.com so the emails arrive from the site's own domain and don't land in spam. Without a key, sign-in is switched off and the API says so.
+- `SIGN_IN_EMAIL_FROM`: the sender, by default `Market Trends <sign-in@adnsaudio.com>`.
+- `PUBLIC_API_URL`: the API's public address used in the links, for example `https://api.adnsaudio.com`.
+- `SIGN_IN_RETURN_URL`: where the confirm page goes afterwards, by default `https://adnsaudio.com/market-trends/`.
+- For trying it on a laptop only: `SIGN_IN_LOG_LINKS=true` writes the links to the API's log instead of emailing them, and `COOKIE_SECURE=false` lets the cookie work over plain http.
 
 The cookie works on the live site only if the API is on a subdomain of adnsaudio.com, such as `api.adnsaudio.com` (see [Run it on a server](#run-it-on-a-server)).
 
@@ -396,16 +390,16 @@ What the box does:
 - disables the button while a question is answered, so a double click sends one question;
 - shows the answer, any warning, and "Show the data" with the rows behind it, opened automatically when there is a warning;
 - names the model that answered;
-- shows how many questions are left, offers sign-in when the anonymous allowance runs out, and shows the signed-in username with **Sign out** and **Delete my account**;
+- shows how many questions are left, offers sign-up when the anonymous allowance runs out, and shows the signed-in address with **Sign out** and **Delete my account**;
 - turns errors and limits into plain messages ("You can ask again in about 30 minutes").
 
 Answers are rendered from a small Markdown subset (paragraphs, bold, lists, tables) using text nodes only, so nothing in an answer can run as code.
 
-To try it locally, use two terminal windows. In the first, start the API on port 5050 with Cloudflare's test secret, which always passes, and allow the demo page to call it, and let the session cookie work over plain http:
+To try it locally, use two terminal windows. In the first, start the API on port 5050 with Cloudflare's test secret, which always passes, and allow the demo page to call it. The sign-in settings make sign-in links appear in this window instead of being emailed:
 
 ```bash
 TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA ALLOWED_ORIGINS=http://127.0.0.1:8765 \
-  COOKIE_SECURE=false \
+  SIGN_IN_LOG_LINKS=true COOKIE_SECURE=false SIGN_IN_RETURN_URL=http://127.0.0.1:8765/ \
   flask --app web.app run --host 127.0.0.1 --port 5050
 ```
 
@@ -438,20 +432,21 @@ Cron starts the nightly update at 03:00 UTC and then the backup. The page is par
    This installs Docker, turns on the firewall (SSH, 80 and 443 only) and automatic security updates, and creates the user `deploy`, who logs in with your key. It then turns off password and root logins, clones the project to `/srv/market-trends` and installs the cron job. At the end it prints a public key for the backups.
 4. **Storage Box.** Order a Storage Box in the Hetzner Console, switch on SSH access, and add the printed key to it ([Hetzner's guide](https://docs.hetzner.com/storage/storage-box/ssh-keys/add-ssh-keys/)).
 5. **Turnstile.** In Cloudflare, add a Turnstile widget for `adnsaudio.com` in invisible mode. It gives a public site key and a secret key.
-6. **Settings.** [`deploy/server.env.example`](deploy/server.env.example) lists every setting the server needs. Copy it over and fill it in on the server, taking the database, Discogs and Anthropic values from your Mac's `.env`:
+6. **Resend.** Add the domain `adnsaudio.com` in Resend and create the DNS records it lists in Cloudflare. They live on their own subdomain, so the site's existing email forwarding keeps working. Then create an API key, which goes in `RESEND_API_KEY` in the next step.
+7. **Settings.** [`deploy/server.env.example`](deploy/server.env.example) lists every setting the server needs. Copy it over and fill it in on the server, taking the database, Discogs and Anthropic values from your Mac's `.env`:
    ```bash
    scp deploy/server.env.example deploy@<server-ip>:/srv/market-trends/.env
    ssh deploy@<server-ip> 'chmod 600 /srv/market-trends/.env && nano /srv/market-trends/.env'
    ```
-7. **Move the data.** Dump the Mac's database to your home folder, copy it to the server, and load it there:
+8. **Move the data.** Dump the Mac's database to your home folder, copy it to the server, and load it there:
    ```bash
    docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > ~/market-trends-$(date +%F).dump
    scp ~/market-trends-<date>.dump deploy@<server-ip>:/srv/market-trends/backups/
    ssh -t deploy@<server-ip> 'cd /srv/market-trends && sh deploy/restore.sh backups/market-trends-<date>.dump'
    ```
    The restore asks you to type `yes`, loads everything in one transaction, then sets up the reader and web logins again (a dump does not carry logins) and starts the API.
-8. **Stop the Mac's nightly run** with `sh ops/install-launchd.sh remove`. From now on the server's database is the one that grows, and Discogs is asked once a night, not twice.
-9. **The page.** Add `DEPLOY_SERVER=deploy@<server-ip>` to your Mac's `.env`. It isn't secret, because the address is public through DNS. Then run the deploy command below, and merge the `adns-space` pull request that swaps the page's "Coming soon" box for the question box. That page holds the live API address and the public Turnstile site key.
+9. **Stop the Mac's nightly run** with `sh ops/install-launchd.sh remove`. From now on the server's database is the one that grows, and Discogs is asked once a night, not twice.
+10. **The page.** Add `DEPLOY_SERVER=deploy@<server-ip>` to your Mac's `.env`. It isn't secret, because the address is public through DNS. Then run the deploy command below, and merge the `adns-space` pull request that swaps the page's "Coming soon" box for the question box. That page holds the live API address and the public Turnstile site key.
 
 ### After merging a pull request
 
