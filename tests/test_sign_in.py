@@ -236,6 +236,13 @@ def test_the_confirmation_email_carries_the_link_and_the_logo(monkeypatch):
     assert base64.b64decode(logo["content"]).startswith(b"\x89PNG")
 
 
+def test_the_logo_is_small_and_comes_after_the_message():
+    html = mailer.html_message("Title", ["Some text"], ("Press", "https://api.example/x"))
+
+    assert html.index("Some text") < html.index("Press") < html.index(f"cid:{mailer.LOGO_ID}")
+    assert 'width="80"' in html
+
+
 @responses.activate
 @pytest.mark.parametrize("send", [
     lambda: mailer.send_reset(EMAIL, "https://api.example/reset?token=abc"),
