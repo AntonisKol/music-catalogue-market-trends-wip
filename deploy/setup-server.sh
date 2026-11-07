@@ -38,7 +38,9 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
 CONF
-systemctl reload ssh
+# ssh.service may not be running on Ubuntu 24.04, where connections start it through
+# ssh.socket. A plain reload then fails and stops this script; new logins read the file anyway.
+systemctl try-reload-or-restart ssh
 
 if [ ! -d "$DIR/.git" ]; then
   install -d -o deploy -g deploy "$DIR"

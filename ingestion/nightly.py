@@ -9,7 +9,7 @@ pipeline, and records the run and every label's result in ingestion_runs and
 ingestion_run_labels. A label that fails does not stop the others.
 
 Exit 0 when every label was updated without failures, 1 otherwise (the run is
-recorded as failed and an alert is emailed, if configured). Rerunning on the
+recorded as failed and the problems are logged). Rerunning on the
 same day is safe: it updates the same rows. Progress goes to stderr and to a
 rotating log file (logs/nightly.log, or LOG_FILE).
 """
@@ -24,7 +24,6 @@ import psycopg
 import requests
 
 from ingestion import database
-from ingestion.alerts import send_alert
 from ingestion.ingest_label import take_run_lock
 from ingestion.pipeline import DatabaseConnectionLost, ingest_label
 from ingestion.track_labels import tracked_labels
@@ -141,16 +140,13 @@ def main(argv: list) -> int:
         with database.connect() as conn:
             if not take_run_lock(conn):
                 log.error("Another ingestion run is in progress; not starting the nightly run")
-                send_alert("Market Trends: nightly run skipped", "Another ingestion run held the lock, so tonight's run did not start.")
                 return 1
             ok, summary, problems = run_nightly(conn, snapshot_date, now)
     except DatabaseConnectionLost as error:
         log.error("Stopped: the database connection was lost: %s", error)
-        send_alert("Market Trends: nightly run stopped", f"The database connection was lost: {error}\n\nRerun with: python -m ingestion.nightly")
         return 1
     except psycopg.Error as error:
         log.error("Could not use PostgreSQL: %s", error)
-        send_alert("Market Trends: nightly run could not start", f"PostgreSQL could not be used: {error}\n\nIs the database running? Rerun with: python -m ingestion.nightly")
         return 1
     if ok:
         log.info("Nightly run done: %s", summary)
@@ -158,11 +154,6 @@ def main(argv: list) -> int:
     log.error("Nightly run finished with problems: %s", summary)
     for problem in problems:
         log.error("  %s", problem)
-    send_alert(
-        "Market Trends: nightly run had problems",
-        f"{summary}\n\n" + "\n".join(f"- {p}" for p in problems)
-        + "\n\nRerunning is safe: python -m ingestion.nightly\nRecent runs: python -m ingestion.runs",
-    )
     return 1
 
 

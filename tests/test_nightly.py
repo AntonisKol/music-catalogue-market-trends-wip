@@ -1,4 +1,4 @@
-"""The nightly run: tracked labels, run records, missed nights, alerts, and the schema command."""
+"""The nightly run: tracked labels, run records, missed nights, logging, and the schema command."""
 import logging
 from datetime import date, datetime, timedelta, timezone
 
@@ -7,7 +7,7 @@ import pytest
 import responses
 from responses import matchers
 
-from ingestion import alerts, apply_schema, nightly, runs, track_labels
+from ingestion import apply_schema, nightly, runs, track_labels
 from ingestion.discogs_client import BASE_URL
 from ingestion.ingest_label import RUN_LOCK_ID
 from ingestion.nightly import run_nightly
@@ -169,14 +169,7 @@ def test_no_tracked_labels_is_a_quiet_success(db, caplog):
     assert "No active tracked labels" in caplog.text
 
 
-# --- The command: lock, exit codes, alerts --------------------------------------------
-
-@pytest.fixture
-def sent(monkeypatch):
-    sent = []
-    monkeypatch.setattr(nightly, "send_alert", lambda subject, body: sent.append((subject, body)) or True)
-    return sent
-
+# --- The command: lock, exit codes, logging --------------------------------------------
 
 @pytest.fixture
 def use_test_database(postgres_url, monkeypatch):
@@ -184,40 +177,38 @@ def use_test_database(postgres_url, monkeypatch):
 
 
 @responses.activate
-def test_a_good_night_exits_0_without_an_alert(db, use_test_database, sent):
+def test_a_good_night_exits_0(db, use_test_database):
     discogs_label(538, "Perlon", releases=[21])
     add_label(db, 538)
 
     assert nightly.main([]) == 0
-    assert sent == []
 
 
 @responses.activate
-def test_a_bad_night_exits_1_and_sends_an_alert(db, use_test_database, sent):
+def test_a_bad_night_exits_1_and_logs_the_problems(db, use_test_database, caplog):
     discogs_label(538, "Perlon", list_status=500)
     add_label(db, 538)
 
     assert nightly.main([]) == 1
-    [(subject, body)] = sent
-    assert "problems" in subject and "Perlon (538)" in body and "python -m ingestion.nightly" in body
+    assert "finished with problems" in caplog.text and "Perlon (538)" in caplog.text
 
 
-def test_a_second_run_does_not_start_and_alerts(db, postgres_url, use_test_database, sent):
+def test_a_second_run_does_not_start_and_logs_it(db, postgres_url, use_test_database, caplog):
     with psycopg.connect(postgres_url, autocommit=True) as other:
         other.execute("SELECT pg_advisory_lock(%s)", (RUN_LOCK_ID,))
         assert nightly.main([]) == 1
-    assert "skipped" in sent[0][0]
+    assert "not starting the nightly run" in caplog.text
     assert query(db, "SELECT count(*) FROM ingestion_runs") == [(0,)]
 
 
-def test_an_unreachable_database_alerts(monkeypatch, sent):
+def test_an_unreachable_database_is_logged(monkeypatch, caplog):
     def refuse():
         raise psycopg.OperationalError("connection refused")
 
     monkeypatch.setattr(nightly.database, "connect", refuse)
 
     assert nightly.main([]) == 1
-    assert "could not start" in sent[0][0] and "Is the database running?" in sent[0][1]
+    assert "Could not use PostgreSQL" in caplog.text
 
 
 def test_the_log_file_is_written(tmp_path, monkeypatch):
@@ -250,64 +241,6 @@ def test_runs_shows_recent_runs_with_failures(db, postgres_url, monkeypatch, cap
     assert runs.main([]) == 0
     out = capsys.readouterr().out
     assert "2026-11-02 02:00 UTC  failed" in out and "(12 min)" in out and "Perlon (538)" in out
-
-
-# --- Alerts ---------------------------------------------------------------------------------
-
-class FakeSMTP:
-    sent = []
-    fail = False
-
-    def __init__(self, host, port, timeout):
-        self.host, self.port = host, port
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def starttls(self):
-        if FakeSMTP.fail:
-            raise OSError("connection reset")
-
-    def login(self, user, password):
-        self.user = user
-
-    def send_message(self, message):
-        FakeSMTP.sent.append((self.host, self.port, message))
-
-
-@pytest.fixture
-def smtp(monkeypatch):
-    FakeSMTP.sent, FakeSMTP.fail = [], False
-    monkeypatch.setattr(alerts.smtplib, "SMTP", FakeSMTP)
-    for name, value in {"ALERT_EMAIL_TO": "owner@example.com", "SMTP_HOST": "smtp.example.com",
-                        "SMTP_USER": "alerts@example.com", "SMTP_PASSWORD": "pw"}.items():
-        monkeypatch.setenv(name, value)
-    return FakeSMTP
-
-
-def test_an_alert_is_emailed_when_configured(smtp):
-    assert alerts.send_alert("Subject", "Body") is True
-    [(host, port, message)] = smtp.sent
-    assert (host, port) == ("smtp.example.com", 587)
-    assert message["To"] == "owner@example.com" and message["From"] == "alerts@example.com"
-    assert message.get_content().strip() == "Body"
-
-
-def test_without_settings_the_alert_is_only_logged(monkeypatch, caplog):
-    monkeypatch.delenv("ALERT_EMAIL_TO", raising=False)
-
-    assert alerts.send_alert("Subject", "Body") is False
-    assert "Alert not emailed" in caplog.text
-
-
-def test_a_failing_mail_server_never_breaks_the_run(smtp, caplog):
-    smtp.fail = True
-
-    assert alerts.send_alert("Subject", "Body") is False
-    assert "could not be sent" in caplog.text
 
 
 # --- Applying the schema to an existing database ----------------------------------------
