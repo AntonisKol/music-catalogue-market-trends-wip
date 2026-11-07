@@ -1666,6 +1666,8 @@ All nine were caught.
 
 ## Task #38: Email sign-in and quotas per account
 
+*Replaced: email sign-in and email alerts were later removed. See "Removing email: passwords and accounts made by the owner". This section is kept as the record of the original choice.*
+
 *November 2026 · [issue #38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38)*
 
 **Goal.** Let anyone try the question box without an account, and give people who sign in a larger quota, without passwords and while keeping bots out. The invisible human check came first, in pull request #39.
@@ -1903,6 +1905,22 @@ The setup script ran twice on a clean Ubuntu 24.04 container (firewall and servi
 
 ---
 
+## Removing email: passwords and accounts made by the owner
+
+The project no longer sends or stores email. Setting up a mail provider added a cost and a dependency that a small site doesn't need.
+
+| Question | Choice | Rejected |
+| --- | --- | --- |
+| How people sign in | Username and password | Email links: they need a mail provider and its DNS records |
+| Who makes accounts | The owner, with `web/manage_accounts.py` | Public sign-up: more abuse risk, and without email nobody could reset their own password |
+| Visitors without an account | The small anonymous allowance stays | Login required for everything: nobody could try the live site |
+| How passwords are stored | Salted scrypt hashes from Werkzeug, already a dependency | A new library: no need for one |
+| Failure alerts | Logs and run records only | Keeping SMTP alerts: that is still an email provider |
+
+**What this costs.** Nobody is told when a nightly run or a backup fails, so `python -m ingestion.runs` and `logs/cron.log` have to be checked by hand. Nobody can reset their own password or change it from the page.
+
+**Moving an existing database.** `create_limits_role` drops the old email tables, and any accounts in them, because they have no passwords and could not be used. The deploy and restore scripts already run it, so a dump from before this change loses its email addresses when restored.
+
 ## Glossary
 
 - **API**: a way for programs to talk to each other. Discogs' API is how our code asks Discogs for release data.
@@ -1948,6 +1966,5 @@ The setup script ran twice on a clean Ubuntu 24.04 container (firewall and servi
 - **Text node**: a piece of a web page that the browser always shows as text, never runs as code.
 - **aria-live**: a marker that tells screen readers to announce changes in part of the page.
 - **launchd / cron**: the schedulers built into macOS and Linux, which start a command at set times.
-- **SMTP**: the standard way programs send email through a mail provider.
 - **Advisory lock**: a named lock kept by the database, used here so only one ingestion run works at a time; it is released automatically when the run's connection closes.
 - **Savepoint**: a checkpoint inside an open database transaction; nothing in it is permanent until the outer transaction is committed.

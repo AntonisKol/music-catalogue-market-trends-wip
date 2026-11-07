@@ -142,7 +142,7 @@ def test_a_visitor_over_the_hourly_limit_is_refused_before_the_question_service(
     response = ask(client)
 
     assert response.get_json()["error"]["code"] == "visitor_limit_reached"
-    assert "Sign in with your email" in response.get_json()["error"]["message"]
+    assert "Sign in to ask more" in response.get_json()["error"]["message"]
     assert response.headers["Retry-After"] == str(30 * 60 + 1)
     assert len(fakes.questions) == 2
     assert ask(client, ip="198.51.100.1").status_code == 200  # another visitor

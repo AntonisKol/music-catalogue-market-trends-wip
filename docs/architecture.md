@@ -5,7 +5,7 @@ How the project fits together, what each part is made of, and how it was built s
 - **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
 - **Developers:** every box names its code file, and the components table goes into detail.
 
-*Last updated: 2 November 2026, after issue 38 (email sign-in and quotas per account). 382 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
+*Last updated: 7 November 2026, after email was removed and sign-in moved to usernames and passwords. 411 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
 
 **How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
 
@@ -27,7 +27,6 @@ flowchart TB
         DG["Discogs REST API<br/>Source of releases, label lists<br/>and marketplace prices"]
         AN["Anthropic API, Claude<br/>Reads a question and picks<br/>which query tool to call"]
         CF["Cloudflare Turnstile<br/>Confirms the visitor is a person"]
-        RS["Resend<br/>Sends the sign-in emails<br/>from adnsaudio.com"]
         GP["GitHub Pages<br/>Serves adnsaudio.com from the<br/>adns-space repo, the question box<br/>in its market-trends/ folder"]
         SB["Hetzner Storage Box<br/>Keeps a copy of the last<br/>14 nightly backups"]
     end
@@ -38,7 +37,7 @@ flowchart TB
     end
 
     subgraph ING["Ingestion: writes data"]
-        SCH["Nightly update, step 5<br/>Code: ingestion/nightly.py, track_labels.py, ops/<br/>How: launchd (Mac) or cron (server) runs<br/>one command for every tracked label;<br/>details once a week per release, issue 41<br/>Achieved: fresh prices every night, want/have<br/>weekly, each run recorded, email alert on problems"]
+        SCH["Nightly update, step 5<br/>Code: ingestion/nightly.py, track_labels.py, ops/<br/>How: launchd (Mac) or cron (server) runs<br/>one command for every tracked label;<br/>details once a week per release, issue 41<br/>Achieved: fresh prices every night, want/have<br/>weekly, each run recorded, problems logged"]
         CLI["Label command, step 4 and issue 27<br/>Code: ingest_label.py, pipeline.py<br/>How: one run at a time, lists a label,<br/>skips non-vinyl and credit-only releases,<br/>saves each release, logs a summary<br/>Achieved: a whole label in one command,<br/>failures reported, never silently lost"]
         SHOP["Shop tracker, issue 24<br/>How: reads chosen record shops'<br/>Discogs inventories every day<br/>Will achieve: prices by seller city,<br/>such as Berlin"]
         CL["Discogs client, steps 1 and 4<br/>Code: discogs_client.py<br/>How: one request every 1.1 s,<br/>retries after 5, 15, 60 s<br/>Achieved: stays under the limit of<br/>60 requests a minute, rides out<br/>Discogs hiccups of up to 80 s"]
@@ -51,14 +50,14 @@ flowchart TB
         TRK[("Tracked labels and run records<br/>tracked_labels, ingestion_runs<br/>Achieved: what to update, and how each night went")]
         SNAP[("Snapshots<br/>price per release per day,<br/>want, have and ratings per week<br/>Achieved: history that grows with every run")]
         LST[("Shop listings, issue 24<br/>one row per listing per day")]
-        LIM[("Question counts and accounts<br/>question_counts, accounts, sign_in_tokens, sessions<br/>Code: create_limits_role.py<br/>Achieved: limits that survive restarts; links and<br/>sessions stored only as hashes")]
+        LIM[("Question counts and accounts<br/>question_counts, accounts, sessions<br/>Code: create_limits_role.py<br/>Achieved: limits that survive restarts; passwords and<br/>sessions stored only as hashes")]
     end
 
     subgraph QRY["Questions: reads data"]
         RD["Reader login, step 6<br/>Code: create_reader_role.py<br/>How: SELECT-only role, read-only<br/>sessions, 5 s query limit<br/>Achieved: nothing using this login can<br/>change data, enforced by the database"]
         TL["Five query tools, step 6 and issue 27<br/>Code: queries/tools.py<br/>How: fixed SQL, arguments checked<br/>by Pydantic, capped results, vinyl only<br/>Achieved: safe, predictable reads<br/>an AI can call"]
         QS["Question service, steps 7 and 8<br/>Code: queries/questions.py, queries/verify.py<br/>How: Claude Haiku 5.5 via the SDK tool runner,<br/>gets only the question and tool descriptions,<br/>our code checks and runs each tool it picks,<br/>then checks every figure against the rows<br/>Achieved: answers from our rows, returned<br/>with their sources, a warning when a figure<br/>cannot be found, clear errors for failures"]
-        API["Web API, step 9 and issue 38<br/>Code: web/app.py, limits.py, captcha.py,<br/>accounts.py, mailer.py<br/>How: Flask under gunicorn, JSON in and out;<br/>Turnstile human check, limits per visitor,<br/>account and site, email sign-in with a<br/>confirm page and a sessions table<br/>Achieved: questions checked and limited<br/>before the AI, a larger quota when signed in,<br/>keys and passwords stay on the server"]
+        API["Web API, step 9 and issue 38<br/>Code: web/app.py, limits.py, captcha.py,<br/>accounts.py, manage_accounts.py<br/>How: Flask under gunicorn, JSON in and out;<br/>Turnstile human check, limits per visitor,<br/>account and site, username and password<br/>sign-in with a sessions table<br/>Achieved: questions checked and limited<br/>before the AI, a larger quota when signed in,<br/>keys and passwords stay on the server"]
         UI["Question box, step 10<br/>Code: widget/ask.js, widget/ask.css<br/>How: plain JavaScript on adnsaudio.com,<br/>invisible Turnstile check, safe Markdown subset<br/>as text nodes, collapsible data table,<br/>questions left and sign-in form<br/>Achieved: anyone can ask about vinyl prices<br/>on phone or desktop, with the model named"]
     end
 
@@ -83,7 +82,6 @@ flowchart TB
     QS --> API
     API <-->|"verify token"| CF
     API <-->|"web login, only these tables"| LIM
-    API -->|"sign-in link"| RS
     API -->|"JSON answer"| CAD
     CAD -->|"HTTPS"| UI
     GP -->|"the page"| UI
@@ -116,7 +114,7 @@ flowchart TD
     S2["Step 2, issue 2: Tests and test database<br/>Code: tests/, conftest.py<br/>How: pytest, Discogs faked with responses,<br/>a throwaway PostgreSQL via Testcontainers<br/>Achieved: every change checked<br/>without touching real data"]
     S3["Step 3, issue 3: Daily snapshots<br/>Code: save_snapshot.py, repository.py<br/>How: marketplace stats in EUR plus<br/>want, have and rating, one row per day<br/>Achieved: price and demand history"]
     S4["Step 4, issue 6: Ingest a whole label<br/>Code: pipeline.py, ingest_label.py<br/>How: dedupe, vinyl filter, pacing,<br/>retries, commit per release, logging<br/>Achieved: a whole label in one command,<br/>failures listed, never silently lost"]
-    S5["Step 5, issue 10: Nightly update<br/>Code: nightly.py, track_labels.py, runs.py, alerts.py<br/>How: tracked_labels table, launchd or cron,<br/>run lock, run records, rotating log, SMTP alert<br/>Achieved: data refreshed every night, missed<br/>nights flagged, safe reruns"]
+    S5["Step 5, issue 10: Nightly update<br/>Code: nightly.py, track_labels.py, runs.py<br/>How: tracked_labels table, launchd or cron,<br/>run lock, run records, rotating log<br/>Achieved: data refreshed every night, missed<br/>nights flagged, safe reruns"]
     F41["Issue 41: Prices nightly, details weekly<br/>Code: pipeline.py, repository.py, tools.py<br/>How: one weekday per release from its id,<br/>details over 7 days old fetched anyway<br/>Achieved: about half the requests a night,<br/>all tracked labels in one night"]
     S6["Step 6, issue 11: Read-only query tools<br/>Code: queries/, create_reader_role.py<br/>How: SELECT-only role, 5 fixed tools,<br/>Pydantic checks, capped results<br/>Achieved: safe reads for the AI"]
     S7["Step 7, issue 7: AI question service<br/>Code: queries/questions.py<br/>How: Claude Haiku 5.5, SDK tool runner over<br/>the 5 tools, prompt caching, no round cap<br/>Achieved: questions answered from the<br/>stored data with their sources,<br/>the AI never writes SQL"]
@@ -127,7 +125,7 @@ flowchart TD
     F19["Issue 19: CI runs all tests<br/>Code: .github/workflows/tests.yml<br/>How: GitHub Actions on Python 3.10 and 3.13,<br/>Testcontainers PostgreSQL, CI=true,<br/>actions pinned to exact commits<br/>Achieved: no pull request merges into<br/>main unless all tests pass"]
     F24["Issue 24: Tracked techno shops<br/>How: chosen shops' Discogs inventories,<br/>city recorded by us, a sixth query tool<br/>Will achieve: questions by seller city,<br/>such as records sold from Berlin"]
     F27["Issue 27: Fixes from a code review<br/>Code: pipeline.py, ingest_label.py, tools.py<br/>How: one run at a time, credit-only and<br/>deleted releases handled, vinyl-only answers<br/>Achieved: the code does what the docs promise"]
-    F38["Issue 38: Email sign-in and quotas<br/>Code: web/accounts.py, mailer.py, widget/<br/>How: one-time links by Resend, a confirm page,<br/>a sessions table, counts per account<br/>Achieved: 3 questions a day to try, 10 an hour<br/>and 50 a day signed in, no passwords,<br/>accounts deletable"]
+    F38["Issue 38: Sign-in and quotas<br/>Code: web/accounts.py, manage_accounts.py, widget/<br/>How: usernames and hashed passwords, accounts made<br/>by the owner, a sessions table, counts per account<br/>Achieved: 3 questions a day to try, 10 an hour<br/>and 50 a day signed in, accounts deletable"]
     F44["Issue 44: Hosting<br/>Code: Dockerfile, deploy/<br/>How: a Hetzner server with Docker Compose,<br/>Caddy for HTTPS, cron for the nightly update,<br/>backups to a Storage Box, one deploy command,<br/>the box on the site's own page<br/>Achieved: everything ready to run online;<br/>live once the server and accounts exist"]
     F18["Issues 18 and 25: Documentation<br/>Code: README, decisions.md, this page<br/>Achieved: decisions and architecture<br/>written down, updated with every step"]
 
@@ -170,7 +168,7 @@ flowchart TD
 | 2 | [2](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/2) Tests | Built | Fake Discogs, a throwaway test database | pytest, responses, Testcontainers |
 | 3 | [3](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) Snapshots | Built | One price and demand row per release per day | Discogs marketplace API |
 | 4 | [6](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) Pipeline | Built | A whole label in one command | logging, pacing, retries |
-| 5 | [10](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) Nightly update | Built | Every tracked label refreshed each night, every run recorded, alerts on problems | launchd, cron, PostgreSQL, SMTP |
+| 5 | [10](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) Nightly update | Built | Every tracked label refreshed each night, every run recorded, problems logged | launchd, cron, PostgreSQL |
 | 6 | [11](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) Query tools | Built | Safe, capped reads for the AI | PostgreSQL roles, Pydantic |
 | 7 | [7](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) AI service | Built | Questions answered from the data, with their sources | Anthropic Messages API, tool runner, Claude Haiku 5.5 |
 | 8 | [9](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) Test AI | Built | Guardrails proven with a faked AI; figures checked on every answer; a live before-release test with an AI judge | pytest, httpx MockTransport, Claude Opus 5.5 as judge |
@@ -178,7 +176,7 @@ flowchart TD
 | 10 | [12](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) Question box | Built | The question box for adnsaudio.com, checked in a real browser | HTML, CSS, JavaScript, Cloudflare Turnstile |
 | 11 | [13](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) Test page | Planned | Keyboard, focus and screen-reader checks | browser tests |
 | – | [27](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/27) Review fixes | Built | Malformed data, deleted and credit-only releases handled; one run at a time; vinyl-only answers | Python, PostgreSQL advisory lock |
-| – | [38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38) Email sign-in | Built | Sign-in by one-time email link and confirm page; quotas per account; account deletion | Flask, PostgreSQL, Resend |
+| – | [38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38) Sign-in | Built, later moved from email links to passwords | Username and password sign-in; accounts made by the owner; quotas per account; account deletion | Flask, PostgreSQL |
 | – | [41](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/41) Weekly details | Built | Prices every night, want/have/ratings once a week per release, spread over the week; about half the requests a night | Python, PostgreSQL |
 | – | [44](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/44) Hosting | Built, not yet live | The API, database and nightly update on a server, HTTPS by Caddy, nightly backups off the server, one deploy command, the page on adnsaudio.com | Docker Compose, Caddy, cron, rsync, GitHub Pages |
 | – | [19](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/19) CI | Built | Every pull request runs all tests, including the database ones, and must pass to merge | GitHub Actions, Dependabot |
@@ -351,45 +349,34 @@ The five query tools, built in step 6, are all the AI can use:
 
 The list tools return at most 50 rows (25 unless asked for more), plus the total number that matched. `release_history` returns one row per day, so at most 90, and `compare_labels` at most 10. Every tool returns vinyl only, and a query stopped by the 5-second limit comes back as a readable reason. Each tool description tells the AI what the price means: the cheapest copy on sale in any condition, without shipping, in EUR converted by Discogs.
 
-### Signing in, issue 38
+### Signing in
 
-In one sentence: an emailed link opens a confirm page, and only its button signs in, so a mail scanner opening the link cannot use it up.
+In one sentence: the owner creates each account with a command, and a visitor signs in with that username and password.
 
 ```mermaid
 sequenceDiagram
     autonumber
+    actor O as Site owner
     actor V as Visitor
     participant UI as Question box
     participant API as Web API
     participant Pg as PostgreSQL, web login
-    participant RS as Resend
-    participant M as Visitor's inbox
 
-    V->>UI: types an email after running out of questions
-    UI->>API: POST /api/sign-in, email and Turnstile token
-    API->>API: check the address and the human check
-    API->>Pg: count it: 3 an hour per address, 5 per visitor
-    API->>Pg: store the SHA-256 hash of a new random token, valid 15 minutes
-    API->>RS: send the link
-    RS->>M: Your Market Trends sign-in link
-    API-->>UI: 202, the same answer for every address
-    Note over UI,API: Achieved: nobody can find out who has an account
-    opt a mail scanner opens the link first
-        M->>API: GET /api/sign-in/confirm?token
-        API-->>M: confirm page, link not used
+    O->>Pg: python -m web.manage_accounts add: stores a salted scrypt hash
+    V->>UI: types a username and password
+    UI->>API: POST /api/sign-in, with a Turnstile token
+    API->>API: the human check
+    API->>Pg: count it: 10 an hour per username and per visitor
+    API->>Pg: read the password hash
+    API->>API: check the password, against a stand-in hash if the username is unknown
+    alt wrong username or password
+        API-->>UI: 401, the same answer for both
+    else correct
+        API->>Pg: store the SHA-256 hash of a new session token
+        API-->>UI: session cookie: HttpOnly, Secure, SameSite=Strict, 30 days
     end
-    V->>API: opens the link: GET /api/sign-in/confirm?token
-    API->>Pg: is the token unused and in time
-    API-->>V: Sign in as you@ page, sets a SameSite=Strict check cookie
-    V->>API: presses Sign in: POST token and the check value
-    API->>API: the check value matches the cookie
-    API->>Pg: mark the token used and start a session, in one transaction
-    Note over API,Pg: Achieved: one link, one sign-in, even with two presses
-    API-->>V: 303 to adnsaudio.com/market-trends/, session cookie: HttpOnly, Secure, SameSite=Strict, 30 days
-    V->>UI: back on the page
     UI->>API: GET /api/account with the cookie
-    API-->>UI: signed in as you@, 10 questions left this hour
-    Note over V,UI: Achieved: no password, a larger quota,<br/>sign-out and account deletion end the session at once
+    API-->>UI: signed in, 10 questions left this hour
 ```
 
 ---
@@ -411,12 +398,12 @@ sequenceDiagram
 | Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 390 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock; a `--live` before-release test with the real Claude and an AI judge | Database tests skip without Docker on a laptop, fail in CI; live tests never run without `--live` |
 | Question service | [`queries/questions.py`](../queries/questions.py) | Anthropic SDK tool runner, Claude Haiku 5.5 | Sends the question and tool descriptions to Claude, runs the tools it asks for, returns the answer with its sources | Claude never sees SQL or the database; refused arguments go back as errors; a database failure stops the run; every error becomes a visitor-safe `QuestionError`; instructions and tools cached |
 | Web API | [`web/app.py`](../web/app.py), [`limits.py`](../web/limits.py), [`captcha.py`](../web/captcha.py), [`create_limits_role.py`](../ingestion/create_limits_role.py) | Flask, gunicorn, Cloudflare Turnstile | `POST /api/questions`: checks the request, the human check and the limits, then asks the question service | Fails closed; limits counted in one transaction by a login that can only touch its four tables; visitors stored as a keyed hash, deleted after two days; forwarded addresses trusted only behind a configured proxy; usage never sent; 8 KB body limit; CORS only for listed origins |
-| Email sign-in | [`web/accounts.py`](../web/accounts.py), [`mailer.py`](../web/mailer.py) | PostgreSQL, Resend | One-time links, the confirm page, sessions, sign-out and account deletion | Tokens are 32 random bytes, stored only as hashes; links work once within 15 minutes; opening a link uses nothing; confirm form checked against a `SameSite=Strict` cookie; session cookie `HttpOnly`, `Secure`, `SameSite=Strict`; links limited per address and visitor; the same answer for every address; strict Content Security Policy and no referrer |
+| Sign-in | [`web/accounts.py`](../web/accounts.py), [`manage_accounts.py`](../web/manage_accounts.py) | PostgreSQL | Accounts made by the owner, password check, sessions, sign-out and account deletion | Passwords stored as salted scrypt hashes; session tokens are 32 random bytes, stored only as hashes; session cookie `HttpOnly`, `Secure`, `SameSite=Strict`; attempts limited per username and visitor; the same answer for an unknown username and a wrong password |
 | Question box | [`widget/ask.js`](../widget/ask.js), [`ask.css`](../widget/ask.css), [`index.html`](../widget/index.html) | HTML, CSS, JavaScript, Cloudflare Turnstile | The form, example questions, states, answer, warning, model and data table | Answers drawn from text nodes only; no double submits; token reset after each question; no secrets in the page; 90-second request timeout |
-| Nightly update | [`ingestion/nightly.py`](../ingestion/nightly.py), [`track_labels.py`](../ingestion/track_labels.py), [`runs.py`](../ingestion/runs.py), [`alerts.py`](../ingestion/alerts.py), [`ops/`](../ops) | launchd, cron, SMTP | Updates every active tracked label each night (prices nightly, details weekly per release) and records each run and label | Shares the ingestion lock; interrupted runs marked failed; missed nights flagged; one label's failure doesn't stop the rest; rotating log; alerts never break the run |
+| Nightly update | [`ingestion/nightly.py`](../ingestion/nightly.py), [`track_labels.py`](../ingestion/track_labels.py), [`runs.py`](../ingestion/runs.py), [`ops/`](../ops) | launchd, cron | Updates every active tracked label each night (prices nightly, details weekly per release) and records each run and label | Shares the ingestion lock; interrupted runs marked failed; missed nights flagged; one label's failure doesn't stop the rest; rotating log |
 | Schema command | [`ingestion/apply_schema.py`](../ingestion/apply_schema.py) | PostgreSQL | Adds tables introduced since a database was created | Every statement is `CREATE TABLE IF NOT EXISTS`; existing data untouched |
 | Server setup | [`Dockerfile`](../Dockerfile), [`deploy/compose.yml`](../deploy/compose.yml), [`Caddyfile`](../deploy/Caddyfile), [`setup-server.sh`](../deploy/setup-server.sh), [`crontab`](../deploy/crontab), [`nightly.sh`](../deploy/nightly.sh) | Docker Compose, Caddy, cron, Ubuntu 24.04 | Runs the database, the API under gunicorn and Caddy; cron starts the nightly update at 03:00 UTC, then the backup | Only Caddy publishes ports; the database container gets only its own settings; `.env` never in the image; containers run as an ordinary user; firewall open for SSH, 80 and 443 only; SSH by key only, no root login; automatic security updates; tests check these |
-| Backups | [`deploy/backup.sh`](../deploy/backup.sh), [`restore.sh`](../deploy/restore.sh) | pg_dump, rsync over SSH | A dump after every nightly update, kept 14 days on the server and on a Storage Box; restoring also sets up the logins again | A dump is checked before it is kept; a half-written dump is never kept; a failed backup sends an alert; restoring asks for "yes" and runs in one transaction |
+| Backups | [`deploy/backup.sh`](../deploy/backup.sh), [`restore.sh`](../deploy/restore.sh) | pg_dump, rsync over SSH | A dump after every nightly update, kept 14 days on the server and on a Storage Box; restoring also sets up the logins again | A dump is checked before it is kept; a half-written dump is never kept; a failed backup is reported in `logs/cron.log`, and nothing is copied; half-written dumps left by a failed run are deleted by the next one; restoring asks for "yes" and runs in one transaction |
 | Deploy | [`deploy/deploy.sh`](../deploy/deploy.sh) | SSH, git, GitHub Pages | Updates the server from `main`, adds new tables, checks the API answers, then copies the question box into the website repo | Pulls only fast-forward; only `ask.js` and `ask.css` are copied, so no secret can reach the website; a newer website commit is rebased onto, never overwritten |
 | CI | [`.github/workflows/tests.yml`](../.github/workflows/tests.yml), [`dependabot.yml`](../.github/dependabot.yml) | GitHub Actions, Dependabot | Runs every test on Python 3.10 and 3.13 for each pull request and push to main | Required to pass before merging; read-only token; actions pinned to exact commits; runs stop after 15 minutes |
 
@@ -474,7 +461,6 @@ The same routine has been used on every task:
 | 12 | The browser check could not open the demo page | `localhost` resolved to IPv6 while the test server listened on IPv4 | The demo uses `127.0.0.1` for the page and the API |
 | 12 | The faked API refused the page's request | The page and the API are on different origins, so the browser first asks permission (CORS), as on the real site | The fake answers that request with CORS headers, the same way the real API does |
 | 12 | Trying the demo on a Mac showed "Could not reach the question service" | macOS uses port 5000, Flask's default, for AirPlay Receiver, which answered instead of the API | The demo and README use port 5050 |
-| 38 | A one-click sign-in link would fail for many work and school addresses | Their mail systems open every link to check it, which would use up a one-time link | The link opens a confirm page; only its button signs in |
 | 38 | After using up their questions, visitors were told to "try again later" when they could not ask again until the next day | The hour was checked before the day, and with 3 an hour and 3 a day both ran out together | The day is checked first, so the longer wait is reported; a test covers it |
 | 38 | A planted bug (signed-in questions counted against the visitor's address) survived | The tests checked the account's limit but not which count it was taken from | A test checks that the address's count stays untouched; the bug is now caught |
 | 41 | The first import of 56 labels needed about 17 hours, and every later night as long | Two Discogs requests per release a night, at about 55 a minute | Details fetched once a week per release, spread over the week; prices every night |
@@ -485,6 +471,9 @@ The same routine has been used on every task:
 | 44 | The setup script stopped on a clean Ubuntu 24.04: "UID 1000 is not unique" | The image already has a user with that id, the one the containers run as | The deploy user takes any free id, and the logs folder is shared by both through its group |
 | 44 | A deploy user that already existed would not have been able to run Docker | The docker group was only given when the user was created | The script now adds the user to the group every time it runs |
 | 44 | The planned page repo would have been published outside adnsaudio.com | Only the website repo (`adns-space`) carries the domain; other repos are served at `antoniskol.github.io` | Checked before creating it; the box goes into the website's existing Market Trends page, and the deploy command copies its files there |
+| 44 | The first copy to the Storage Box would have failed | The settings template had comments after two values, and `backup.sh` reads everything after the `=` as the value | The comments moved to their own lines, and a test keeps them there |
+| 44 | The setup script could stop at the SSH step on Ubuntu 24.04 | `ssh.service` may not be running there, because connections start it through `ssh.socket`, and a plain reload then fails | The script reloads only if the service is running; new logins read the settings anyway |
+| 44 | Empty `.partial` files piled up on the server and would have been copied to the Storage Box | A failed dump leaves its temporary file, and only finished dumps were ever deleted | Each backup now deletes leftovers first, and a test runs the script to check it |
 
 ---
 

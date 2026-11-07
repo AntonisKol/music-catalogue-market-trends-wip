@@ -9,6 +9,9 @@ COMPOSE="docker compose --env-file .env -f deploy/compose.yml"
 KEEP_DAYS=14
 
 mkdir -p backups
+# A run that failed may have left its half-written dump behind. It is no backup, so it
+# must not stay here or be copied to the Storage Box.
+find backups -name '*.partial' -delete
 file="backups/market-trends-$(date -u +%Y-%m-%d).dump"
 # Written to a temporary name first, so a dump cut off halfway is never kept as a backup.
 $COMPOSE exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > "$file.partial"
