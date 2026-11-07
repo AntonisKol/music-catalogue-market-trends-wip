@@ -428,6 +428,37 @@ def test_bad_sign_ups_send_nothing(client, fakes, body, code):
     assert fakes.mails == []
 
 
+@pytest.mark.parametrize("email", ["someone@mailinator.com", "Someone@MAILINATOR.com", "someone@mail.mailinator.com"])
+def test_throwaway_addresses_cannot_sign_up_and_cost_nothing(client, fakes, db, email):
+    response = sign_up(client, email)
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == "disposable_email"
+    assert fakes.mails == [] and fakes.tokens == []
+    db.commit()
+    assert db.execute("SELECT count(*) FROM accounts").fetchone() == (0,)
+    assert db.execute("SELECT count(*) FROM question_counts WHERE visitor LIKE 'mail-%'").fetchone() == (0,)
+
+
+@pytest.mark.parametrize("email", ["a@gmail.com", "a@googlemail.com", "a@outlook.com", "a@hotmail.com", "a@yahoo.com",
+                                   "a@icloud.com", "a@proton.me", "a@gmx.de", "a@gmx.net", "a@web.de", "a@t-online.de",
+                                   "a@adnsaudio.com", "a@notmailinator.example"])
+def test_ordinary_addresses_are_not_treated_as_throwaway(email):
+    assert accounts.is_disposable(email) is False
+
+
+def test_the_throwaway_list_is_loaded():
+    assert len(accounts.DISPOSABLE_DOMAINS) > 1000
+    assert {"mailinator.com", "guerrillamail.com", "temp-mail.org"} <= accounts.DISPOSABLE_DOMAINS
+    assert not [domain for domain in accounts.DISPOSABLE_DOMAINS if domain.startswith("#") or "." not in domain]
+
+
+def test_an_existing_account_at_a_listed_service_can_still_sign_in(conn):
+    accounts.confirm_email(conn, accounts.sign_up(conn, "someone@mailinator.com", PASSWORD, NOON), NOON)
+
+    assert accounts.sign_in(conn, "someone@mailinator.com", PASSWORD, NOON) is not None
+
+
 def test_a_failed_human_check_sends_nothing(client, fakes):
     fakes.human = False
 
