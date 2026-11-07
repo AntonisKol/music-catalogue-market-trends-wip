@@ -620,6 +620,15 @@ def test_forgotten_password_from_the_email_to_signed_in_again(client, fakes):
     assert sign_in_with_password(client, password=NEW_PASSWORD).status_code == 200
 
 
+def test_the_new_password_page_tells_password_managers_the_account(client, fakes):
+    sign_in(client, fakes)
+    ask_for_reset(client)
+
+    page = client.get(f"/api/password-reset/confirm?token={token_in(fakes.mails[-1][2])}").get_data(as_text=True)
+
+    assert f'autocomplete="username" value="{EMAIL}"' in page and 'autocomplete="new-password"' in page
+
+
 def test_asking_for_a_new_password_does_not_show_who_has_an_account(client, fakes):
     sign_in(client, fakes)
     count = len(fakes.mails)
