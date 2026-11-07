@@ -59,3 +59,33 @@ def test_an_answer_without_sources_may_not_contain_data_figures():
 
 def test_numbers_inside_codes_and_words_are_not_figures():
     assert [written for written, _, _ in figures("ET12-008, 24-bit, 2026-11-01, A1, 3x12\"")] == []
+
+
+RANKED_TABLE = """| {head} | Title | Want |
+| --- | --- | --- |
+| 77 | Quarter Of A Century | 1,995 |
+| 88 | Quarter Of A Century | {want} |
+"""
+
+
+@pytest.mark.parametrize("head", ["#", "Rank", "rank", "No.", "Nr"])
+def test_row_numbers_in_a_table_are_layout(head):
+    assert check(RANKED_TABLE.format(head=head, want="1,995")) == []
+
+
+def test_figures_in_a_numbered_table_are_still_checked():
+    assert check(RANKED_TABLE.format(head="#", want="4,321")) == ["4,321"]
+
+
+def test_only_a_column_for_row_numbers_is_left_out():
+    assert check(RANKED_TABLE.format(head="Copies", want="1,995")) == ["77", "88"]
+
+
+def test_a_number_after_a_numbered_table_is_still_checked():
+    answer = RANKED_TABLE.format(head="#", want="1,995") + "\nThere are 66 more.\n\n| Copies | Want |\n| --- | --- |\n| 55 | 1,995 |"
+
+    assert check(answer) == ["66", "55"]
+
+
+def test_a_rank_written_as_a_figure_elsewhere_is_still_checked():
+    assert check("| # | Want |\n| --- | --- |\n| 77 | 1,995 |\n\nIts rank was 77 of 88.") == ["77", "88"]
