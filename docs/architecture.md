@@ -1,11 +1,11 @@
 # Architecture and task map
 
-How the project fits together, what each part is made of, and how it was built step by step, including the problems met on the way and how they were solved. The reasoning behind each individual decision is in [decisions.md](decisions.md).
+How the project fits together, what each part is made of, and how it was built step by step,, including the problems met on the way and how they were solved.
 
 - **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
 - **Developers:** every box names its code file, and the components table goes into detail.
 
-*Last updated: 7 November 2026, after the box learned to offer saving passwords. 452 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
+*Last updated: 7 November 2026, after going live and removing the decisions log. 452 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
 
 **How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
 
@@ -27,18 +27,19 @@ flowchart TB
         DG["Discogs REST API<br/>Source of releases, label lists<br/>and marketplace prices"]
         AN["Anthropic API, Claude<br/>Reads a question and picks<br/>which query tool to call"]
         CF["Cloudflare Turnstile<br/>Confirms the visitor is a person"]
-        GP["GitHub Pages<br/>Serves adnsaudio.com from the<br/>adns-space repo, the question box<br/>in its market-trends/ folder"]
+        GP["GitHub Pages<br/>Serves adnsaudio.com from the<br/>adns-space repo: the question box at<br/>/market-trends/ and the privacy page"]
         RS["Resend<br/>Sends the sign-up emails<br/>from adnsaudio.com"]
         SB["Hetzner Storage Box<br/>Keeps a copy of the last<br/>14 nightly backups"]
     end
 
-    subgraph SRV["Server, issue 44: a Hetzner server running deploy/compose.yml"]
+    subgraph SRV["Server, issue 44: a Hetzner server in Germany running deploy/compose.yml, live since 7 November 2026"]
         CAD["Caddy<br/>Code: deploy/Caddyfile<br/>How: HTTPS for api.adnsaudio.com,<br/>certificate renewed by itself<br/>Achieved: the only open door; the<br/>database has no public port"]
+        LOG["Logs<br/>Code: web/app.py, deploy/compose.yml<br/>How: one line per request with a keyed<br/>hash of the address, three files of 10 MB<br/>Achieved: abuse can be spotted without<br/>keeping anyone's address, issue 48"]
         BK["Backups<br/>Code: deploy/backup.sh, restore.sh<br/>How: nightly pg_dump after the update,<br/>kept 14 days, copied off the server<br/>Achieved: the price history survives<br/>losing the server"]
     end
 
     subgraph ING["Ingestion: writes data"]
-        SCH["Nightly update, step 5<br/>Code: ingestion/nightly.py, track_labels.py, ops/<br/>How: launchd (Mac) or cron (server) runs<br/>one command for every tracked label;<br/>details once a week per release, issue 41<br/>Achieved: fresh prices every night, want/have<br/>weekly, each run recorded, problems logged"]
+        SCH["Nightly update, step 5<br/>Code: ingestion/nightly.py, track_labels.py, ops/<br/>How: cron on the server at 03:00 UTC runs<br/>one command for every tracked label;<br/>details once a week per release, issue 41<br/>Achieved: fresh prices every night, want/have<br/>weekly, each run recorded, problems logged"]
         CLI["Label command, step 4 and issue 27<br/>Code: ingest_label.py, pipeline.py<br/>How: one run at a time, lists a label,<br/>skips non-vinyl and credit-only releases,<br/>saves each release, logs a summary<br/>Achieved: a whole label in one command,<br/>failures reported, never silently lost"]
         SHOP["Shop tracker, issue 24<br/>How: reads chosen record shops'<br/>Discogs inventories every day<br/>Will achieve: prices by seller city,<br/>such as Berlin"]
         CL["Discogs client, steps 1 and 4<br/>Code: discogs_client.py<br/>How: one request every 1.1 s,<br/>retries after 5, 15, 60 s<br/>Achieved: stays under the limit of<br/>60 requests a minute, rides out<br/>Discogs hiccups of up to 80 s"]
@@ -58,8 +59,8 @@ flowchart TB
         RD["Reader login, step 6<br/>Code: create_reader_role.py<br/>How: SELECT-only role, read-only<br/>sessions, 5 s query limit<br/>Achieved: nothing using this login can<br/>change data, enforced by the database"]
         TL["Five query tools, step 6 and issue 27<br/>Code: queries/tools.py<br/>How: fixed SQL, arguments checked<br/>by Pydantic, capped results, vinyl only<br/>Achieved: safe, predictable reads<br/>an AI can call"]
         QS["Question service, steps 7 and 8<br/>Code: queries/questions.py, queries/verify.py<br/>How: Claude Haiku 5.5 via the SDK tool runner,<br/>gets only the question and tool descriptions,<br/>our code checks and runs each tool it picks,<br/>then checks every figure against the rows<br/>Achieved: answers from our rows, returned<br/>with their sources, a warning when a figure<br/>cannot be found, clear errors for failures"]
-        API["Web API, step 9 and issue 38<br/>Code: web/app.py, limits.py, captcha.py,<br/>accounts.py, mailer.py<br/>How: Flask under gunicorn, JSON in and out;<br/>Turnstile human check, limits per visitor,<br/>account and site, email and password<br/>sign-up, confirmed by email, sessions<br/>Achieved: questions checked and limited<br/>before the AI, a larger quota when signed in,<br/>keys and passwords stay on the server,<br/>visitors logged only as a hash"]
-        UI["Question box, step 10<br/>Code: widget/ask.js, widget/ask.css<br/>How: plain JavaScript on adnsaudio.com,<br/>invisible Turnstile check, safe Markdown subset<br/>as text nodes, collapsible data table,<br/>questions left and sign-in form<br/>Achieved: anyone can ask about vinyl prices<br/>on phone or desktop, with the model named"]
+        API["Web API, step 9, issues 38, 48, 49, 55<br/>Code: web/app.py, limits.py, captcha.py,<br/>accounts.py, mailer.py<br/>How: Flask under gunicorn, JSON in and out;<br/>Turnstile human check, limits per visitor,<br/>account and site; sign-up with email and<br/>password, confirmed by email; throwaway<br/>services refused; the tracked labels' names<br/>Achieved: questions checked and limited<br/>before the AI, a larger quota when verified,<br/>keys and passwords stay on the server"]
+        UI["Question box, step 10, live on adnsaudio.com<br/>Code: widget/ask.js, widget/ask.css<br/>How: plain JavaScript, invisible Turnstile check,<br/>the tracked labels, safe Markdown as text nodes,<br/>collapsible data table, sign-up and sign-in<br/>with a Verified badge and saved passwords<br/>Achieved: anyone can ask about vinyl prices<br/>on phone or desktop, with the model named"]
     end
 
     USER(["Visitor"])
@@ -77,13 +78,16 @@ flowchart TB
     CAT --> RD
     SNAP --> RD
     LST --> RD
+    TRK --> RD
     RD --> TL
+    RD -->|"label names"| API
     TL --> QS
     QS <-->|"question, tool descriptions, tool results"| AN
     QS --> API
     API <-->|"verify token"| CF
     API <-->|"web login, only these tables"| LIM
     API -->|"JSON answer"| CAD
+    API -->|"hashed visitor"| LOG
     API -->|"confirmation and new-password links"| RS
     CAD -->|"HTTPS"| UI
     GP -->|"the page"| UI
@@ -94,14 +98,14 @@ flowchart TB
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200,stroke-dasharray: 4 3
-    class CLI,CL,MAP,REP,CAT,SNAP,RD,TL,QS,API,LIM,CF,RS,UI,TRK,CAD,BK,GP,SB built
+    class CLI,CL,MAP,REP,CAT,SNAP,RD,TL,QS,API,LIM,CF,RS,UI,TRK,CAD,BK,GP,SB,LOG built
     class SCH built
     class SHOP,LST support
 ```
 
 Two separate logins protect the data. The **writer** (used only by ingestion) can change tables. The **reader** (used by everything a visitor can reach) can only read, and the database itself enforces that. The Discogs token, the Anthropic key and both passwords stay on the server and never reach the browser.
 
-On the server (issue 44) the database, the API and Caddy each run in their own container. Only Caddy is reachable from the internet, on ports 80 and 443. The page itself is plain files on GitHub Pages, like the rest of adnsaudio.com.
+On the server (issue 44) the database, the API and Caddy each run in their own container. Only Caddy is reachable from the internet, on ports 80 and 443. The page itself is plain files on GitHub Pages, like the rest of adnsaudio.com. Everything has been live since 7 November 2026: the Mac no longer runs the nightly update, and the server's data came from the Mac's database.
 
 ---
 
@@ -122,14 +126,16 @@ flowchart TD
     S7["Step 7, issue 7: AI question service<br/>Code: queries/questions.py<br/>How: Claude Haiku 5.5, SDK tool runner over<br/>the 5 tools, prompt caching, no round cap<br/>Achieved: questions answered from the<br/>stored data with their sources,<br/>the AI never writes SQL"]
     S8["Step 8, issue 9: Test the AI service<br/>Code: tests/test_questions.py, test_verify.py,<br/>test_live_answers.py<br/>How: faked AI for guardrails, a free figure check<br/>on every answer, a live test with an AI judge<br/>Achieved: wrong figures flagged to visitors,<br/>tool choice, limits, errors and read-only<br/>access proven, real answers checked before releases"]
     S9["Step 9, issue 8: Web API<br/>Code: web/, create_limits_role.py<br/>How: Flask, Cloudflare Turnstile, limits per<br/>visitor and site in a PostgreSQL table<br/>Achieved: one endpoint for the page, bots and<br/>heavy use stopped before the AI, JSON errors,<br/>no secrets or usage sent to the browser"]
-    S10["Step 10, issue 12: Question box<br/>Code: widget/<br/>How: plain HTML, CSS and JavaScript,<br/>no build step, the site's own colours and fonts<br/>Achieved: example questions, loading, answer and<br/>error states, no double submits, model named,<br/>data one click away, nothing in an answer runs"]
+    S10["Step 10, issue 12: Question box<br/>Code: widget/<br/>How: plain HTML, CSS and JavaScript,<br/>no build step, the site's own colours and fonts<br/>Achieved: example questions, loading, answer and<br/>error states, no double submits, model named,<br/>data one click away, nothing in an answer runs;<br/>live on adnsaudio.com/market-trends/"]
     S11["Step 11, issue 13: Test the web page<br/>How: browser tests against a faked API,<br/>plus one end-to-end check<br/>Will achieve: keyboard, labels, focus and<br/>screen-reader announcements verified"]
     F19["Issue 19: CI runs all tests<br/>Code: .github/workflows/tests.yml<br/>How: GitHub Actions on Python 3.10 and 3.13,<br/>Testcontainers PostgreSQL, CI=true,<br/>actions pinned to exact commits<br/>Achieved: no pull request merges into<br/>main unless all tests pass"]
     F24["Issue 24: Tracked techno shops<br/>How: chosen shops' Discogs inventories,<br/>city recorded by us, a sixth query tool<br/>Will achieve: questions by seller city,<br/>such as records sold from Berlin"]
     F27["Issue 27: Fixes from a code review<br/>Code: pipeline.py, ingest_label.py, tools.py<br/>How: one run at a time, credit-only and<br/>deleted releases handled, vinyl-only answers<br/>Achieved: the code does what the docs promise"]
     F38["Issues 38, 49: Sign-up and quotas<br/>Code: web/accounts.py, mailer.py, widget/<br/>How: email and password, a confirmation link by<br/>Resend, a sessions table, counts per account<br/>Achieved: 3 questions a day to try, 10 an hour<br/>and 50 a day when verified, fake addresses never<br/>get a working account, accounts deletable"]
-    F44["Issue 44: Hosting<br/>Code: Dockerfile, deploy/<br/>How: a Hetzner server with Docker Compose,<br/>Caddy for HTTPS, cron for the nightly update,<br/>backups to a Storage Box, one deploy command,<br/>the box on the site's own page<br/>Achieved: everything ready to run online;<br/>live once the server and accounts exist"]
-    F18["Issues 18 and 25: Documentation<br/>Code: README, decisions.md, this page<br/>Achieved: decisions and architecture<br/>written down, updated with every step"]
+    F44["Issue 44: Hosting<br/>Code: Dockerfile, deploy/<br/>How: a Hetzner server with Docker Compose,<br/>Caddy for HTTPS, cron for the nightly update,<br/>backups to a Storage Box, one deploy command,<br/>the box on the site's own page<br/>Achieved: live since 7 November 2026, the<br/>Mac's data moved, backups copied off the server"]
+    F48["Issue 48: Label list and private logs<br/>Code: queries/labels.py, web/app.py<br/>How: active tracked labels through the reader,<br/>a keyed hash in the log, logs limited in size<br/>Achieved: visitors see what is covered;<br/>no addresses kept"]
+    F55["Issue 55: Throwaway addresses<br/>Code: web/accounts.py, web/assets/<br/>How: a public list of about 10,000<br/>throwaway services, kept in the repo<br/>Achieved: one person can't as easily<br/>make many accounts"]
+    F18["Issues 18 and 25: Documentation<br/>Code: README, this page<br/>Achieved: architecture and problems<br/>written down, updated with every step"]
 
     S0 --> S1
     S1 --> S2
@@ -149,6 +155,9 @@ flowchart TD
     S10 --> F38
     S5 --> F44
     F38 --> F44
+    S9 --> F48
+    S10 --> F48
+    F38 --> F55
     S2 --> F19
     S4 --> F24
     S6 --> F24
@@ -158,7 +167,7 @@ flowchart TD
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
-    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,F27,F19,F41,F38,F44 built
+    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,F27,F19,F41,F38,F44,F48,F55 built
     class S11 planned
     class F24,F18 support
 ```
@@ -180,12 +189,12 @@ flowchart TD
 | – | [27](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/27) Review fixes | Built | Malformed data, deleted and credit-only releases handled; one run at a time; vinyl-only answers | Python, PostgreSQL advisory lock |
 | – | [38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38), [49](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/49) Sign-up | Built | Anyone can sign up with an email and a password, confirm by email and return to the page with a Verified badge; quotas per account; account deletion | Flask, PostgreSQL, Resend |
 | – | [41](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/41) Weekly details | Built | Prices every night, want/have/ratings once a week per release, spread over the week; about half the requests a night | Python, PostgreSQL |
-| – | [44](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/44) Hosting | Built, not yet live | The API, database and nightly update on a server, HTTPS by Caddy, nightly backups off the server, one deploy command, the page on adnsaudio.com | Docker Compose, Caddy, cron, rsync, GitHub Pages |
+| – | [44](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/44) Hosting | Built, live since 7 November 2026 | The API, database and nightly update on a server, HTTPS by Caddy, nightly backups off the server, one deploy command, the page on adnsaudio.com | Docker Compose, Caddy, cron, rsync, GitHub Pages |
 | – | [19](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/19) CI | Built | Every pull request runs all tests, including the database ones, and must pass to merge | GitHub Actions, Dependabot |
 | – | [48](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/48) Label list and private logs | Built | Visitors see which labels are covered, live from the database; abuse can be spotted from logs that hold no addresses | Flask, PostgreSQL, logging |
 | – | [55](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/55) Throwaway addresses | Built | Sign-up refuses addresses at known throwaway services, so one person can't as easily make many accounts | A public list kept in the repo |
 | – | [24](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/24) Tracked shops | Planned | Questions by seller city, e.g. Berlin | Discogs inventory API |
-| – | [18](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/18), [25](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/25) Documentation | Ongoing | README, decisions and this page kept current | Markdown, Mermaid |
+| – | [18](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/18), [25](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/25) Documentation | Ongoing | README and this page kept current | Markdown, Mermaid |
 
 ---
 
@@ -412,7 +421,7 @@ Later visits use `POST /api/sign-in` with the password. A forgotten password tak
 | Label pipeline | [`ingestion/pipeline.py`](../ingestion/pipeline.py), [`ingest_label.py`](../ingestion/ingest_label.py) | Python CLI, logging | Ingests every vinyl release of a label | One run at a time (advisory lock); duplicates dropped; credit-only releases skipped; deleted releases listed as gone; failures, malformed data included, listed and exit 1; commit per release; stops if the label list cannot be fetched or the database connection is lost |
 | Reader login | [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) | PostgreSQL roles | Creates the SELECT-only login | Read-only sessions and a 5 s limit set on the role; future tables readable, never writable; no temporary tables |
 | Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped; vinyl only; timeouts reported as a readable reason |
-| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 390 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock; a `--live` before-release test with the real Claude and an AI judge | Database tests skip without Docker on a laptop, fail in CI; live tests never run without `--live` |
+| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 452 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock; a `--live` before-release test with the real Claude and an AI judge | Database tests skip without Docker on a laptop, fail in CI; live tests never run without `--live` |
 | Question service | [`queries/questions.py`](../queries/questions.py) | Anthropic SDK tool runner, Claude Haiku 5.5 | Sends the question and tool descriptions to Claude, runs the tools it asks for, returns the answer with its sources | Claude never sees SQL or the database; refused arguments go back as errors; a database failure stops the run; every error becomes a visitor-safe `QuestionError`; instructions and tools cached |
 | Web API | [`web/app.py`](../web/app.py), [`limits.py`](../web/limits.py), [`captcha.py`](../web/captcha.py), [`create_limits_role.py`](../ingestion/create_limits_role.py) | Flask, gunicorn, Cloudflare Turnstile | `POST /api/questions`: checks the request, the human check and the limits, then asks the question service | Fails closed; limits counted in one transaction by a login that can only touch its four tables; visitors stored as a keyed hash, deleted after two days; forwarded addresses trusted only behind a configured proxy; usage never sent; 8 KB body limit; CORS only for listed origins; the access log holds a keyed hash, never the address, and visitors can't fake a line in it; logs limited in size |
 | Sign-up | [`web/accounts.py`](../web/accounts.py), [`mailer.py`](../web/mailer.py) | PostgreSQL, Resend | Sign-up, confirmation and new-password links, password sign-in, sessions, sign-out and account deletion | Passwords stored as salted scrypt hashes; tokens are 32 random bytes, stored only as hashes; links work once; opening a link uses nothing; unconfirmed accounts can't sign in and are deleted after 7 days; known throwaway services are refused at sign-up; forms checked against a `SameSite=Strict` cookie; session cookie `HttpOnly`, `Secure`, `SameSite=Strict`; the same answer for known and unknown addresses; tries and emails limited per address and visitor |
@@ -432,12 +441,12 @@ The same routine has been used on every task:
 
 1. **Check the facts at the source.** Before deciding, look at what the real system returns: call the live API, read the code, look at the database. Several decisions changed because of this. For example, the rating endpoint turned out to have no want and have numbers.
 2. **Separate the environment from the code.** When something fails, first find out whether the cause is our code, the machine (Docker, disk, settings) or the outside service.
-3. **Lay out the options with their trade-offs.** Name two or three ways, what each costs, and what risk each leaves open. Pick one deliberately and record why (see [decisions.md](decisions.md)).
+3. **Lay out the options with their trade-offs.** Name two or three ways, what each costs, and what risk each leaves open. Pick one deliberately, and say why in the pull request.
 4. **Make the smallest change that solves it,** in the place where the problem belongs.
 5. **Prove it with tests,** including the failure cases. Since issue 19, CI runs them on every pull request.
 6. **Plant bugs on purpose.** Break the code in specific ways and check that a test fails each time. Add a test whenever a planted bug survives.
 7. **Run it for real.** Do a live run against Discogs and a throwaway database before handing over.
-8. **Write it down.** Update the README, decisions.md and this page. Raise anything outside the task's scope as its own ticket instead of fixing it on the side.
+8. **Write it down.** Update the README and this page. Raise anything outside the task's scope as its own ticket instead of fixing it on the side.
 
 ---
 
