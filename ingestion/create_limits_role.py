@@ -7,8 +7,9 @@ create_reader_role. The login's name and password come from POSTGRES_LIMITS_USER
 and POSTGRES_LIMITS_PASSWORD. Running it again updates the password.
 
 The web API writes two kinds of things: how many questions each visitor, account
-and the whole site have asked in the current hour and day, and sign-in (accounts
-and sessions). This login may read and change those three tables and nothing else, so the reader login stays read-only and the
+and the whole site have asked in the current hour and day, and signing up
+(accounts, confirmation and new-password links, sessions). This login may read and change those
+four tables and nothing else, so the reader login stays read-only and the
 catalogue cannot be changed from the web.
 """
 import os
@@ -32,28 +33,40 @@ CREATE_TABLES = """
         count INT NOT NULL CHECK (count >= 0),
         PRIMARY KEY (visitor, period, window_start)
     );
-    -- Email sign-in is gone. Its accounts had no passwords, so they could not be
-    -- used any more; they are removed with the email addresses they held.
+    -- Accounts from before email confirmation (made by the owner, or signed in by
+    -- link) can't confirm or have no password, so they are removed, once.
     DROP TABLE IF EXISTS sign_in_tokens;
     DO $$
     BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
-                   AND table_name = 'accounts' AND column_name = 'email') THEN
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema()
+                   AND table_name = 'accounts')
+           AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+                   AND table_name = 'accounts' AND column_name = 'confirmed_at') THEN
             DELETE FROM question_counts WHERE visitor LIKE 'account:%' OR visitor LIKE 'sign-in-%';
             DROP TABLE IF EXISTS sessions;
             DROP TABLE accounts;
         END IF;
     END $$;
-    -- Created only with web/manage_accounts.py. Passwords are stored as salted scrypt hashes.
+    -- The address is lower-cased. The password is stored as a salted scrypt hash. The
+    -- account can't be used until confirmed_at is set; unconfirmed ones are deleted after 7 days.
     CREATE TABLE IF NOT EXISTS accounts (
         id BIGSERIAL PRIMARY KEY,
-        username TEXT NOT NULL UNIQUE,
+        email TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL,
+        confirmed_at TIMESTAMPTZ,
         last_sign_in_at TIMESTAMPTZ
     );
-    -- Sessions are stored only as SHA-256 hashes of their random tokens, so a copy
-    -- of the database cannot be used to sign in.
+    -- Links and sessions are stored only as SHA-256 hashes of their random tokens,
+    -- so a copy of the database cannot be used to sign in.
+    CREATE TABLE IF NOT EXISTS email_tokens (
+        token_hash TEXT PRIMARY KEY,
+        account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        purpose TEXT NOT NULL CHECK (purpose IN ('confirm', 'reset')),
+        created_at TIMESTAMPTZ NOT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at TIMESTAMPTZ
+    );
     CREATE TABLE IF NOT EXISTS sessions (
         token_hash TEXT PRIMARY KEY,
         account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -61,7 +74,7 @@ CREATE_TABLES = """
         expires_at TIMESTAMPTZ NOT NULL
     );
 """
-TABLES = ("question_counts", "accounts", "sessions")
+TABLES = ("question_counts", "accounts", "email_tokens", "sessions")
 
 
 def create_limits_role(conn: psycopg.Connection, name: str, password: str) -> None:

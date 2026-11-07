@@ -125,7 +125,7 @@
 }
 .mt-ask-sign-in .mt-ask-hint { margin-bottom: 10px; }
 .mt-ask-sign-in-row { display: flex; gap: 10px; }
-.mt-ask input[type="text"],
+.mt-ask input[type="email"],
 .mt-ask input[type="password"] {
   flex: 1;
   min-width: 0;
@@ -137,8 +137,18 @@
   color: var(--mt-ink);
   font: inherit;
 }
-.mt-ask input[type="text"]::placeholder,
+.mt-ask input[type="email"]::placeholder,
 .mt-ask input[type="password"]::placeholder { color: var(--mt-muted); }
+.mt-ask input[hidden] { display: none; }
+.mt-ask-switch { margin: 12px 0 0; font-size: 13px; }
+.mt-ask-badge {
+  display: inline-block;
+  padding: 0 8px;
+  border: 1px solid var(--mt-accent);
+  color: var(--mt-accent);
+  font-size: 12px;
+  white-space: nowrap;
+}
 .mt-ask-labels {
   margin-bottom: 14px;
   padding: 12px 16px;

@@ -102,3 +102,9 @@ def test_the_server_never_logs_addresses_and_limits_its_logs():
     for name, service in SERVICES.items():
         assert service["logging"]["options"]["max-size"], name
         assert service["logging"]["options"]["max-file"], name
+
+
+def test_the_server_settings_template_lists_the_sign_up_settings():
+    names = {line.split("=", 1)[0] for line in (ROOT / "deploy" / "server.env.example").read_text().splitlines()
+             if "=" in line and not line.startswith("#")}
+    assert {"RESEND_API_KEY", "PUBLIC_API_URL", "SIGN_IN_RETURN_URL", "SIGN_IN_EMAIL_FROM"} <= names

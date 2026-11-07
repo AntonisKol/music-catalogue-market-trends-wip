@@ -1666,7 +1666,7 @@ All nine were caught.
 
 ## Task #38: Email sign-in and quotas per account
 
-*Replaced: email sign-in and email alerts were later removed. See "Removing email: passwords and accounts made by the owner". This section is kept as the record of the original choice.*
+*Email sign-in was removed and later came back, see "Removing email: passwords and accounts made by the owner" and "Task #49: Sign-up with email confirmation". Email alerts stayed out.*
 
 *November 2026 · [issue #38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38)*
 
@@ -1907,6 +1907,8 @@ The setup script ran twice on a clean Ubuntu 24.04 container (firewall and servi
 
 ## Removing email: passwords and accounts made by the owner
 
+*Sign-in was later replaced again: see "Task #49: Sign-up with email confirmation". Failure alerts stay as described here.*
+
 The project no longer sends or stores email. Setting up a mail provider added a cost and a dependency that a small site doesn't need.
 
 | Question | Choice | Rejected |
@@ -1937,6 +1939,25 @@ Visitors need to know which labels the box can answer about, and the owner needs
 **What this costs.** A hash can't be blocked at the firewall. The limits per visitor stop most abuse without that, and a suspect address can still be hashed and searched for. A keyed hash can still count as personal data, so the box says how addresses are used. Size limits don't promise a number of days: with little traffic, a line can stay for a long time.
 
 **The list.** Paused labels are left out. A newly added label appears at once, before the next nightly run has brought in its data.
+
+## Task #49: Sign-up with email confirmation
+
+The page should let visitors sign up themselves, confirm their address and come back verified. With accounts made only by the owner, a visitor had no way to get more questions without asking.
+
+| Question | Choice | Rejected |
+| --- | --- | --- |
+| How visitors sign up | An email address and a password, confirmed by a link | A sign-in link every visit with no password: tried first, then changed by the owner for the usual sign-up. Username and password with no email: no way to reset a password, and nothing proves the address |
+| What a confirmation proves | That the person can open that mailbox | Checking the address looks real, or blocking disposable-mail services: neither proves anything about the person, and block lists go out of date |
+| What happens to an unconfirmed account | It can't sign in and is deleted after 7 days | Keeping it: addresses nobody confirmed would stay stored for ever |
+| A forgotten password | A link by email, working for an hour | Reset by the owner: every visitor would depend on one person |
+| What email is used for | This page's sign-up only | Failure alerts too: they stay in the logs and run records |
+| The logo in the email | Carried inside the message | A link to the image on the site: many mail apps block those |
+
+**In plain words.** Fake addresses are handled by the link: an address nobody can open never gets a working account. Opening the link only shows a page with a button. Pressing it confirms the address and returns the person to the question box, so email systems that open links to check them can't confirm anyone by accident.
+
+**What this costs.** The site again depends on Resend, stores email addresses and needs Resend's DNS records. Anyone can sign up, including with a disposable address, so the limit of 1,000 questions a day across the site is what caps the Anthropic bill. Someone who signs up with another person's address could still get in if that person presses the confirm button without having signed up, and the email tells them to ignore it if it wasn't them.
+
+**Moving an existing database.** `create_limits_role` replaces any older `accounts` table and removes its accounts, once. Deploying this removes the accounts made with `manage_accounts`.
 
 ## Glossary
 
