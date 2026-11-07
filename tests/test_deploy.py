@@ -1,7 +1,7 @@
 """The server setup in deploy/: the parts that keep secrets and the database private.
 
 These read the files rather than starting containers; the full setup was run by
-hand (see docs/decisions.md, issue 44).
+hand (see the README, Run it on a server, and issue 44).
 """
 import os
 import shutil
