@@ -269,7 +269,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   // The account line: questions left, and sign in or the signed-in address.
   const account = el("div", { class: "mt-ask-account", hidden: "" });
   const email = el("input", {
-    id: `${id}-email`, type: "email", name: "email", autocomplete: "email", required: "",
+    id: `${id}-email`, type: "email", name: "email", autocomplete: "username", required: "",
     placeholder: "you@example.com", "aria-label": "Email address", maxlength: "254",
   });
   const password = el("input", {
@@ -293,8 +293,10 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       + "Resend sends our emails. You can delete your account at any time."),
   );
   const notice = el("p", { class: "mt-ask-privacy" },
-    "To spot abuse, our logs keep a scrambled version of your network address, never the address itself. "
-    + "Cloudflare's human check also sees your address.");
+    "Your questions are sent to Anthropic's Claude to write the answer. We don't store them. "
+    + "To spot abuse, our logs keep a scrambled version of your network address, never the address itself. "
+    + "Cloudflare's human check also sees your address. ",
+    el("a", { href: "/privacy/" }, "Privacy"), ".");
   root.replaceChildren(labels, form, account, signInForm, status, examples, notice, output);
 
   let token = "";
@@ -331,7 +333,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     }
     signInStatus.textContent = "";
     const switches = {
-      signUp: [["Already have an account? Sign in", "signIn"]],
+      signUp: [["Already have an account? Sign in", "signIn"], ["Forgot your password?", "reset"]],
       signIn: [["New here? Sign up", "signUp"], ["Forgot your password?", "reset"]],
       reset: [["Back to sign in", "signIn"]],
     }[name];
@@ -482,6 +484,17 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     heading.focus();
   }
 
+  // The page signs in without loading a new page, so browsers need to be asked
+  // to save the password. Browsers without this ask by themselves, or not at all.
+  function offerToSavePassword(address, typed) {
+    try {
+      if (!window.PasswordCredential || !navigator.credentials?.store) return;
+      navigator.credentials.store(new window.PasswordCredential({ id: address, password: typed })).catch(() => {});
+    } catch {
+      // Saving is a convenience; signing in has already worked.
+    }
+  }
+
   function showAccountProblem(message, field) {
     signInStatus.textContent = message;
     signInStatus.className = "mt-ask-status mt-ask-status-error";
@@ -514,12 +527,16 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
         showAccountProblem("The human check hasn't finished. If a check appears above the Ask button, please complete it, then try again.");
         return;
       }
-      const fields = settings.autocomplete ? { password: password.value } : {};
+      const typed = password.value;
+      const fields = settings.autocomplete ? { password: typed } : {};
       const response = await postJson(settings.path, { email: address, ...fields, captcha_token: token });
       const body = await response.json().catch(() => null);
       if (!response.ok) {
         showAccountProblem(errorMessage(response.status, body, response.headers.get("Retry-After")));
-      } else if (mode === "signIn") {
+        return;
+      }
+      if (settings.autocomplete) offerToSavePassword(address, typed);
+      if (mode === "signIn") {
         signInStatus.textContent = "";
         showStatus("You are signed in.");
         await loadAccount();

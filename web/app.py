@@ -453,6 +453,8 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
             '<form method="post" action="/api/password-reset/confirm">'
             f'<input type="hidden" name="token" value="{escape(token)}">'
             f'<input type="hidden" name="nonce" value="{nonce}">'
+            # Tells password managers which account the new password belongs to.
+            f'<input type="email" name="username" autocomplete="username" value="{escape(email)}" readonly hidden>'
             f'<label for="password">New password, at least {accounts.MIN_PASSWORD_LENGTH} characters</label>'
             '<input id="password" type="password" name="password" autocomplete="new-password" required '
             f'minlength="{accounts.MIN_PASSWORD_LENGTH}" maxlength="{accounts.MAX_PASSWORD_LENGTH}">'

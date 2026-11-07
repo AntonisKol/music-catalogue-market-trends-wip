@@ -141,6 +141,7 @@
 .mt-ask input[type="password"]::placeholder { color: var(--mt-muted); }
 .mt-ask input[hidden] { display: none; }
 .mt-ask-switch { margin: 12px 0 0; font-size: 13px; }
+.mt-ask-privacy a { color: var(--mt-accent); }
 .mt-ask-badge {
   display: inline-block;
   padding: 0 8px;
