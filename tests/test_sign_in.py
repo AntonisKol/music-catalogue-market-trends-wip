@@ -1,8 +1,10 @@
-"""Email sign-in: one-time links, sessions, account quotas and deletion.
+"""Signing up: accounts, confirmation links, passwords, sessions, quotas and deletion.
 
-Links are never really emailed: the app is given a fake sender that keeps them.
+Emails are never really sent: the app is given a fake sender that keeps them.
 Everything else runs against the real test database through the web login.
 """
+import base64
+import json
 import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlsplit
@@ -17,6 +19,8 @@ from web.limits import connect_limits
 
 NOON = datetime(2026, 11, 1, 12, 30, tzinfo=timezone.utc)
 EMAIL = "listener@example.com"
+PASSWORD = "a long enough password"
+NEW_PASSWORD = "another long password"
 
 
 # --- accounts.py on its own ------------------------------------------------------
@@ -42,109 +46,232 @@ def test_what_cannot_be_an_address_is_refused(text):
         accounts.normalize_email(text)
 
 
-def test_a_link_works_once(conn):
-    token = accounts.create_sign_in_link(conn, EMAIL, NOON)
+def test_passwords_must_be_long_enough():
+    with pytest.raises(ValueError):
+        accounts.check_new_password("x" * 11)
+    with pytest.raises(ValueError):
+        accounts.check_new_password("x" * 257)
+    accounts.check_new_password("x" * 12)
 
-    session, account_id, email = accounts.sign_in(conn, token, NOON + timedelta(minutes=1))
-    assert email == EMAIL and session and account_id
-    assert accounts.sign_in(conn, token, NOON + timedelta(minutes=2)) is None
-    assert accounts.link_email(conn, token, NOON + timedelta(minutes=2)) is None
+
+def test_an_address_nobody_confirmed_cannot_sign_in(conn):
+    accounts.sign_up(conn, EMAIL, PASSWORD, NOON)
+
+    with pytest.raises(accounts.NotConfirmed):
+        accounts.sign_in(conn, EMAIL, PASSWORD, NOON)
 
 
-def test_a_link_expires_after_15_minutes(conn):
-    token = accounts.create_sign_in_link(conn, EMAIL, NOON)
+def test_a_wrong_password_on_an_unconfirmed_account_reveals_nothing(conn):
+    accounts.sign_up(conn, EMAIL, PASSWORD, NOON)
 
-    assert accounts.link_email(conn, token, NOON + timedelta(minutes=14, seconds=59)) == EMAIL
-    assert accounts.sign_in(conn, token, NOON + timedelta(minutes=15)) is None
+    assert accounts.sign_in(conn, EMAIL, "not the password", NOON) is None
+
+
+def test_a_confirmation_link_works_once_and_starts_a_session(conn):
+    token = accounts.sign_up(conn, EMAIL, PASSWORD, NOON)
+
+    session, account_id = accounts.confirm_email(conn, token, NOON)
+
+    assert accounts.session_account(conn, session, NOON) == (account_id, EMAIL)
+    assert accounts.confirm_email(conn, token, NOON) is None
+
+
+def test_a_confirmation_link_expires_after_24_hours(conn):
+    token = accounts.sign_up(conn, EMAIL, PASSWORD, NOON)
+
+    assert accounts.link_email(conn, token, accounts.CONFIRM, NOON + timedelta(hours=23)) == EMAIL
+    assert accounts.confirm_email(conn, token, NOON + timedelta(hours=24)) is None
 
 
 def test_looking_at_a_link_does_not_use_it_up(conn):
-    token = accounts.create_sign_in_link(conn, EMAIL, NOON)
+    token = accounts.sign_up(conn, EMAIL, PASSWORD, NOON)
 
-    assert accounts.link_email(conn, token, NOON) == EMAIL
-    assert accounts.link_email(conn, token, NOON) == EMAIL
-    assert accounts.sign_in(conn, token, NOON) is not None
-
-
-def test_an_unknown_token_signs_nobody_in(conn):
-    accounts.create_sign_in_link(conn, EMAIL, NOON)
-
-    assert accounts.sign_in(conn, "made-up-token", NOON) is None
+    assert accounts.link_email(conn, token, accounts.CONFIRM, NOON) == EMAIL
+    assert accounts.confirm_email(conn, token, NOON) is not None
 
 
-def test_tokens_are_stored_only_as_hashes(conn, db):
-    token = accounts.create_sign_in_link(conn, EMAIL, NOON)
-    session, _, _ = accounts.sign_in(conn, token, NOON)
+def test_a_link_only_does_what_it_was_made_for(conn):
+    token = accounts.sign_up(conn, EMAIL, PASSWORD, NOON)
+
+    assert accounts.reset_password(conn, token, NEW_PASSWORD, NOON) is None
+    assert accounts.link_email(conn, token, accounts.RESET, NOON) is None
+
+
+def test_an_unknown_link_does_nothing(conn):
+    assert accounts.confirm_email(conn, "made-up", NOON) is None
+    assert accounts.reset_password(conn, "made-up", NEW_PASSWORD, NOON) is None
+
+
+def test_passwords_and_tokens_are_stored_only_as_hashes(conn, db):
+    token = accounts.sign_up(conn, EMAIL, PASSWORD, NOON)
+    session, _ = accounts.confirm_email(conn, token, NOON)
 
     db.commit()
-    stored = str(db.execute("SELECT * FROM sign_in_tokens").fetchall() + db.execute("SELECT * FROM sessions").fetchall())
-    assert token not in stored and session not in stored
-    assert accounts.hashed(token) in stored and accounts.hashed(session) in stored
+    stored = db.execute(
+        "SELECT a.password_hash, t.token_hash, s.token_hash FROM accounts a"
+        " JOIN email_tokens t ON t.account_id = a.id JOIN sessions s ON s.account_id = a.id"
+    ).fetchone()
+    assert PASSWORD not in stored[0] and stored[1] != token and stored[2] != session
+    assert stored[1] == accounts.hashed(token) and stored[2] == accounts.hashed(session)
 
 
-def test_signing_in_again_uses_the_same_account(conn):
-    first = accounts.sign_in(conn, accounts.create_sign_in_link(conn, EMAIL, NOON), NOON)
-    tomorrow = NOON + timedelta(days=1)
-    second = accounts.sign_in(conn, accounts.create_sign_in_link(conn, EMAIL, tomorrow), tomorrow)
+def test_confirmed_accounts_sign_in_with_the_right_password_only(conn):
+    accounts.confirm_email(conn, accounts.sign_up(conn, EMAIL, PASSWORD, NOON), NOON)
 
-    assert first[1] == second[1]
-    assert first[0] != second[0]  # a new session each time
+    assert accounts.sign_in(conn, EMAIL, PASSWORD, NOON) is not None
+    assert accounts.sign_in(conn, EMAIL, "not the password", NOON) is None
+    assert accounts.sign_in(conn, "nobody@example.com", PASSWORD, NOON) is None
+
+
+def test_signing_up_again_before_confirming_replaces_the_password_and_the_link(conn):
+    first = accounts.sign_up(conn, EMAIL, "someone elses password", NOON)
+    second = accounts.sign_up(conn, EMAIL, PASSWORD, NOON)
+
+    assert accounts.confirm_email(conn, first, NOON) is None
+    accounts.confirm_email(conn, second, NOON)
+    assert accounts.sign_in(conn, EMAIL, "someone elses password", NOON) is None
+    assert accounts.sign_in(conn, EMAIL, PASSWORD, NOON) is not None
+
+
+def test_signing_up_with_a_confirmed_address_changes_nothing(conn):
+    accounts.confirm_email(conn, accounts.sign_up(conn, EMAIL, PASSWORD, NOON), NOON)
+
+    assert accounts.sign_up(conn, EMAIL, "an attackers password", NOON) is None
+    assert accounts.sign_in(conn, EMAIL, "an attackers password", NOON) is None
+    assert accounts.sign_in(conn, EMAIL, PASSWORD, NOON) is not None
+
+
+def test_unconfirmed_accounts_are_deleted_after_7_days(conn, db):
+    accounts.sign_up(conn, EMAIL, PASSWORD, NOON)
+    accounts.sign_up(conn, "recent@example.com", PASSWORD, NOON + timedelta(days=6))
+
+    accounts.sign_up(conn, "later@example.com", PASSWORD, NOON + timedelta(days=7, seconds=1))
+
+    db.commit()
+    assert {email for (email,) in db.execute("SELECT email FROM accounts").fetchall()} == {
+        "recent@example.com", "later@example.com"}
+
+
+def test_confirmed_accounts_are_not_deleted_for_age(conn, db):
+    accounts.confirm_email(conn, accounts.sign_up(conn, EMAIL, PASSWORD, NOON), NOON)
+
+    accounts.sign_up(conn, "later@example.com", PASSWORD, NOON + timedelta(days=30))
+
+    db.commit()
+    assert db.execute("SELECT count(*) FROM accounts WHERE email = %s", (EMAIL,)).fetchone() == (1,)
+
+
+def test_a_new_password_replaces_the_old_and_ends_other_sessions(conn):
+    old_session, _ = accounts.confirm_email(conn, accounts.sign_up(conn, EMAIL, PASSWORD, NOON), NOON)
+    token = accounts.ask_for_reset(conn, EMAIL, NOON)
+
+    new_session, _ = accounts.reset_password(conn, token, NEW_PASSWORD, NOON)
+
+    assert accounts.session_account(conn, old_session, NOON) is None
+    assert accounts.session_account(conn, new_session, NOON) is not None
+    assert accounts.sign_in(conn, EMAIL, PASSWORD, NOON) is None
+    assert accounts.sign_in(conn, EMAIL, NEW_PASSWORD, NOON) is not None
+    assert accounts.reset_password(conn, token, "yet another password", NOON) is None
+
+
+def test_a_new_password_link_expires_after_an_hour(conn):
+    accounts.confirm_email(conn, accounts.sign_up(conn, EMAIL, PASSWORD, NOON), NOON)
+    token = accounts.ask_for_reset(conn, EMAIL, NOON)
+
+    assert accounts.reset_password(conn, token, NEW_PASSWORD, NOON + timedelta(hours=1)) is None
+
+
+def test_only_confirmed_accounts_get_a_new_password_link(conn):
+    accounts.sign_up(conn, EMAIL, PASSWORD, NOON)
+
+    assert accounts.ask_for_reset(conn, EMAIL, NOON) is None
+    assert accounts.ask_for_reset(conn, "nobody@example.com", NOON) is None
 
 
 def test_sessions_last_30_days_and_end_on_sign_out(conn):
-    session, account_id, _ = accounts.sign_in(conn, accounts.create_sign_in_link(conn, EMAIL, NOON), NOON)
+    session, _ = accounts.confirm_email(conn, accounts.sign_up(conn, EMAIL, PASSWORD, NOON), NOON)
 
-    assert accounts.session_account(conn, session, NOON + timedelta(days=29)) == (account_id, EMAIL)
+    assert accounts.session_account(conn, session, NOON + timedelta(days=29)) is not None
     assert accounts.session_account(conn, session, NOON + timedelta(days=30)) is None
     accounts.sign_out(conn, session)
     assert accounts.session_account(conn, session, NOON) is None
 
 
 def test_deleting_an_account_removes_everything_stored_for_it(conn, db):
-    session, account_id, _ = accounts.sign_in(conn, accounts.create_sign_in_link(conn, EMAIL, NOON), NOON)
-    accounts.create_sign_in_link(conn, EMAIL, NOON)  # an unused link
-    conn.execute("INSERT INTO question_counts VALUES (%s, 'day', %s, 4)", (f"account:{account_id}", NOON))
+    token = accounts.sign_up(conn, EMAIL, PASSWORD, NOON)
+    _, account_id = accounts.confirm_email(conn, token, NOON)
+    accounts.ask_for_reset(conn, EMAIL, NOON)
+    counter = f"account:{account_id}"
+    conn.execute("INSERT INTO question_counts VALUES (%s, 'day', %s, 1)", (counter, NOON))
 
-    accounts.delete_account(conn, account_id, f"account:{account_id}")
+    accounts.delete_account(conn, account_id, counter)
 
     db.commit()
-    for table in ("accounts", "sessions", "sign_in_tokens", "question_counts"):
+    for table in ("accounts", "email_tokens", "sessions"):
         assert db.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,), table
+    assert db.execute("SELECT count(*) FROM question_counts WHERE visitor = %s", (counter,)).fetchone() == (0,)
 
 
-# --- Sending the email --------------------------------------------------------------
+# --- mailer.py -------------------------------------------------------------------
 
 @responses.activate
-def test_the_link_is_sent_through_resend(monkeypatch):
+def test_the_confirmation_email_carries_the_link_and_the_logo(monkeypatch):
     monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
-    responses.post(mailer.RESEND_URL, json={"id": "1"})
+    monkeypatch.setattr(config, "SIGN_IN_EMAIL_FROM", "Market Trends <sign-in@adnsaudio.com>")
+    responses.add(responses.POST, mailer.RESEND_URL, json={"id": "x"})
+    link = "https://api.example/api/sign-up/confirm?token=abc&x=1"
 
-    mailer.send_sign_in_link(EMAIL, "https://api.example/api/sign-in/confirm?token=abc")
+    mailer.send_confirmation(EMAIL, link)
 
     request = responses.calls[0].request
     assert request.headers["Authorization"] == "Bearer re_test"
-    sent = request.body.decode()
-    assert EMAIL in sent and "token=abc" in sent and config.SIGN_IN_EMAIL_FROM in sent
+    body = json.loads(request.body)
+    assert body["from"] == "Market Trends <sign-in@adnsaudio.com>" and body["to"] == [EMAIL]
+    assert link in body["text"]
+    assert "token=abc&amp;x=1" in body["html"]  # escaped for HTML
+    logo = body["attachments"][0]
+    assert logo["content_id"] == mailer.LOGO_ID and f'src="cid:{mailer.LOGO_ID}"' in body["html"]
+    assert 'alt="ADNS Audio"' in body["html"]
+    assert base64.b64decode(logo["content"]) == mailer.LOGO_FILE.read_bytes()
+    assert base64.b64decode(logo["content"]).startswith(b"\x89PNG")
 
 
 @responses.activate
-@pytest.mark.parametrize("reply", [{"status": 422, "json": {}}, {"body": requests.ConnectionError("down")}])
+@pytest.mark.parametrize("send", [
+    lambda: mailer.send_reset(EMAIL, "https://api.example/reset?token=abc"),
+    lambda: mailer.send_already_registered(EMAIL),
+])
+def test_every_email_goes_through_resend_with_the_logo(monkeypatch, send):
+    monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
+    responses.add(responses.POST, mailer.RESEND_URL, json={"id": "x"})
+
+    send()
+
+    assert json.loads(responses.calls[0].request.body)["attachments"][0]["content_id"] == mailer.LOGO_ID
+
+
+@responses.activate
+@pytest.mark.parametrize("reply", [
+    {"status": 403, "json": {"message": "secret detail"}},
+    {"body": requests.ConnectionError("down")},
+])
 def test_a_refused_or_failed_send_is_reported(monkeypatch, reply):
     monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
-    responses.post(mailer.RESEND_URL, **reply)
+    responses.add(responses.POST, mailer.RESEND_URL, **reply)
 
-    with pytest.raises(mailer.MailUnavailable):
-        mailer.send_sign_in_link(EMAIL, "https://x/?token=abc")
+    with pytest.raises(mailer.MailUnavailable) as caught:
+        mailer.send_confirmation(EMAIL, "https://api.example/x")
+    assert "secret detail" not in str(caught.value)
 
 
-def test_without_a_key_sign_in_is_off_unless_links_go_to_the_log(monkeypatch, caplog):
+def test_without_a_key_nothing_is_sent_unless_links_go_to_the_log(monkeypatch, caplog):
     monkeypatch.setattr(config, "RESEND_API_KEY", "")
     monkeypatch.setattr(config, "SIGN_IN_LOG_LINKS", False)
     with pytest.raises(mailer.MailUnavailable):
-        mailer.send_sign_in_link(EMAIL, "https://x/?token=abc")
+        mailer.send_confirmation(EMAIL, "https://api.example/x?token=abc")
 
     monkeypatch.setattr(config, "SIGN_IN_LOG_LINKS", True)
-    mailer.send_sign_in_link(EMAIL, "https://x/?token=abc")
+    mailer.send_confirmation(EMAIL, "https://api.example/x?token=abc")
     assert "token=abc" in caplog.text
 
 
@@ -152,7 +279,7 @@ def test_without_a_key_sign_in_is_off_unless_links_go_to_the_log(monkeypatch, ca
 
 class Fakes:
     def __init__(self):
-        self.links = []
+        self.mails = []
         self.questions = []
         self.tokens = []
         self.human = True
@@ -167,10 +294,19 @@ class Fakes:
         self.tokens.append(token)
         return self.human
 
-    def send_link(self, email, link):
+    def _keep(self, kind, email, link=None):
         if self.mail_error:
             raise self.mail_error
-        self.links.append((email, link))
+        self.mails.append((kind, email, link))
+
+    def send_confirmation(self, email, link):
+        self._keep("confirm", email, link)
+
+    def send_reset(self, email, link):
+        self._keep("reset", email, link)
+
+    def send_already_registered(self, email):
+        self._keep("already", email)
 
 
 class Clock:
@@ -198,12 +334,22 @@ def client(fakes, clock, limits_db, monkeypatch):
     monkeypatch.setattr(config, "COOKIE_SECURE", False)
     monkeypatch.setattr(config, "PUBLIC_API_URL", "https://api.example")
     monkeypatch.setattr(config, "SIGN_IN_RETURN_URL", "https://site.example/market-trends/")
-    app = create_app(answer=fakes.answer, verify_captcha=fakes.verify, send_link=fakes.send_link, now=clock)
+    app = create_app(answer=fakes.answer, verify_captcha=fakes.verify, mail=fakes, now=clock)
     return app.test_client()
 
 
-def ask_for_link(client, email=EMAIL, ip="203.0.113.7"):
-    return client.post("/api/sign-in", json={"email": email, "captcha_token": "good"},
+def sign_up(client, email=EMAIL, password=PASSWORD, ip="203.0.113.7"):
+    return client.post("/api/sign-up", json={"email": email, "password": password, "captcha_token": "good"},
+                       environ_base={"REMOTE_ADDR": ip})
+
+
+def sign_in_with_password(client, email=EMAIL, password=PASSWORD, ip="203.0.113.7"):
+    return client.post("/api/sign-in", json={"email": email, "password": password, "captcha_token": "good"},
+                       environ_base={"REMOTE_ADDR": ip})
+
+
+def ask_for_reset(client, email=EMAIL, ip="203.0.113.7"):
+    return client.post("/api/password-reset", json={"email": email, "captcha_token": "good"},
                        environ_base={"REMOTE_ADDR": ip})
 
 
@@ -211,12 +357,20 @@ def token_in(link):
     return parse_qs(urlsplit(link).query)["token"][0]
 
 
+def nonce_in(page):
+    return re.search(r'name="nonce" value="([^"]+)"', page.get_data(as_text=True)).group(1)
+
+
+def press_confirm(client, link):
+    token = token_in(link)
+    page = client.get(f"/api/sign-up/confirm?token={token}")
+    return client.post("/api/sign-up/confirm", data={"token": token, "nonce": nonce_in(page)})
+
+
 def sign_in(client, fakes, email=EMAIL):
-    assert ask_for_link(client, email).status_code == 202
-    token = token_in(fakes.links[-1][1])
-    page = client.get(f"/api/sign-in/confirm?token={token}")
-    nonce = re.search(r'name="nonce" value="([^"]+)"', page.get_data(as_text=True)).group(1)
-    return client.post("/api/sign-in/confirm", data={"token": token, "nonce": nonce})
+    """Sign up and confirm: the whole way to a session."""
+    assert sign_up(client, email).status_code == 202
+    return press_confirm(client, fakes.mails[-1][2])
 
 
 def ask(client, ip="203.0.113.7", token="good"):
@@ -224,164 +378,244 @@ def ask(client, ip="203.0.113.7", token="good"):
                        environ_base={"REMOTE_ADDR": ip})
 
 
-def test_asking_for_a_link_emails_one(client, fakes):
-    response = ask_for_link(client, " Listener@Example.com ")
+def test_signing_up_emails_a_confirmation_link_and_signs_nobody_in(client, fakes):
+    response = sign_up(client, " Listener@Example.COM ")
 
     assert response.status_code == 202
-    assert response.get_json()["status"] == "sent"
-    (email, link), = fakes.links
-    assert email == EMAIL
-    assert link.startswith("https://api.example/api/sign-in/confirm?token=")
-    assert fakes.tokens == ["good"]
-
-
-def test_the_answer_is_the_same_whether_or_not_the_address_has_an_account(client, fakes):
-    sign_in(client, fakes)
-
-    known = ask_for_link(client, EMAIL, ip="198.51.100.1")
-    unknown = ask_for_link(client, "someone-else@example.com", ip="198.51.100.2")
-
-    assert (known.status_code, known.get_json()) == (unknown.status_code, unknown.get_json())
-
-
-@pytest.mark.parametrize("body, code", [
-    ({"email": "not-an-address", "captcha_token": "good"}, "invalid_email"),
-    ({"email": EMAIL}, "invalid_request"),
-    ({"email": EMAIL, "captcha_token": "good", "admin": True}, "invalid_request"),
-])
-def test_bad_sign_in_requests_send_nothing(client, fakes, body, code):
-    response = client.post("/api/sign-in", json=body)
-
-    assert response.status_code == 400
-    assert response.get_json()["error"]["code"] == code
-    assert fakes.links == [] and fakes.tokens == []
-
-
-def test_a_failed_human_check_sends_no_link(client, fakes):
-    fakes.human = False
-
-    assert ask_for_link(client).status_code == 403
-    assert fakes.links == []
-
-
-def test_links_are_limited_per_address(client, fakes):
-    statuses = [ask_for_link(client, ip=f"198.51.100.{n}").status_code for n in range(4)]
-
-    assert statuses == [202, 202, 202, 429]
-    assert len(fakes.links) == 3
-
-
-def test_links_are_limited_per_visitor(client, fakes):
-    statuses = [ask_for_link(client, f"person{n}@example.com").status_code for n in range(6)]
-
-    assert statuses == [202] * 5 + [429]
-    assert ask_for_link(client).get_json()["error"]["code"] == "sign_in_limit_reached"
-
-
-def test_without_email_set_up_sign_in_says_so(client, fakes, monkeypatch):
-    monkeypatch.setattr(config, "RESEND_API_KEY", "")
-    monkeypatch.setattr(config, "SIGN_IN_LOG_LINKS", False)
-
-    response = ask_for_link(client)
-
-    assert response.status_code == 503
-    assert response.get_json()["error"]["code"] == "sign_in_unavailable"
-    assert fakes.tokens == []
-
-
-def test_a_send_failure_is_reported(client, fakes):
-    fakes.mail_error = mailer.MailUnavailable("status 500")
-
-    response = ask_for_link(client)
-
-    assert response.status_code == 503
-    assert response.get_json()["error"]["code"] == "sign_in_unavailable"
-
-
-def test_opening_the_link_shows_a_confirm_page_and_signs_nobody_in(client, fakes):
-    ask_for_link(client)
-    token = token_in(fakes.links[0][1])
-
-    page = client.get(f"/api/sign-in/confirm?token={token}")
-    again = client.get(f"/api/sign-in/confirm?token={token}")  # a mail scanner, then the person
-
-    assert page.status_code == again.status_code == 200
-    assert page.mimetype == "text/html"
-    assert EMAIL in page.get_data(as_text=True) and "<button" in page.get_data(as_text=True)
+    kind, email, link = fakes.mails[0]
+    assert (kind, email) == ("confirm", EMAIL)
+    assert link.startswith("https://api.example/api/sign-up/confirm?token=")
     assert client.get("/api/account").get_json()["signed_in"] is False
 
 
+def test_signing_up_keeps_spaces_in_a_password(client, fakes):
+    sign_up(client, password="  spaces at both ends  ")
+    press_confirm(client, fakes.mails[-1][2])
+
+    assert sign_in_with_password(client, password="  spaces at both ends  ").status_code == 200
+    assert sign_in_with_password(client, password="spaces at both ends").status_code == 401
+
+
+def test_the_answer_does_not_show_whether_an_address_has_an_account(client, fakes):
+    new = sign_up(client, "new@example.com", ip="198.51.100.1")
+    press_confirm(client, fakes.mails[-1][2])
+
+    existing = sign_up(client, "new@example.com", ip="198.51.100.2")
+
+    assert (new.status_code, new.get_json()) == (existing.status_code, existing.get_json())
+    assert fakes.mails[-1] == ("already", "new@example.com", None)
+
+
+@pytest.mark.parametrize("body, code", [
+    ({"email": "nonsense", "password": PASSWORD, "captcha_token": "good"}, "invalid_email"),
+    ({"email": EMAIL, "password": "too short", "captcha_token": "good"}, "invalid_password"),
+    ({"email": EMAIL, "password": "", "captcha_token": "good"}, "invalid_password"),
+    ({"email": EMAIL, "password": PASSWORD}, "invalid_request"),
+    ({"email": EMAIL, "password": PASSWORD, "captcha_token": "good", "extra": 1}, "invalid_request"),
+])
+def test_bad_sign_ups_send_nothing(client, fakes, body, code):
+    response = client.post("/api/sign-up", json=body)
+
+    assert response.status_code == 400
+    assert response.get_json()["error"]["code"] == code
+    assert fakes.mails == []
+
+
+def test_a_failed_human_check_sends_nothing(client, fakes):
+    fakes.human = False
+
+    assert sign_up(client).status_code == 403
+    assert ask_for_reset(client).status_code == 403
+    assert fakes.mails == []
+
+
+def test_emails_are_limited_per_address(client, fakes):
+    codes = [sign_up(client, ip=f"198.51.100.{n}").status_code for n in range(4)]
+
+    assert codes == [202, 202, 202, 429]
+    assert len(fakes.mails) == 3
+
+
+def test_emails_are_limited_per_visitor(client, fakes):
+    codes = [sign_up(client, f"person{n}@example.com").status_code for n in range(6)]
+
+    assert codes == [202] * 5 + [429]
+
+
+def test_without_email_set_up_signing_up_says_so(client, fakes, monkeypatch):
+    monkeypatch.setattr(config, "RESEND_API_KEY", "")
+    monkeypatch.setattr(config, "SIGN_IN_LOG_LINKS", False)
+
+    response = sign_up(client)
+
+    assert response.status_code == 503
+    assert response.get_json()["error"]["code"] == "sign_in_unavailable"
+
+
+def test_a_send_failure_is_reported(client, fakes):
+    fakes.mail_error = mailer.MailUnavailable("Resend did not accept the email (status 500)")
+
+    response = sign_up(client)
+
+    assert response.status_code == 503
+    assert "Resend" not in response.get_json()["error"]["message"]
+
+
+def test_opening_the_confirmation_link_shows_a_page_and_changes_nothing(client, fakes):
+    sign_up(client)
+    token = token_in(fakes.mails[0][2])
+
+    page = client.get(f"/api/sign-up/confirm?token={token}")
+
+    assert page.status_code == 200 and EMAIL in page.get_data(as_text=True)
+    assert client.get("/api/account").get_json()["signed_in"] is False
+    assert sign_in_with_password(client).get_json()["error"]["code"] == "email_not_confirmed"
+
+
 def test_the_confirm_page_escapes_the_address(client, fakes):
-    ask_for_link(client, '"><script>x</script>@example.com')
-    token = token_in(fakes.links[0][1])
+    sign_up(client, "<b>x@example.com")
 
-    html = client.get(f"/api/sign-in/confirm?token={token}").get_data(as_text=True)
+    page = client.get(f"/api/sign-up/confirm?token={token_in(fakes.mails[0][2])}").get_data(as_text=True)
 
-    assert "<script>x" not in html and "&lt;script&gt;" in html
+    assert "<b>x@example.com" not in page and "&lt;b&gt;x@example.com" in page
 
 
 def test_the_confirm_page_cannot_be_framed_or_run_scripts(client, fakes):
-    ask_for_link(client)
-    response = client.get(f"/api/sign-in/confirm?token={token_in(fakes.links[0][1])}")
+    sign_up(client)
 
-    policy = response.headers["Content-Security-Policy"]
+    policy = client.get(f"/api/sign-up/confirm?token={token_in(fakes.mails[0][2])}").headers["Content-Security-Policy"]
+
     assert "default-src 'none'" in policy and "frame-ancestors 'none'" in policy
-    assert "form-action 'self' https://site.example" in policy
-    assert response.headers["Referrer-Policy"] == "no-referrer"
 
 
-def test_pressing_sign_in_starts_a_session_and_returns_to_the_site(client, fakes):
+def test_confirming_returns_to_the_site_verified_and_signed_in(client, fakes):
     response = sign_in(client, fakes)
 
     assert response.status_code == 303
-    assert response.headers["Location"] == "https://site.example/market-trends/"
-    cookie = next(c for c in response.headers.getlist("Set-Cookie") if c.startswith(SESSION_COOKIE + "="))
-    assert "HttpOnly" in cookie and "SameSite=Strict" in cookie and "Path=/api" in cookie
-    assert client.get("/api/account").get_json() == {
-        "signed_in": True, "email": EMAIL,
-        "limits": {"hour": config.QUESTIONS_PER_ACCOUNT_HOUR, "day": config.QUESTIONS_PER_ACCOUNT_DAY},
-        "remaining": {"hour": config.QUESTIONS_PER_ACCOUNT_HOUR, "day": config.QUESTIONS_PER_ACCOUNT_DAY},
-    }
+    assert response.headers["Location"] == "https://site.example/market-trends/?verified=1"
+    account = client.get("/api/account").get_json()
+    assert account["signed_in"] is True and account["email"] == EMAIL and account["verified"] is True
+    assert account["limits"]["day"] == config.QUESTIONS_PER_ACCOUNT_DAY
+
+
+def test_later_visits_use_the_password(client, fakes):
+    sign_in(client, fakes)
+    client.post("/api/sign-out", json={})
+
+    response = sign_in_with_password(client, " LISTENER@example.com")
+
+    assert response.status_code == 200
+    assert client.get("/api/account").get_json()["verified"] is True
+
+
+def test_a_wrong_password_and_an_unknown_address_get_the_same_answer(client, fakes):
+    sign_in(client, fakes)
+    client.post("/api/sign-out", json={})
+
+    wrong = sign_in_with_password(client, password="not the password")
+    unknown = sign_in_with_password(client, "nobody@example.com")
+
+    assert wrong.status_code == unknown.status_code == 401
+    assert wrong.get_json() == unknown.get_json()
+    assert client.get("/api/account").get_json()["signed_in"] is False
+
+
+def test_tries_at_a_password_are_limited_and_need_the_human_check(client, fakes):
+    fakes.human = False
+    assert sign_in_with_password(client).status_code == 403
+    fakes.human = True
+
+    codes = [sign_in_with_password(client, password="not the password", ip=f"198.51.100.{n}").status_code
+             for n in range(11)]
+
+    assert codes == [401] * 10 + [429]
 
 
 def test_the_session_cookie_is_https_only_by_default(client, fakes, monkeypatch):
     monkeypatch.setattr(config, "COOKIE_SECURE", True)
 
-    response = sign_in(client, fakes)
+    cookie = next(c for c in sign_in(client, fakes).headers.getlist("Set-Cookie") if c.startswith(SESSION_COOKIE + "="))
 
-    cookie = next(c for c in response.headers.getlist("Set-Cookie") if c.startswith(SESSION_COOKIE + "="))
-    assert "Secure" in cookie
+    assert "Secure" in cookie and "HttpOnly" in cookie and "SameSite=Strict" in cookie and "Path=/api" in cookie
 
 
 def test_a_confirm_posted_from_another_site_is_refused(client, fakes):
-    # Another site can post the form, but cannot send the cookie the confirm page set.
-    ask_for_link(client)
-    token = token_in(fakes.links[0][1])
+    sign_up(client)
+    token = token_in(fakes.mails[0][2])
 
-    response = client.post("/api/sign-in/confirm", data={"token": token, "nonce": "guessed"})
+    response = client.post("/api/sign-up/confirm", data={"token": token, "nonce": "forged"})
 
     assert response.status_code == 403
-    assert client.get("/api/account").get_json()["signed_in"] is False
-    assert sign_in_with(client, token).status_code == 303  # the link still works
-
-
-def sign_in_with(client, token):
-    page = client.get(f"/api/sign-in/confirm?token={token}")
-    nonce = re.search(r'name="nonce" value="([^"]+)"', page.get_data(as_text=True)).group(1)
-    return client.post("/api/sign-in/confirm", data={"token": token, "nonce": nonce})
+    assert sign_in_with_password(client).get_json()["error"]["code"] == "email_not_confirmed"
 
 
 def test_a_used_or_expired_link_shows_a_page_to_ask_again(client, fakes, clock):
     sign_in(client, fakes)
-    used = token_in(fakes.links[0][1])
-    ask_for_link(client)
-    expired = token_in(fakes.links[1][1])
-    clock.now = NOON + timedelta(minutes=16)
+    token = token_in(fakes.mails[0][2])
+    assert client.get(f"/api/sign-up/confirm?token={token}").status_code == 400
 
-    for token in (used, expired, "made-up"):
-        response = client.get(f"/api/sign-in/confirm?token={token}")
-        assert response.status_code == 400
-        assert "https://site.example/market-trends/" in response.get_data(as_text=True)
+    sign_up(client, "other@example.com")
+    clock.now = NOON + timedelta(hours=25)
+    page = client.get(f"/api/sign-up/confirm?token={token_in(fakes.mails[-1][2])}")
+    assert page.status_code == 400 and "has expired or was already used" in page.get_data(as_text=True)
+
+
+def test_forgotten_password_from_the_email_to_signed_in_again(client, fakes):
+    sign_in(client, fakes)
+    client.post("/api/sign-out", json={})
+
+    assert ask_for_reset(client).status_code == 202
+    kind, _, link = fakes.mails[-1]
+    assert kind == "reset"
+    token = token_in(link)
+    page = client.get(f"/api/password-reset/confirm?token={token}")
+    assert page.status_code == 200
+    assert client.get("/api/account").get_json()["signed_in"] is False
+
+    response = client.post("/api/password-reset/confirm",
+                           data={"token": token, "nonce": nonce_in(page), "password": NEW_PASSWORD})
+
+    assert response.status_code == 303
+    assert response.headers["Location"] == "https://site.example/market-trends/?password_changed=1"
+    assert client.get("/api/account").get_json()["signed_in"] is True
+    assert sign_in_with_password(client).status_code == 401
+    assert sign_in_with_password(client, password=NEW_PASSWORD).status_code == 200
+
+
+def test_asking_for_a_new_password_does_not_show_who_has_an_account(client, fakes):
+    sign_in(client, fakes)
+    count = len(fakes.mails)
+
+    known = ask_for_reset(client, ip="198.51.100.1")
+    unknown = ask_for_reset(client, "nobody@example.com", ip="198.51.100.2")
+
+    assert (known.status_code, known.get_json()) == (unknown.status_code, unknown.get_json())
+    assert len(fakes.mails) == count + 1
+
+
+def test_a_short_new_password_shows_the_form_again_and_keeps_the_link(client, fakes):
+    sign_in(client, fakes)
+    ask_for_reset(client)
+    token = token_in(fakes.mails[-1][2])
+    page = client.get(f"/api/password-reset/confirm?token={token}")
+
+    refused = client.post("/api/password-reset/confirm", data={"token": token, "nonce": nonce_in(page), "password": "short"})
+
+    assert refused.status_code == 400 and "12 to 256" in refused.get_data(as_text=True)
+    done = client.post("/api/password-reset/confirm", data={"token": token, "nonce": nonce_in(refused), "password": NEW_PASSWORD})
+    assert done.status_code == 303
+
+
+def test_a_new_password_posted_from_another_site_is_refused(client, fakes):
+    sign_in(client, fakes)
+    client.post("/api/sign-out", json={})
+    ask_for_reset(client)
+
+    response = client.post("/api/password-reset/confirm",
+                           data={"token": token_in(fakes.mails[-1][2]), "nonce": "forged", "password": NEW_PASSWORD})
+
+    assert response.status_code == 403
+    assert sign_in_with_password(client).status_code == 200
 
 
 def test_signed_in_questions_skip_the_human_check_and_count_per_account(client, fakes, monkeypatch):
@@ -421,7 +655,7 @@ def test_anonymous_visitors_see_what_is_left(client):
     ask(client, ip="203.0.113.7")
 
     assert client.get("/api/account", environ_base={"REMOTE_ADDR": "203.0.113.7"}).get_json() == {
-        "signed_in": False, "email": None,
+        "signed_in": False, "email": None, "verified": False,
         "limits": {"hour": config.QUESTIONS_PER_VISITOR_HOUR, "day": config.QUESTIONS_PER_VISITOR_DAY},
         "remaining": {"hour": config.QUESTIONS_PER_VISITOR_HOUR - 1, "day": config.QUESTIONS_PER_VISITOR_DAY - 1},
     }
@@ -500,15 +734,16 @@ def test_signed_in_questions_count_against_the_account_not_the_address(client, f
     db.commit()
     questions = db.execute(
         "SELECT visitor, count FROM question_counts"
-        " WHERE period = 'day' AND visitor <> 'site' AND visitor NOT LIKE 'sign-in-%'"
+        " WHERE period = 'day' AND visitor <> 'site' AND visitor NOT LIKE 'sign-in-%' AND visitor NOT LIKE 'mail-%'"
     ).fetchall()
     assert questions == [("account:1", 2)]
 
 
-def test_setting_up_the_login_replaces_accounts_from_when_sign_in_used_passwords(db, limits_role):
+def test_setting_up_the_login_replaces_older_accounts(db, limits_role):
     from ingestion.create_limits_role import create_limits_role
     from tests.conftest import FAKE_SETTINGS
 
+    db.execute("DROP TABLE email_tokens")
     db.execute("DROP TABLE sessions")
     db.execute("DROP TABLE accounts")
     db.execute("""CREATE TABLE accounts (id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL UNIQUE,
@@ -525,15 +760,15 @@ def test_setting_up_the_login_replaces_accounts_from_when_sign_in_used_passwords
     assert db.execute("SELECT count(*) FROM accounts").fetchone() == (0,)
     left = [visitor for (visitor,) in db.execute("SELECT visitor FROM question_counts").fetchall()]
     assert "some-visitor" in left and "account:1" not in left and "sign-in-user:x" not in left
-    db.execute("INSERT INTO accounts (email, created_at, last_sign_in_at) VALUES ('a@example.com', now(), now())")
+    db.execute("INSERT INTO accounts (email, password_hash, created_at) VALUES ('a@example.com', 'hash', now())")
     db.rollback()
 
 
-def test_setting_up_the_login_again_keeps_email_accounts(db, limits_role):
+def test_setting_up_the_login_again_keeps_current_accounts(db, limits_role):
     from ingestion.create_limits_role import create_limits_role
     from tests.conftest import FAKE_SETTINGS
 
-    db.execute("INSERT INTO accounts (email, created_at, last_sign_in_at) VALUES ('a@example.com', now(), now())")
+    db.execute("INSERT INTO accounts (email, password_hash, created_at) VALUES ('a@example.com', 'hash', now())")
     create_limits_role(db, FAKE_SETTINGS["POSTGRES_LIMITS_USER"], FAKE_SETTINGS["POSTGRES_LIMITS_PASSWORD"])
     db.commit()
 

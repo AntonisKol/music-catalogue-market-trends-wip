@@ -5,7 +5,7 @@ How the project fits together, what each part is made of, and how it was built s
 - **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
 - **Developers:** every box names its code file, and the components table goes into detail.
 
-*Last updated: 7 November 2026, after sign-up by email link came back. 399 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
+*Last updated: 7 November 2026, after sign-up with email confirmation was added. 422 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
 
 **How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
 
@@ -28,7 +28,7 @@ flowchart TB
         AN["Anthropic API, Claude<br/>Reads a question and picks<br/>which query tool to call"]
         CF["Cloudflare Turnstile<br/>Confirms the visitor is a person"]
         GP["GitHub Pages<br/>Serves adnsaudio.com from the<br/>adns-space repo, the question box<br/>in its market-trends/ folder"]
-        RS["Resend<br/>Sends the sign-in emails<br/>from adnsaudio.com"]
+        RS["Resend<br/>Sends the sign-up emails<br/>from adnsaudio.com"]
         SB["Hetzner Storage Box<br/>Keeps a copy of the last<br/>14 nightly backups"]
     end
 
@@ -51,14 +51,14 @@ flowchart TB
         TRK[("Tracked labels and run records<br/>tracked_labels, ingestion_runs<br/>Achieved: what to update, and how each night went")]
         SNAP[("Snapshots<br/>price per release per day,<br/>want, have and ratings per week<br/>Achieved: history that grows with every run")]
         LST[("Shop listings, issue 24<br/>one row per listing per day")]
-        LIM[("Question counts and accounts<br/>question_counts, accounts, sign_in_tokens, sessions<br/>Code: create_limits_role.py<br/>Achieved: limits that survive restarts; links and<br/>sessions stored only as hashes")]
+        LIM[("Question counts and accounts<br/>question_counts, accounts, email_tokens, sessions<br/>Code: create_limits_role.py<br/>Achieved: limits that survive restarts; passwords, links<br/>and sessions stored only as hashes")]
     end
 
     subgraph QRY["Questions: reads data"]
         RD["Reader login, step 6<br/>Code: create_reader_role.py<br/>How: SELECT-only role, read-only<br/>sessions, 5 s query limit<br/>Achieved: nothing using this login can<br/>change data, enforced by the database"]
         TL["Five query tools, step 6 and issue 27<br/>Code: queries/tools.py<br/>How: fixed SQL, arguments checked<br/>by Pydantic, capped results, vinyl only<br/>Achieved: safe, predictable reads<br/>an AI can call"]
         QS["Question service, steps 7 and 8<br/>Code: queries/questions.py, queries/verify.py<br/>How: Claude Haiku 5.5 via the SDK tool runner,<br/>gets only the question and tool descriptions,<br/>our code checks and runs each tool it picks,<br/>then checks every figure against the rows<br/>Achieved: answers from our rows, returned<br/>with their sources, a warning when a figure<br/>cannot be found, clear errors for failures"]
-        API["Web API, step 9 and issue 38<br/>Code: web/app.py, limits.py, captcha.py,<br/>accounts.py, mailer.py<br/>How: Flask under gunicorn, JSON in and out;<br/>Turnstile human check, limits per visitor,<br/>account and site, email link<br/>sign-in with a sessions table<br/>Achieved: questions checked and limited<br/>before the AI, a larger quota when signed in,<br/>keys and passwords stay on the server,<br/>visitors logged only as a hash"]
+        API["Web API, step 9 and issue 38<br/>Code: web/app.py, limits.py, captcha.py,<br/>accounts.py, mailer.py<br/>How: Flask under gunicorn, JSON in and out;<br/>Turnstile human check, limits per visitor,<br/>account and site, email and password<br/>sign-up, confirmed by email, sessions<br/>Achieved: questions checked and limited<br/>before the AI, a larger quota when signed in,<br/>keys and passwords stay on the server,<br/>visitors logged only as a hash"]
         UI["Question box, step 10<br/>Code: widget/ask.js, widget/ask.css<br/>How: plain JavaScript on adnsaudio.com,<br/>invisible Turnstile check, safe Markdown subset<br/>as text nodes, collapsible data table,<br/>questions left and sign-in form<br/>Achieved: anyone can ask about vinyl prices<br/>on phone or desktop, with the model named"]
     end
 
@@ -84,7 +84,7 @@ flowchart TB
     API <-->|"verify token"| CF
     API <-->|"web login, only these tables"| LIM
     API -->|"JSON answer"| CAD
-    API -->|"sign-in link"| RS
+    API -->|"confirmation and new-password links"| RS
     CAD -->|"HTTPS"| UI
     GP -->|"the page"| UI
     USER -->|"types a question"| UI
@@ -127,7 +127,7 @@ flowchart TD
     F19["Issue 19: CI runs all tests<br/>Code: .github/workflows/tests.yml<br/>How: GitHub Actions on Python 3.10 and 3.13,<br/>Testcontainers PostgreSQL, CI=true,<br/>actions pinned to exact commits<br/>Achieved: no pull request merges into<br/>main unless all tests pass"]
     F24["Issue 24: Tracked techno shops<br/>How: chosen shops' Discogs inventories,<br/>city recorded by us, a sixth query tool<br/>Will achieve: questions by seller city,<br/>such as records sold from Berlin"]
     F27["Issue 27: Fixes from a code review<br/>Code: pipeline.py, ingest_label.py, tools.py<br/>How: one run at a time, credit-only and<br/>deleted releases handled, vinyl-only answers<br/>Achieved: the code does what the docs promise"]
-    F38["Issue 38: Email sign-in and quotas<br/>Code: web/accounts.py, mailer.py, widget/<br/>How: one-time links by Resend, a confirm page,<br/>a sessions table, counts per account, anyone<br/>can sign up (issue 49)<br/>Achieved: 3 questions a day to try, 10 an hour<br/>and 50 a day signed in, no passwords,<br/>accounts deletable"]
+    F38["Issues 38, 49: Sign-up and quotas<br/>Code: web/accounts.py, mailer.py, widget/<br/>How: email and password, a confirmation link by<br/>Resend, a sessions table, counts per account<br/>Achieved: 3 questions a day to try, 10 an hour<br/>and 50 a day when verified, fake addresses never<br/>get a working account, accounts deletable"]
     F44["Issue 44: Hosting<br/>Code: Dockerfile, deploy/<br/>How: a Hetzner server with Docker Compose,<br/>Caddy for HTTPS, cron for the nightly update,<br/>backups to a Storage Box, one deploy command,<br/>the box on the site's own page<br/>Achieved: everything ready to run online;<br/>live once the server and accounts exist"]
     F18["Issues 18 and 25: Documentation<br/>Code: README, decisions.md, this page<br/>Achieved: decisions and architecture<br/>written down, updated with every step"]
 
@@ -178,7 +178,7 @@ flowchart TD
 | 10 | [12](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) Question box | Built | The question box for adnsaudio.com, checked in a real browser | HTML, CSS, JavaScript, Cloudflare Turnstile |
 | 11 | [13](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) Test page | Planned | Keyboard, focus and screen-reader checks | browser tests |
 | – | [27](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/27) Review fixes | Built | Malformed data, deleted and credit-only releases handled; one run at a time; vinyl-only answers | Python, PostgreSQL advisory lock |
-| – | [38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38), [49](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/49) Email sign-up | Built | Anyone can sign up by one-time email link and returns to the page signed in; quotas per account; account deletion | Flask, PostgreSQL, Resend |
+| – | [38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38), [49](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/49) Sign-up | Built | Anyone can sign up with an email and a password, confirm by email and return to the page with a Verified badge; quotas per account; account deletion | Flask, PostgreSQL, Resend |
 | – | [41](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/41) Weekly details | Built | Prices every night, want/have/ratings once a week per release, spread over the week; about half the requests a night | Python, PostgreSQL |
 | – | [44](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/44) Hosting | Built, not yet live | The API, database and nightly update on a server, HTTPS by Caddy, nightly backups off the server, one deploy command, the page on adnsaudio.com | Docker Compose, Caddy, cron, rsync, GitHub Pages |
 | – | [19](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/19) CI | Built | Every pull request runs all tests, including the database ones, and must pass to merge | GitHub Actions, Dependabot |
@@ -352,9 +352,9 @@ The five query tools, built in step 6, are all the AI can use:
 
 The list tools return at most 50 rows (25 unless asked for more), plus the total number that matched. `release_history` returns one row per day, so at most 90, and `compare_labels` at most 10. Every tool returns vinyl only, and a query stopped by the 5-second limit comes back as a readable reason. Each tool description tells the AI what the price means: the cheapest copy on sale in any condition, without shipping, in EUR converted by Discogs.
 
-### Signing in, issue 38
+### Signing up, issues 38 and 49
 
-In one sentence: an emailed link opens a confirm page, and only its button signs in, so a mail scanner opening the link cannot use it up.
+In one sentence: a visitor signs up with an email address and a password, and the account only works once they press the button behind a link sent to that address.
 
 ```mermaid
 sequenceDiagram
@@ -366,32 +366,34 @@ sequenceDiagram
     participant RS as Resend
     participant M as Visitor's inbox
 
-    V->>UI: types an email after running out of questions
-    UI->>API: POST /api/sign-in, email and Turnstile token
-    API->>API: check the address and the human check
-    API->>Pg: count it: 3 an hour per address, 5 per visitor
-    API->>Pg: store the SHA-256 hash of a new random token, valid 15 minutes
-    API->>RS: send the link
-    RS->>M: Your Market Trends sign-in link
+    V->>UI: types an email and a password after running out of questions
+    UI->>API: POST /api/sign-up, with a Turnstile token
+    API->>API: check the address, the password and the human check
+    API->>Pg: count it: 3 emails an hour per address, 5 per visitor
+    API->>Pg: store an unconfirmed account, the password's scrypt hash and a link's SHA-256 hash, valid 24 hours
+    API->>RS: send the confirmation email with the logo inside
+    RS->>M: Confirm your email for Market Trends
     API-->>UI: 202, the same answer for every address
     Note over UI,API: Achieved: nobody can find out who has an account
     opt a mail scanner opens the link first
-        M->>API: GET /api/sign-in/confirm?token
+        M->>API: GET /api/sign-up/confirm?token
         API-->>M: confirm page, link not used
     end
-    V->>API: opens the link: GET /api/sign-in/confirm?token
-    API->>Pg: is the token unused and in time
-    API-->>V: Sign in as you@ page, sets a SameSite=Strict check cookie
-    V->>API: presses Sign in: POST token and the check value
+    V->>API: opens the link: GET /api/sign-up/confirm?token
+    API->>Pg: is the link unused and in time
+    API-->>V: confirm page, sets a SameSite=Strict check cookie
+    V->>API: presses the button: POST token and the check value
     API->>API: the check value matches the cookie
-    API->>Pg: mark the token used and start a session, in one transaction
-    Note over API,Pg: Achieved: one link, one sign-in, even with two presses
-    API-->>V: 303 to adnsaudio.com/market-trends/, session cookie: HttpOnly, Secure, SameSite=Strict, 30 days
+    API->>Pg: mark the link used, confirm the address and start a session, in one transaction
+    Note over API,Pg: Achieved: one link, one confirmation, even with two presses
+    API-->>V: 303 to adnsaudio.com/market-trends/?verified=1, session cookie: HttpOnly, Secure, SameSite=Strict, 30 days
     V->>UI: back on the page
     UI->>API: GET /api/account with the cookie
-    API-->>UI: signed in as you@, 10 questions left this hour
-    Note over V,UI: Achieved: no password, a larger quota,<br/>sign-out and account deletion end the session at once
+    API-->>UI: signed in as you@, verified, 10 questions left this hour
+    Note over V,UI: Achieved: a Verified badge and a larger quota. An address<br/>nobody can open never works and is deleted after 7 days
 ```
+
+Later visits use `POST /api/sign-in` with the password. A forgotten password takes the same route as above: a link by email, a page, then back to the box signed in.
 
 ---
 
@@ -412,7 +414,7 @@ sequenceDiagram
 | Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 390 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock; a `--live` before-release test with the real Claude and an AI judge | Database tests skip without Docker on a laptop, fail in CI; live tests never run without `--live` |
 | Question service | [`queries/questions.py`](../queries/questions.py) | Anthropic SDK tool runner, Claude Haiku 5.5 | Sends the question and tool descriptions to Claude, runs the tools it asks for, returns the answer with its sources | Claude never sees SQL or the database; refused arguments go back as errors; a database failure stops the run; every error becomes a visitor-safe `QuestionError`; instructions and tools cached |
 | Web API | [`web/app.py`](../web/app.py), [`limits.py`](../web/limits.py), [`captcha.py`](../web/captcha.py), [`create_limits_role.py`](../ingestion/create_limits_role.py) | Flask, gunicorn, Cloudflare Turnstile | `POST /api/questions`: checks the request, the human check and the limits, then asks the question service | Fails closed; limits counted in one transaction by a login that can only touch its four tables; visitors stored as a keyed hash, deleted after two days; forwarded addresses trusted only behind a configured proxy; usage never sent; 8 KB body limit; CORS only for listed origins; the access log holds a keyed hash, never the address, and visitors can't fake a line in it; logs limited in size |
-| Email sign-in | [`web/accounts.py`](../web/accounts.py), [`mailer.py`](../web/mailer.py) | PostgreSQL, Resend | One-time links, the confirm page, sessions, sign-out and account deletion | Tokens are 32 random bytes, stored only as hashes; links work once within 15 minutes; opening a link uses nothing; confirm form checked against a `SameSite=Strict` cookie; session cookie `HttpOnly`, `Secure`, `SameSite=Strict`; links limited per address and visitor; the same answer for every address; strict Content Security Policy and no referrer |
+| Sign-up | [`web/accounts.py`](../web/accounts.py), [`mailer.py`](../web/mailer.py) | PostgreSQL, Resend | Sign-up, confirmation and new-password links, password sign-in, sessions, sign-out and account deletion | Passwords stored as salted scrypt hashes; tokens are 32 random bytes, stored only as hashes; links work once; opening a link uses nothing; unconfirmed accounts can't sign in and are deleted after 7 days; forms checked against a `SameSite=Strict` cookie; session cookie `HttpOnly`, `Secure`, `SameSite=Strict`; the same answer for known and unknown addresses; tries and emails limited per address and visitor |
 | Question box | [`widget/ask.js`](../widget/ask.js), [`ask.css`](../widget/ask.css), [`index.html`](../widget/index.html) | HTML, CSS, JavaScript, Cloudflare Turnstile | The list of tracked labels, the form, example questions, states, answer, warning, model and data table | Answers drawn from text nodes only; no double submits; token reset after each question; no secrets in the page; 90-second request timeout; the box still works if the label list can't load |
 | Nightly update | [`ingestion/nightly.py`](../ingestion/nightly.py), [`track_labels.py`](../ingestion/track_labels.py), [`runs.py`](../ingestion/runs.py), [`ops/`](../ops) | launchd, cron | Updates every active tracked label each night (prices nightly, details weekly per release) and records each run and label | Shares the ingestion lock; interrupted runs marked failed; missed nights flagged; one label's failure doesn't stop the rest; rotating log |
 | Schema command | [`ingestion/apply_schema.py`](../ingestion/apply_schema.py) | PostgreSQL | Adds tables introduced since a database was created | Every statement is `CREATE TABLE IF NOT EXISTS`; existing data untouched |
@@ -490,7 +492,8 @@ The same routine has been used on every task:
 | 44 | Empty `.partial` files piled up on the server and would have been copied to the Storage Box | A failed dump leaves its temporary file, and only finished dumps were ever deleted | Each backup now deletes leftovers first, and a test runs the script to check it |
 | 48 | The server's log kept every visitor's address, with no size limit | Gunicorn's standard access log records addresses, and Docker keeps logs forever unless told otherwise | The app writes its own log line with a keyed hash, and logs are limited to three files of 10 MB |
 | 48 | The label list showed names like "Afterlife (6)" | Discogs numbers labels that share a name, and we store its name as it is | The numbers are removed for the list; labels that then share a name appear once |
-| 49 | Sign-up had to come back after #47 removed email, on a server that already had password accounts | Password accounts have no email address, and creating a table that already exists changes nothing | `create_limits_role` replaces a password-style accounts table once, and a test checks that running it again keeps email accounts |
+| 49 | Sign-up had to come back after #47 removed email, on a server that already had password accounts made by the owner | Those accounts have no email address, and creating a table that already exists changes nothing | `create_limits_role` replaces older accounts tables once, and a test checks that running it again keeps current accounts |
+| 49 | Someone could sign up with another person's address first and keep their own password | The address isn't proven until the link is used | Signing up again before confirming replaces the password and the link. A confirmed account is never changed by signing up |
 
 ---
 

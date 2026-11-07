@@ -30,8 +30,8 @@ QUESTIONS_PER_ACCOUNT_DAY = int(os.environ.get("QUESTIONS_PER_ACCOUNT_DAY", "50"
 # Everyone together: the overall safety net.
 QUESTIONS_PER_SITE_DAY = int(os.environ.get("QUESTIONS_PER_SITE_DAY", "1000"))
 
-# Email sign-in. Without a Resend key sign-in is off, unless SIGN_IN_LOG_LINKS=true
-# writes the links to the log (for trying it on a laptop only).
+# Signing up. Without a Resend key it is off, unless SIGN_IN_LOG_LINKS=true writes
+# the links to the log (for trying it on a laptop only).
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 SIGN_IN_EMAIL_FROM = os.environ.get("SIGN_IN_EMAIL_FROM", "Market Trends <sign-in@adnsaudio.com>")
 SIGN_IN_LOG_LINKS = os.environ.get("SIGN_IN_LOG_LINKS", "").lower() == "true"

@@ -12,11 +12,13 @@
 // is based on. Everything from the API is added to the page as text (textContent),
 // never as HTML, so nothing in an answer can run as code.
 //
-// Visitors get a few questions without an account. For more they sign in with an
-// emailed link; the API then keeps them signed in with a cookie the page cannot
-// read, sent along because every request uses credentials: "include".
+// Visitors get a few questions without an account. For more they sign up with an
+// email address and a password, and confirm the address with an emailed link. The
+// API then keeps them signed in with a cookie the page cannot read, sent along
+// because every request uses credentials: "include".
 
 const MAX_QUESTION_LENGTH = 500;
+const MIN_PASSWORD_LENGTH = 12;
 const REQUEST_TIMEOUT_MS = 90_000;
 // The human check runs invisibly; a question asked before it has finished waits this long.
 const CHECK_WAIT_MS = 8_000;
@@ -62,6 +64,23 @@ const TOOL_NAMES = {
   release_history: "Price history",
   market_changes: "Market changes",
   compare_labels: "Label comparison",
+};
+
+// The three things the account form can do.
+const ACCOUNT_MODES = {
+  signUp: {
+    title: "Sign up for more questions", button: "Sign up", path: "/api/sign-up", autocomplete: "new-password",
+    placeholder: `Password, at least ${MIN_PASSWORD_LENGTH} characters`,
+    hint: "We email you a link to confirm your address. Then you return here, verified.",
+  },
+  signIn: {
+    title: "Sign in", button: "Sign in", path: "/api/sign-in", autocomplete: "current-password",
+    placeholder: "Password", hint: "With the email and password you signed up with.",
+  },
+  reset: {
+    title: "Forgot your password?", button: "Email me a link", path: "/api/password-reset",
+    hint: "We email you a link to choose a new one.",
+  },
 };
 
 // --- Small helpers ------------------------------------------------------------------
@@ -248,19 +267,27 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   const account = el("div", { class: "mt-ask-account", hidden: "" });
   const email = el("input", {
     id: `${id}-email`, type: "email", name: "email", autocomplete: "email", required: "",
-    placeholder: "you@example.com", maxlength: "254",
+    placeholder: "you@example.com", "aria-label": "Email address", maxlength: "254",
   });
-  const signInButton = el("button", { type: "submit", class: "mt-ask-submit" }, "Email me a link");
+  const password = el("input", {
+    id: `${id}-password`, type: "password", name: "password", required: "",
+    placeholder: "Password", "aria-label": "Password", maxlength: "256",
+  });
+  const signInTitle = el("p", { class: "mt-ask-label" });
+  const signInHint = el("p", { class: "mt-ask-hint" });
+  const signInButton = el("button", { type: "submit", class: "mt-ask-submit" });
   const signInStatus = el("p", { class: "mt-ask-status", role: "status", "aria-live": "polite" });
+  const signInLinks = el("p", { class: "mt-ask-switch" });
   const signInForm = el("form", { class: "mt-ask-sign-in", novalidate: "", hidden: "" },
-    el("label", { for: email.id, class: "mt-ask-label" }, "Sign up or sign in for more questions"),
-    el("p", { class: "mt-ask-hint" }, "We email you a link. It creates your account the first time and brings you back here. No password."),
-    el("div", { class: "mt-ask-sign-in-row" }, email, signInButton),
+    signInTitle,
+    signInHint,
+    el("div", { class: "mt-ask-sign-in-row" }, email, password, signInButton),
     signInStatus,
+    signInLinks,
     el("p", { class: "mt-ask-privacy" },
-      "We store your email address and when you signed in, plus how many questions you asked "
-      + "in the last two days. Resend sends the email for us. Sign-in links work once, within 15 minutes. "
-      + "You can delete your account at any time."),
+      "We store your email address, a scrambled copy of your password that can't be turned back into it, "
+      + "when you confirmed and last signed in, and how many questions you asked in the last two days. "
+      + "Resend sends our emails. You can delete your account at any time."),
   );
   const notice = el("p", { class: "mt-ask-privacy" },
     "To spot abuse, our logs keep a scrambled version of your network address, never the address itself. "
@@ -271,6 +298,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   let widgetId = null;
   let busy = false;
   let state = null;  // from GET /api/account
+  let mode = "signUp";
 
   function request(path, options = {}) {
     return fetchImpl(`${api}${path}`, { credentials: "include", ...options });
@@ -286,7 +314,33 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     return el("button", { type: "button", class: "mt-ask-link", onclick }, text);
   }
 
+  function setMode(name) {
+    mode = name;
+    const settings = ACCOUNT_MODES[name];
+    signInTitle.textContent = settings.title;
+    signInHint.textContent = settings.hint;
+    signInButton.textContent = settings.button;
+    password.hidden = !settings.autocomplete;
+    password.value = "";
+    if (settings.autocomplete) {
+      password.autocomplete = settings.autocomplete;
+      password.placeholder = settings.placeholder;
+    }
+    signInStatus.textContent = "";
+    const switches = {
+      signUp: [["Already have an account? Sign in", "signIn"]],
+      signIn: [["New here? Sign up", "signUp"], ["Forgot your password?", "reset"]],
+      reset: [["Back to sign in", "signIn"]],
+    }[name];
+    const links = switches.flatMap(([text, target], index) => [
+      ...(index ? [" · "] : []),
+      link(text, () => { setMode(target); email.focus(); }),
+    ]);
+    signInLinks.replaceChildren(...links);
+  }
+
   function showSignIn() {
+    setMode("signUp");
     signInForm.hidden = false;
     email.focus();
   }
@@ -300,7 +354,8 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     if (state.signed_in) {
       signInForm.hidden = true;
       account.replaceChildren(
-        el("span", {}, "Signed in as ", el("strong", {}, state.email)), " · ", left, " · ",
+        el("span", {}, "Signed in as ", el("strong", {}, state.email)), " ",
+        ...(state.verified ? [el("span", { class: "mt-ask-badge" }, "✓ Verified"), " "] : []), "· ", left, " · ",
         link("Sign out", signOut), " · ", link("Delete my account", deleteAccount),
       );
     } else {
@@ -424,38 +479,55 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     heading.focus();
   }
 
+  function showAccountProblem(message, field) {
+    signInStatus.textContent = message;
+    signInStatus.className = "mt-ask-status mt-ask-status-error";
+    field?.focus();
+  }
+
   signInForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     if (busy) return;
+    const settings = ACCOUNT_MODES[mode];
     const address = email.value.trim();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) {
-      signInStatus.textContent = "Please type a valid email address.";
-      signInStatus.className = "mt-ask-status mt-ask-status-error";
-      email.focus();
+      showAccountProblem("Please type a valid email address.", email);
+      return;
+    }
+    if (settings.autocomplete && !password.value) {
+      showAccountProblem("Please type your password.", password);
+      return;
+    }
+    if (mode === "signUp" && password.value.length < MIN_PASSWORD_LENGTH) {
+      showAccountProblem(`Please choose a password of at least ${MIN_PASSWORD_LENGTH} characters.`, password);
       return;
     }
     busy = true;
     signInButton.disabled = true;
     signInStatus.className = "mt-ask-status";
-    signInStatus.textContent = "Sending…";
+    signInStatus.textContent = "One moment…";
     try {
       if (!token && !(await waitForToken())) {
-        signInStatus.textContent = "The human check hasn't finished. If a check appears above the Ask button, please complete it, then try again.";
-        signInStatus.className = "mt-ask-status mt-ask-status-error";
+        showAccountProblem("The human check hasn't finished. If a check appears above the Ask button, please complete it, then try again.");
         return;
       }
-      const response = await postJson("/api/sign-in", { email: address, captcha_token: token });
+      const fields = settings.autocomplete ? { password: password.value } : {};
+      const response = await postJson(settings.path, { email: address, ...fields, captcha_token: token });
       const body = await response.json().catch(() => null);
-      if (response.ok) {
-        signInStatus.textContent = `Check your inbox: a sign-in link is on its way to ${address}. It works once, within 15 minutes.`;
+      if (!response.ok) {
+        showAccountProblem(errorMessage(response.status, body, response.headers.get("Retry-After")));
+      } else if (mode === "signIn") {
+        signInStatus.textContent = "";
+        showStatus("You are signed in.");
+        await loadAccount();
       } else {
-        signInStatus.textContent = errorMessage(response.status, body, response.headers.get("Retry-After"));
-        signInStatus.className = "mt-ask-status mt-ask-status-error";
+        signInStatus.textContent = body?.message ?? "Please check your inbox.";
       }
     } catch {
-      signInStatus.textContent = "Could not reach the question service. Please check your connection and try again.";
-      signInStatus.className = "mt-ask-status mt-ask-status-error";
+      showAccountProblem("Could not reach the question service. Please check your connection and try again.");
     } finally {
+      // The password is never kept on the page, whether it worked or not.
+      password.value = "";
       busy = false;
       signInButton.disabled = false;
       resetCheck();
@@ -514,10 +586,19 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     }
   });
 
+  // Coming back from a link in an email.
+  const arrival = new URLSearchParams(window.location.search);
+  if (arrival.has("verified")) showStatus("Your email is confirmed. You are signed in.");
+  if (arrival.has("password_changed")) showStatus("Your password is changed. You are signed in.");
+  if (arrival.has("verified") || arrival.has("password_changed")) {
+    window.history.replaceState(null, "", window.location.pathname);
+  }
+
+  setMode("signUp");
   loadAccount();
   loadLabels();
 
-  return { labels, form, textarea, button, status, output, account, signInForm, email };
+  return { labels, form, textarea, button, status, output, account, signInForm, email, password };
 }
 
 if (typeof document !== "undefined") {
