@@ -26,11 +26,15 @@ const REQUEST_TIMEOUT_MS = 90_000;
 // The human check runs invisibly; a question asked before it has finished waits this long.
 const CHECK_WAIT_MS = 8_000;
 
+// While a label request is open, its status is checked this often, so a decision shows without a reload.
+const REQUEST_CHECK_MS = 30_000;
+const OPEN_REQUEST = new Set(["waiting", "reviewing"]);
+
 const EXAMPLES = [
-  "Which Planet E records are the most wanted?",
+  "Which Ostgut Ton records are the most wanted?",
   "What is the cheapest record on Underground Resistance right now?",
   "How did the price of Throw change over the last month?",
-  "Compare Planet E and Underground Resistance.",
+  "Compare Ostgut Ton and Underground Resistance.",
 ];
 
 // Readable names for the columns the query tools return; others are not shown.
@@ -240,7 +244,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
 
   const textarea = el("textarea", {
     id: `${id}-question`, name: "question", rows: "3", maxlength: String(MAX_QUESTION_LENGTH),
-    placeholder: "e.g. Which Planet E records got more expensive this month?",
+    placeholder: "e.g. Which Ostgut Ton records got more expensive this month?",
     "aria-describedby": `${id}-hint`,
   });
   const counter = el("span", { class: "mt-ask-counter", "aria-hidden": "true" }, `0 / ${MAX_QUESTION_LENGTH}`);
@@ -269,14 +273,13 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   });
   const requestButton = el("button", { type: "submit", class: "mt-ask-submit" }, "Request");
   const requestStatus = el("p", { class: "mt-ask-status", role: "status", "aria-live": "polite" });
-  const requestList = el("ul", { class: "mt-ask-requests", "aria-label": "Your label requests" });
+  const requestList = el("ul", { class: "mt-ask-requests", "aria-label": "Your label requests", hidden: "" });
   const requestForm = el("form", { class: "mt-ask-request-form", novalidate: "", hidden: "" },
     el("div", { class: "mt-ask-sign-in-row" }, requestName, requestButton),
     requestStatus,
-    requestList,
   );
   const requestLine = el("p", { class: "mt-ask-request-line" });
-  const requestArea = el("div", { class: "mt-ask-request", hidden: "" }, requestLine, requestForm);
+  const requestArea = el("div", { class: "mt-ask-request", hidden: "" }, requestLine, requestForm, requestList);
   const form = el("form", { class: "mt-ask-form", novalidate: "" },
     el("label", { for: textarea.id, class: "mt-ask-label" }, "Ask about the vinyl market"),
     textarea,
@@ -411,22 +414,55 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     return reason ? `${text} (${reason})` : text;
   }
 
+  // A signed-in visitor's requests show under "Missing a label?". While one is open,
+  // they are checked again every REQUEST_CHECK_MS, and only while the page is visible.
+  let requestsShownFor = null;  // the signed-in address the list belongs to
+  let requestCheck = null;
+  let checkDue = false;  // the check came while the page was hidden
+
+  function stopCheckingRequests() {
+    clearTimeout(requestCheck);
+    requestCheck = null;
+    checkDue = false;
+  }
+
+  function checkRequestsLater() {
+    stopCheckingRequests();
+    requestCheck = setTimeout(() => {
+      requestCheck = null;
+      if (document.hidden) checkDue = true;
+      else loadMyRequests();
+    }, REQUEST_CHECK_MS);
+  }
+
   async function loadMyRequests() {
+    const owner = requestsShownFor;
+    let mine = null;
     try {
       const response = await request("/api/label-requests");
-      const mine = response.ok ? (await response.json()).requests : [];
-      requestList.replaceChildren(...mine.map((item) => el("li", {}, describeRequest(item))));
+      if (response.ok) mine = (await response.json()).requests ?? [];
     } catch {
-      // The list is a convenience; requesting still works.
+      // The list is a convenience; requesting still works. It is tried again later.
     }
+    if (owner === null || owner !== requestsShownFor) return;  // signed out meanwhile
+    if (mine) {
+      requestList.replaceChildren(...mine.map((item) => el("li", {}, describeRequest(item))));
+      requestList.hidden = mine.length === 0;
+    }
+    if (!mine || mine.some((item) => OPEN_REQUEST.has(item.status))) checkRequestsLater();
   }
+
+  document.addEventListener("visibilitychange", () => {
+    // Back on the page after the check was due: check now.
+    if (!document.hidden && checkDue && requestsShownFor !== null) {
+      checkDue = false;
+      loadMyRequests();
+    }
+  });
 
   function toggleRequestForm() {
     requestForm.hidden = !requestForm.hidden;
-    if (!requestForm.hidden) {
-      requestName.focus();
-      loadMyRequests();
-    }
+    if (!requestForm.hidden) requestName.focus();
   }
 
   function renderRequestArea() {
@@ -437,6 +473,14 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     requestLine.replaceChildren("Missing a label? ", state.signed_in
       ? link("Request it", toggleRequestForm)
       : link("Sign up or sign in to request it", showSignIn));
+    const signedInAs = state.signed_in ? state.email : null;
+    if (signedInAs !== requestsShownFor) {
+      requestsShownFor = signedInAs;
+      stopCheckingRequests();
+      requestList.replaceChildren();
+      requestList.hidden = true;
+      if (signedInAs !== null) loadMyRequests();
+    }
     if (!state.signed_in) requestForm.hidden = true;
     requestArea.hidden = false;
   }
@@ -591,9 +635,11 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     status.className = `mt-ask-status${kind ? ` mt-ask-status-${kind}` : ""}`;
   }
 
-  function showAnswer(body) {
+  function showAnswer(body, question) {
     const heading = el("h2", { id: `${id}-answer-title`, class: "mt-ask-answer-title", tabindex: "-1" }, "Answer");
-    const parts = [heading, el("div", { class: "mt-ask-answer" }, renderAnswer(body.answer))];
+    // The field is emptied for the next question, so the question stays with its answer.
+    const parts = [heading, el("p", { class: "mt-ask-asked" }, "You asked: ", el("q", {}, question)),
+                   el("div", { class: "mt-ask-answer" }, renderAnswer(body.answer))];
     if (body.warning) parts.push(el("p", { class: "mt-ask-warning", role: "note" }, body.warning));
     const rows = renderSources(body.sources);
     if (rows.childNodes.length) {
@@ -716,7 +762,9 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
         return;
       }
       showStatus("");
-      showAnswer(body);
+      showAnswer(body, question);
+      textarea.value = "";
+      update();
       if (state && body.remaining) {
         state.remaining = body.remaining;
         renderAccount();

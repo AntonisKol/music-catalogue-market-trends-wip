@@ -222,7 +222,8 @@ class Outbox:
 def outbox(monkeypatch):
     box = Outbox()
     monkeypatch.setattr(owner.mailer, "send_label_request", box.keep("request"))
-    monkeypatch.setattr(owner.mailer, "send_label_rejected", box.keep("rejected"))
+    monkeypatch.setattr(owner.mailer, "send_label_status",
+                        lambda email, name, status, reason=None, label=None: box.keep(status)(email, name, reason, label))
     monkeypatch.setattr(owner.config, "LABEL_REQUEST_EMAIL", "reviewer@example.com")
     return box
 
@@ -247,13 +248,16 @@ def test_the_owner_sees_open_requests_with_equivalent_names_together(waiting_req
 
 
 @responses.activate
-def test_reviewing_shows_discogs_matches_and_tells_the_visitors(waiting_requests, owner_db, db, capsys):
+def test_reviewing_shows_discogs_matches_and_tells_the_visitors(waiting_requests, owner_db, db, outbox, capsys):
     discogs_matches()
 
     assert owner.main(["review", "2"]) == 0
 
     out = capsys.readouterr().out
+    assert "now shown as being reviewed; everyone who asked was emailed." in out
     assert "21250  Pole Recordings  (226 entries)  https://www.discogs.com/label/21250" in out
+    assert sorted(outbox.sent) == [("reviewing", "a@example.com", "Polegroup", None, None),
+                                   ("reviewing", "b@example.com", "polegroup records", None, None)]
     assert [row[1] for row in statuses(db)] == ["reviewing", "reviewing", "waiting"]
     owner.main(["list"])
     assert "being reviewed" in capsys.readouterr().out
@@ -261,12 +265,14 @@ def test_reviewing_shows_discogs_matches_and_tells_the_visitors(waiting_requests
 
 @responses.activate
 @pytest.mark.parametrize("label", ["21250", "https://www.discogs.com/label/21250-Pole-Recordings"])
-def test_approving_tracks_the_label_for_everyone_who_asked(waiting_requests, owner_db, db, capsys, label):
+def test_approving_tracks_the_label_for_everyone_who_asked(waiting_requests, owner_db, db, outbox, capsys, label):
     responses.get(f"{DISCOGS}/labels/21250", json={"id": 21250, "name": "Pole Recordings"})
 
     assert owner.main(["approve", "1", label]) == 0
 
-    assert "Approved 2 request(s) for Polegroup" in capsys.readouterr().out
+    assert "Approved 2 request(s) for Polegroup; everyone who asked was emailed." in capsys.readouterr().out
+    assert sorted(outbox.sent) == [("added", "a@example.com", "Polegroup", None, "Pole Recordings"),
+                                   ("added", "b@example.com", "polegroup records", None, "Pole Recordings")]
     assert statuses(db)[:2] == [("Polegroup", "added", 21250, None), ("polegroup records", "added", 21250, None)]
     assert [(row[0], row[1], row[3]) for row in tracked_labels(db)] == [(21250, "Pole Recordings", "request")]
 
@@ -276,8 +282,8 @@ def test_rejecting_emails_the_reason_to_everyone_who_asked(waiting_requests, own
 
     assert statuses(db)[:2] == [("Polegroup", "rejected", None, "Not a techno label."),
                                 ("polegroup records", "rejected", None, "Not a techno label.")]
-    assert sorted(outbox.sent) == [("rejected", "a@example.com", "Polegroup", "Not a techno label."),
-                                   ("rejected", "b@example.com", "polegroup records", "Not a techno label.")]
+    assert sorted(outbox.sent) == [("rejected", "a@example.com", "Polegroup", "Not a techno label.", None),
+                                   ("rejected", "b@example.com", "polegroup records", "Not a techno label.", None)]
     assert db.execute("SELECT count(*) FROM label_requests WHERE visitor_notified_at IS NOT NULL").fetchone() == (2,)
 
 
@@ -291,6 +297,30 @@ def test_a_failed_rejection_email_is_retried_later(waiting_requests, owner_db, d
     owner.main(["notify"])
 
     assert [mail[:2] for mail in outbox.sent if mail[0] == "rejected"] == [("rejected", "a@example.com")]
+
+
+def test_each_change_is_emailed_once_as_it_happens(waiting_requests, owner_db, db, outbox, monkeypatch):
+    monkeypatch.setattr(owner, "matches_on_discogs", lambda name: [])
+    owner.main(["review", "3"])
+    owner.main(["notify"])
+    owner.main(["reject", "3", "Already covered by another label."])
+    owner.main(["notify"])
+
+    assert [(mail[0], mail[1]) for mail in outbox.sent if mail[0] != "request"] == [
+        ("reviewing", "a@example.com"), ("rejected", "a@example.com")]
+
+
+def test_a_visitor_is_told_only_the_latest_status_when_an_email_was_missed(waiting_requests, owner_db, db, outbox,
+                                                                          monkeypatch):
+    monkeypatch.setattr(owner, "matches_on_discogs", lambda name: [])
+    outbox.fail = True
+    owner.main(["review", "3"])
+    owner.main(["reject", "3", "Already covered by another label."])
+
+    outbox.fail = False
+    owner.main(["notify"])
+
+    assert [mail[0] for mail in outbox.sent if mail[0] != "request"] == ["rejected"]
 
 
 @pytest.mark.parametrize("reason", ["no", "x" * 501])
@@ -363,6 +393,28 @@ def test_a_decided_request_cannot_be_decided_again(waiting_requests, owner_db, d
 
     assert owner.main(["reject", "3", "Another reason."]) == 1
     assert "not open" in capsys.readouterr().err
+
+
+def test_requests_decided_before_status_emails_are_not_emailed_again(db, limits_role):
+    from ingestion.create_limits_role import create_limits_role
+    from tests.conftest import FAKE_SETTINGS
+
+    db.execute("TRUNCATE label_requests, accounts RESTART IDENTITY CASCADE")
+    db.execute("ALTER TABLE label_requests DROP COLUMN visitor_notified_status")
+    db.execute("INSERT INTO accounts (email, password_hash, created_at) VALUES ('a@example.com', 'x', now())")
+    db.execute("INSERT INTO label_requests (account_id, name, status, created_at) VALUES"
+               " (1, 'Arts', 'added', now()), (1, 'Wax', 'waiting', now())")
+    db.commit()
+
+    create_limits_role(db, FAKE_SETTINGS["POSTGRES_LIMITS_USER"], FAKE_SETTINGS["POSTGRES_LIMITS_PASSWORD"])
+    db.commit()
+    create_limits_role(db, FAKE_SETTINGS["POSTGRES_LIMITS_USER"], FAKE_SETTINGS["POSTGRES_LIMITS_PASSWORD"])
+    db.commit()
+
+    assert db.execute("SELECT name, visitor_notified_status FROM label_requests ORDER BY id").fetchall() == [
+        ("Arts", "added"), ("Wax", None)]
+    db.execute("TRUNCATE label_requests, accounts RESTART IDENTITY CASCADE")
+    db.commit()
 
 
 def test_old_declined_requests_become_rejected(db, limits_role):

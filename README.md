@@ -13,7 +13,7 @@ Every night a Python pipeline records each tracked label's vinyl releases from D
 **For visitors**
 - Ask about prices, supply and demand on the tracked labels, and open the data behind each answer.
 - Ask 3 questions a day without an account, or up to 50 a day with one: sign up with an email address and a password, confirmed by email.
-- Request a label the site doesn't track yet, and follow it: waiting for review, being reviewed, added, or rejected with a reason.
+- Request a label the site doesn't track yet, and follow it without reloading: waiting for review, being reviewed, added, or rejected with a reason, with an email at each change.
 
 **For the owner**
 - A nightly update of every tracked label, with each run recorded and checkable from one command.
@@ -179,9 +179,9 @@ python -m ingestion.track_labels resume 538
    ```
 
 3. **Approving** tracks the label and starts importing it on the server at once (progress in `logs/import-<label>.log`). After that the nightly run keeps it up to date.
-4. **Rejecting** emails your reason to everyone who asked. If an email fails, the next 15-minute check sends it again.
+4. **Rejecting** sends your reason to everyone who asked.
 
-The box shows each visitor where their requests stand: waiting for review, being reviewed, added, or rejected with your reason. Discogs' search can miss a label; then find it on discogs.com and approve with the number in its address.
+Everyone who asked is emailed at each step: being reviewed, added, or rejected with your reason. If an email fails, the next 15-minute check sends it again. The box shows signed-in visitors where their requests stand, under "Missing a label?", and checks again every 30 seconds while one is open. Discogs' search can miss a label; then find it on discogs.com and approve with the number in its address.
 
 One command updates every active label: its vinyl releases, that day's prices, and want, have and ratings once a week.
 

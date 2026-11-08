@@ -3,8 +3,11 @@
     python -m ingestion.label_requests list                       # requests waiting or being reviewed
     python -m ingestion.label_requests review <request>           # Discogs matches; marks it "being reviewed"
     python -m ingestion.label_requests approve <request> <label>  # a Discogs label id or link
-    python -m ingestion.label_requests reject <request> <reason>  # emails the reason to everyone who asked
+    python -m ingestion.label_requests reject <request> <reason>  # the reason goes to everyone who asked
     python -m ingestion.label_requests notify                     # cron: email new requests, retry failed emails
+
+Everyone who asked is emailed each time their request changes: being reviewed,
+added, or rejected with the reason.
 
 Requests for equivalent names ("Polegroup", "polegroup records") are one request:
 deciding one decides them all. Approving tracks the label; scripts/label-requests
@@ -90,27 +93,35 @@ def matches_on_discogs(name: str) -> list:
         return []
 
 
-def email_rejections(conn: psycopg.Connection) -> int:
-    """Email each rejected visitor the reason, once. Returns how many emails failed."""
+def email_status_changes(conn: psycopg.Connection) -> int:
+    """Email each visitor whose request moved on (being reviewed, added, rejected) since
+    they were last told. Each status is emailed once. Returns how many emails failed."""
     failed = 0
-    for request_id, email, name, reason in conn.execute(
-        "SELECT r.id, a.email, r.name, r.reason FROM label_requests r JOIN accounts a ON a.id = r.account_id"
-        " WHERE r.status = 'rejected' AND r.reason IS NOT NULL AND r.visitor_notified_at IS NULL ORDER BY r.id"
+    for request_id, email, name, status, reason, label in conn.execute(
+        "SELECT r.id, a.email, r.name, r.status, r.reason, t.name FROM label_requests r"
+        " JOIN accounts a ON a.id = r.account_id LEFT JOIN tracked_labels t ON t.label_id = r.label_id"
+        " WHERE r.status <> 'waiting' AND r.visitor_notified_status IS DISTINCT FROM r.status ORDER BY r.id"
     ).fetchall():
         try:
-            mailer.send_label_rejected(email, name, reason)
+            mailer.send_label_status(email, name, status, reason=reason, label=label)
         except mailer.MailUnavailable as error:
-            print(f"Request {request_id}: the rejection email failed: {error}", file=sys.stderr)
+            print(f"Request {request_id}: the {status} email to the visitor failed: {error}", file=sys.stderr)
             failed += 1
             continue
         with conn.transaction():
-            conn.execute("UPDATE label_requests SET visitor_notified_at = now() WHERE id = %s", (request_id,))
+            conn.execute("UPDATE label_requests SET visitor_notified_status = %s, visitor_notified_at = now()"
+                         " WHERE id = %s", (status, request_id))
     return failed
 
 
+def emailed(failed: int) -> str:
+    """How the visitors' emails went, for the owner's terminal."""
+    return f"everyone who asked was emailed{f', except {failed} (retried every 15 minutes)' if failed else ''}"
+
+
 def notify(conn: psycopg.Connection) -> int:
-    """Email the reviewer each new request, and retry rejection emails. Returns how many failed."""
-    failed = email_rejections(conn)
+    """Email the reviewer each new request, and retry visitors' emails. Returns how many failed."""
+    failed = email_status_changes(conn)
     if not config.LABEL_REQUEST_EMAIL:
         return failed
     for first_id, name, _status, ids, _created in open_requests(conn):
@@ -155,7 +166,8 @@ def main(argv: list) -> int:
             name, ids = found
             if command == "review":
                 set_status(conn, ids, "reviewing")
-                print(f"{name}: {len(ids)} request(s), now shown as being reviewed. Labels on Discogs:")
+                print(f"{name}: {len(ids)} request(s), now shown as being reviewed; "
+                      f"{emailed(email_status_changes(conn))}. Labels on Discogs:")
                 for label_id, title, entries in matches_on_discogs(name):
                     print(f"{label_id:>8}  {title}  ({entries} entries)  https://www.discogs.com/label/{label_id}")
                 return 0
@@ -165,14 +177,14 @@ def main(argv: list) -> int:
                     print(f"Give a reason of 3 to {MAX_REASON_LENGTH} characters.", file=sys.stderr)
                     return 2
                 set_status(conn, ids, "rejected", reason=reason)
-                failed = email_rejections(conn)
-                print(f"Rejected {len(ids)} request(s) for {name}; the reason was emailed"
-                      + (f", except {failed}, which will be retried." if failed else "."))
+                print(f"Rejected {len(ids)} request(s) for {name}; {emailed(email_status_changes(conn))}, "
+                      "with the reason.")
                 return 0
             label_id = discogs_label_id(args[1])
             title = add_label(conn, label_id, added_by="request")
             set_status(conn, ids, "added", label_id=label_id)
-            print(f"Tracking {label_id}: {title}. Approved {len(ids)} request(s) for {name}.")
+            print(f"Tracking {label_id}: {title}. Approved {len(ids)} request(s) for {name}; "
+                  f"{emailed(email_status_changes(conn))}.")
             return 0
     except ValueError as error:
         print(error, file=sys.stderr)

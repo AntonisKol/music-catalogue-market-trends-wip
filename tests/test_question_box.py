@@ -13,6 +13,7 @@ import http.server
 import json
 import os
 import re
+import time
 import shutil
 import threading
 from pathlib import Path
@@ -25,7 +26,7 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parent.parent
 WIDGET = ROOT / "widget"
 API = "https://api.example.test"
-EXAMPLE = "Which Planet E records are the most wanted?"
+EXAMPLE = "Which Ostgut Ton records are the most wanted?"
 
 # Cloudflare's script is replaced: tokens come at once, or never if the page sets
 # window.__holdToken before the box starts.
@@ -188,9 +189,11 @@ def site(tmp_path_factory):
     served.server.shutdown()
 
 
-def open_page(browser, url, api=None, init_script="", width=1100):
+def open_page(browser, url, api=None, init_script="", width=1100, fake_clock=False):
     context = browser.new_context(viewport={"width": width, "height": 900})
     page = context.new_page()
+    if fake_clock:
+        page.clock.install()
     errors = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     if init_script:
@@ -209,11 +212,14 @@ def open_page(browser, url, api=None, init_script="", width=1100):
 def make_box(browser, site):
     opened = []
 
-    def make(init_script="", width=1100, query="", account=None):
+    def make(init_script="", width=1100, query="", account=None, label_requests=None, fake_clock=False):
         api = FakeApi(site.origin)
         if account:
             api.account = account
-        context, page, errors = open_page(browser, site.page("fake.html", API) + query, api, init_script, width)
+        if label_requests is not None:
+            api.label_requests = label_requests
+        context, page, errors = open_page(browser, site.page("fake.html", API) + query, api, init_script, width,
+                                          fake_clock)
         opened.append((context, errors))
         return Box(page, api)
 
@@ -241,6 +247,15 @@ def test_a_question_is_sent_with_the_human_check_and_its_answer_shown(box):
     assert answer.locator("th").all_inner_texts() == ["Title", "Price"]
     assert box.page.locator(".mt-ask-model").inner_text().startswith("Answered by Claude Haiku 5.5.")
     assert box.account.inner_text().startswith("2 questions left today")
+
+
+def test_the_field_is_emptied_for_the_next_question_and_the_question_stays_with_its_answer(box):
+    box.ask(EXAMPLE)
+
+    box.page.locator(".mt-ask-answer").wait_for()
+    assert box.textarea.input_value() == ""
+    assert box.page.locator(".mt-ask-counter").inner_text() == "0 / 500"
+    assert box.page.locator(".mt-ask-asked").inner_text() == f"You asked: {EXAMPLE}"
 
 
 def test_the_data_behind_an_answer_is_one_click_away(box):
@@ -477,8 +492,7 @@ def test_visitors_without_an_account_are_offered_sign_up_to_request_a_label(box)
 
 
 def test_signed_in_visitors_can_request_a_label_and_see_their_requests(make_box):
-    box = make_box(account=SIGNED_IN)
-    box.api.label_requests = [{"name": "Arts", "status": "added"}]
+    box = make_box(account=SIGNED_IN, label_requests=[{"name": "Arts", "status": "added"}])
     box.api.reply("/api/label-requests", 201, {"status": "requested", "message": "Thanks. Orbe Records is waiting for review."})
 
     box.page.get_by_role("button", name="Request it").click()
@@ -499,21 +513,67 @@ def test_signed_in_visitors_can_request_a_label_and_see_their_requests(make_box)
 
 
 def test_each_request_shows_where_it_stands(make_box):
-    box = make_box(account=SIGNED_IN)
-    box.api.label_requests = [
+    box = make_box(account=SIGNED_IN, label_requests=[
         {"name": "Arts", "status": "waiting", "reason": None},
         {"name": "Polegroup", "status": "reviewing", "reason": None},
         {"name": "Pole Recordings", "status": "added", "reason": None},
         {"name": "Wax", "status": "rejected", "reason": "Not a techno label."},
-    ]
+    ])
 
-    box.page.get_by_role("button", name="Request it").click()
     requests = box.page.get_by_role("list", name="Your label requests")
     requests.locator("li").first.wait_for()
 
     assert requests.locator("li").all_inner_texts() == [
         "Arts: waiting for review", "Polegroup: being reviewed", "Pole Recordings: added",
         "Wax: rejected (Not a techno label.)"]
+
+
+def test_a_signed_in_visitors_requests_show_without_a_click(make_box):
+    box = make_box(account=SIGNED_IN, label_requests=[{"name": "Arts", "status": "added", "reason": None}])
+
+    requests = box.page.get_by_role("list", name="Your label requests")
+    requests.locator("li").first.wait_for()
+
+    assert requests.locator("li").all_inner_texts() == ["Arts: added"]
+    assert box.page.locator(".mt-ask-request-form").is_hidden()
+
+
+def test_without_requests_no_empty_list_shows(make_box):
+    box = make_box(account=SIGNED_IN)
+    loaded_requests(box, 1)
+
+    assert box.page.locator(".mt-ask-requests").is_hidden()
+
+
+def test_an_open_request_updates_without_a_reload(make_box):
+    box = make_box(account=SIGNED_IN, fake_clock=True,
+                   label_requests=[{"name": "Arts", "status": "waiting", "reason": None}])
+    requests = box.page.get_by_role("list", name="Your label requests")
+    requests.locator("li").first.wait_for()
+    assert requests.locator("li").all_inner_texts() == ["Arts: waiting for review"]
+
+    box.api.label_requests = [{"name": "Arts", "status": "reviewing", "reason": None}]
+    box.page.clock.run_for(31_000)
+    box.page.wait_for_function("document.querySelector('.mt-ask-requests li').textContent.includes('being reviewed')")
+
+    box.api.label_requests = [{"name": "Arts", "status": "added", "reason": None}]
+    box.page.clock.run_for(31_000)
+    box.page.wait_for_function("document.querySelector('.mt-ask-requests li').textContent.endsWith('added')")
+
+    # Nothing is open any more, so the checks stop.
+    box.page.clock.run_for(120_000)
+    time.sleep(0.5)
+    assert loaded_requests(box, 3) == 3
+
+
+def loaded_requests(box, at_least):
+    """How often the box fetched the visitor's requests, once it has done so at least this often."""
+    for _ in range(50):
+        count = len([sent for sent in box.api.requests if sent[:2] == ("GET", "/api/label-requests")])
+        if count >= at_least:
+            return count
+        time.sleep(0.1)
+    raise AssertionError(f"the requests were fetched {count} times, not {at_least}")
 
 
 def test_a_label_request_needs_a_name(make_box):
@@ -609,8 +669,7 @@ def test_no_serious_accessibility_problems(make_box, state):
     elif state == "account form":
         box.page.get_by_role("button", name="Sign up or sign in", exact=True).click()
     elif state == "label request":
-        box = make_box(account=SIGNED_IN)
-        box.api.label_requests = [{"name": "Arts", "status": "waiting"}]
+        box = make_box(account=SIGNED_IN, label_requests=[{"name": "Arts", "status": "waiting"}])
         box.page.get_by_role("button", name="Request it").click()
         box.page.get_by_role("list", name="Your label requests").locator("li").first.wait_for()
     elif state == "error":

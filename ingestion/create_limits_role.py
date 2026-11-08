@@ -95,6 +95,16 @@ CREATE_TABLES = """
     ALTER TABLE label_requests ADD COLUMN IF NOT EXISTS reason TEXT;
     ALTER TABLE label_requests ADD COLUMN IF NOT EXISTS owner_notified_at TIMESTAMPTZ;
     ALTER TABLE label_requests ADD COLUMN IF NOT EXISTS visitor_notified_at TIMESTAMPTZ;
+    -- visitor_notified_status is the last status the visitor was emailed about. When the
+    -- column arrives, requests that already moved on count as told, so nobody gets old news.
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
+                       AND table_name = 'label_requests' AND column_name = 'visitor_notified_status') THEN
+            ALTER TABLE label_requests ADD COLUMN visitor_notified_status TEXT;
+            UPDATE label_requests SET visitor_notified_status = status WHERE status <> 'waiting';
+        END IF;
+    END $$;
     ALTER TABLE label_requests DROP CONSTRAINT IF EXISTS label_requests_status_check;
     UPDATE label_requests SET status = 'rejected' WHERE status = 'declined';
     ALTER TABLE label_requests ADD CONSTRAINT label_requests_status_check
