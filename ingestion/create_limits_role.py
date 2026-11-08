@@ -110,6 +110,15 @@ CREATE_TABLES = """
     ALTER TABLE label_requests ADD CONSTRAINT label_requests_status_check
         CHECK (status IN ('waiting', 'reviewing', 'added', 'rejected'));
     CREATE UNIQUE INDEX IF NOT EXISTS label_requests_once_per_account ON label_requests (account_id, lower(name));
+    -- A new request wakes the watcher (python -m ingestion.label_requests watch) the moment
+    -- it is committed, so the owner is emailed at once (issue 84). NOTIFY needs no rights.
+    CREATE OR REPLACE FUNCTION label_request_added() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        PERFORM pg_notify('label_requests', '');
+        RETURN NULL;
+    END $$;
+    CREATE OR REPLACE TRIGGER label_request_added AFTER INSERT ON label_requests
+        FOR EACH STATEMENT EXECUTE FUNCTION label_request_added();
 """
 TABLES = ("limit_counts", "accounts", "email_tokens", "sessions", "label_requests")
 

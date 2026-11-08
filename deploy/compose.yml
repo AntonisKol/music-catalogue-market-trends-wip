@@ -1,4 +1,5 @@
-# The live setup on the server: the database, the web API and Caddy in front of it.
+# The live setup on the server: the database, the web API, Caddy in front of it,
+# and the watcher that emails new label requests.
 # Run from the project folder, so the settings come from its .env:
 #   docker compose --env-file .env -f deploy/compose.yml up -d --build
 # The nightly update, the backups and the admin commands run in the admin container:
@@ -78,6 +79,22 @@ services:
       POSTGRES_PORT: "5432"
     volumes:
       - ../logs:/app/logs
+    depends_on:
+      - db
+
+  # Emails each new label request to the owner the moment it arrives: the database
+  # wakes it (LISTEN/NOTIFY). It also retries failed emails every 15 minutes. It needs
+  # the Discogs token for the matches, so it runs like the admin container, not the API.
+  label-requests:
+    build: ..
+    image: market-trends-app
+    restart: unless-stopped
+    logging: *logging
+    command: python -m ingestion.label_requests watch
+    env_file: ../.env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
     depends_on:
       - db
 

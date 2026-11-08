@@ -161,9 +161,15 @@ def test_ingestion_commands_run_in_the_admin_container(script):
     assert "run --rm -T api python -m ingestion." not in text
 
 
-def test_new_label_requests_are_emailed_from_the_admin_container_every_15_minutes():
-    crontab = (ROOT / "deploy" / "crontab").read_text()
-    assert "*/15 * * * *" in crontab and "run --rm -T admin python -m ingestion.label_requests notify" in crontab
+def test_new_label_requests_are_emailed_at_once_by_a_watcher_that_always_runs():
+    watcher = SERVICES["label-requests"]
+    assert watcher["command"] == "python -m ingestion.label_requests watch"
+    assert watcher["restart"] == "unless-stopped" and "profiles" not in watcher
+    # Like the admin container: the Discogs token for the matches, and the owner's login.
+    assert watcher["env_file"] == "../.env" and watcher["image"] == SERVICES["api"]["image"]
+    assert watcher["environment"] == SERVICES["admin"]["environment"]
+    # cron no longer sends them too, so nobody is emailed twice.
+    assert "label_requests" not in (ROOT / "deploy" / "crontab").read_text()
 
 
 def test_the_review_script_only_imports_after_an_approval_went_through():
