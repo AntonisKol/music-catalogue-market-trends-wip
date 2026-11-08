@@ -8,6 +8,10 @@ Every night a Python pipeline records each tracked label's vinyl releases from D
 
 **Stack:** Python, PostgreSQL 16, Flask, the Anthropic API (Claude Haiku 5.5 with tool use), the Discogs REST API, plain JavaScript, Docker Compose, Caddy, GitHub Actions, Playwright.
 
+[![The live question box: a label request, then a question comparing two labels, answered with a table and the data behind it](docs/media/market-trends-demo.jpg)](docs/media/market-trends-demo.mp4)
+
+*Demo, 49 seconds: requesting a label, then asking "Compare Mord and Sublunar prices". Click the picture to play the video.*
+
 ## What it does
 
 **For visitors**
