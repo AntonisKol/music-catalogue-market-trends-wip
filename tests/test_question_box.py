@@ -578,7 +578,6 @@ def test_signed_in_visitors_can_request_a_label_and_see_their_requests(make_box)
 def test_each_request_shows_where_it_stands(make_box):
     box = make_box(account=SIGNED_IN, label_requests=[
         {"name": "Arts", "status": "waiting", "reason": None},
-        {"name": "Polegroup", "status": "reviewing", "reason": None},
         {"name": "Pole Recordings", "status": "added", "reason": None},
         {"name": "Wax", "status": "rejected", "reason": "Not a techno label."},
     ])
@@ -587,7 +586,7 @@ def test_each_request_shows_where_it_stands(make_box):
     requests.locator("li").first.wait_for()
 
     assert requests.locator("li").all_inner_texts() == [
-        "Arts: waiting for review", "Polegroup: being reviewed", "Pole Recordings: added",
+        "Arts: waiting for review", "Pole Recordings: added",
         "Wax: rejected (Not a techno label.)"]
 
 
@@ -615,18 +614,39 @@ def test_an_open_request_updates_without_a_reload(make_box):
     requests.locator("li").first.wait_for()
     assert requests.locator("li").all_inner_texts() == ["Arts: waiting for review"]
 
-    box.api.label_requests = [{"name": "Arts", "status": "reviewing", "reason": None}]
-    box.page.clock.run_for(31_000)
-    box.page.wait_for_function("document.querySelector('.mt-ask-requests li').textContent.includes('being reviewed')")
+    assert bullet_colour(box) == YELLOW
 
+    # Still waiting at the first check; added by the second. The colour changes with the text.
+    box.page.clock.run_for(31_000)
+    loaded_requests(box, 2)
     box.api.label_requests = [{"name": "Arts", "status": "added", "reason": None}]
     box.page.clock.run_for(31_000)
     box.page.wait_for_function("document.querySelector('.mt-ask-requests li').textContent.endsWith('added')")
+    assert bullet_colour(box) == GREEN
 
     # Nothing is open any more, so the checks stop.
     box.page.clock.run_for(120_000)
-    time.sleep(0.5)
+    box.page.wait_for_timeout(500)
     assert loaded_requests(box, 3) == 3
+
+
+YELLOW, GREEN, RED = "rgb(243, 201, 105)", "rgb(127, 217, 154)", "rgb(255, 143, 143)"
+
+
+def bullet_colour(box, number=0):
+    return box.page.evaluate(
+        f"getComputedStyle(document.querySelectorAll('.mt-ask-requests li')[{number}], '::marker').color")
+
+
+def test_each_bullet_has_its_status_colour(make_box):
+    box = make_box(account=SIGNED_IN, label_requests=[
+        {"name": "Arts", "status": "waiting", "reason": None},
+        {"name": "Pole Recordings", "status": "added", "reason": None},
+        {"name": "Wax", "status": "rejected", "reason": "Not a techno label."},
+    ])
+    box.page.get_by_role("list", name="Your label requests").locator("li").first.wait_for()
+
+    assert [bullet_colour(box, number) for number in range(3)] == [YELLOW, GREEN, RED]
 
 
 def loaded_requests(box, at_least):
@@ -635,7 +655,8 @@ def loaded_requests(box, at_least):
         count = len([sent for sent in box.api.requests if sent[:2] == ("GET", "/api/label-requests")])
         if count >= at_least:
             return count
-        time.sleep(0.1)
+        # A Playwright call, not time.sleep: the fake API only answers while one runs.
+        box.page.wait_for_timeout(100)
     raise AssertionError(f"the requests were fetched {count} times, not {at_least}")
 
 

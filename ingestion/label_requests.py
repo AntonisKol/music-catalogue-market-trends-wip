@@ -1,14 +1,13 @@
 """Review the labels visitors asked for, and decide.
 
-    python -m ingestion.label_requests list                       # requests waiting or being reviewed
-    python -m ingestion.label_requests review <request>           # Discogs matches; marks it "being reviewed"
+    python -m ingestion.label_requests list                       # requests waiting for review
     python -m ingestion.label_requests approve <request> <label>  # a Discogs label id or link
     python -m ingestion.label_requests reject <request> <reason>  # the reason goes to everyone who asked
     python -m ingestion.label_requests notify                     # email new requests, retry failed emails
     python -m ingestion.label_requests watch                      # runs on the server: notify the moment a request arrives
 
-Everyone who asked is emailed each time their request changes: being reviewed,
-added, or rejected with the reason.
+Each request waits for review until it is approved or rejected, and everyone who
+asked is emailed the decision (with the reason, for a rejection).
 
 Requests for equivalent names ("Polegroup", "polegroup records") are one request:
 deciding one decides them all. Approving tracks the label; scripts/label-requests
@@ -26,9 +25,8 @@ from ingestion.track_labels import add_label
 from web import mailer
 from web.label_requests import comparable
 
-USAGE = ("Usage: python -m ingestion.label_requests list | review <request> | approve <request> <label> | "
-         "reject <request> <reason> | notify | watch")
-OPEN = ("waiting", "reviewing")
+USAGE = ("Usage: python -m ingestion.label_requests list | approve <request> <label> | reject <request> <reason> | "
+         "notify | watch")
 MATCHES = 5
 MAX_REASON_LENGTH = 500
 # The database's trigger on label_requests (create_limits_role.py) notifies this channel.
@@ -36,7 +34,7 @@ CHANNEL = "label_requests"
 RETRY_SECONDS = 15 * 60
 DISCOGS_LINK = re.compile(r"discogs\.com/(?:[a-z]{2}/)?label/(\d+)")
 # How many arguments each command takes: (at least, at most). A reason may be several words.
-ARGUMENTS = {"list": (0, 0), "notify": (0, 0), "watch": (0, 0), "review": (1, 1), "approve": (2, 2), "reject": (2, None)}
+ARGUMENTS = {"list": (0, 0), "notify": (0, 0), "watch": (0, 0), "approve": (2, 2), "reject": (2, None)}
 
 
 def well_formed(argv: list) -> bool:
@@ -58,33 +56,28 @@ def discogs_label_id(text: str) -> int:
 
 
 def open_requests(conn: psycopg.Connection) -> list:
-    """Open requests grouped by equivalent name: (first id, name, status, request ids, first asked)."""
+    """Waiting requests grouped by equivalent name: (first id, name, request ids, first asked)."""
     groups = {}
-    for request_id, name, status, created in conn.execute(
-        "SELECT id, name, status, created_at FROM label_requests WHERE status = ANY(%s) ORDER BY id", (list(OPEN),)
+    for request_id, name, created in conn.execute(
+        "SELECT id, name, created_at FROM label_requests WHERE status = 'waiting' ORDER BY id"
     ).fetchall():
-        group = groups.setdefault(comparable(name), [request_id, name, status, [], created])
-        group[3].append(request_id)
-        if status == "reviewing":
-            group[2] = "reviewing"
-    return sorted(groups.values(), key=lambda group: (-len(group[3]), group[4]))
+        groups.setdefault(comparable(name), [request_id, name, [], created])[2].append(request_id)
+    return sorted(groups.values(), key=lambda group: (-len(group[2]), group[3]))
 
 
 def same_label(conn: psycopg.Connection, request_id: int):
-    """(name, ids of every open request for an equivalent name), or None if the request isn't open."""
-    row = conn.execute("SELECT name FROM label_requests WHERE id = %s AND status = ANY(%s)",
-                       (request_id, list(OPEN))).fetchone()
+    """(name, ids of every waiting request for an equivalent name), or None if the request isn't waiting."""
+    row = conn.execute("SELECT name FROM label_requests WHERE id = %s AND status = 'waiting'", (request_id,)).fetchone()
     if row is None:
         return None
-    ids = [group[3] for group in open_requests(conn) if comparable(group[1]) == comparable(row[0])]
+    ids = [group[2] for group in open_requests(conn) if comparable(group[1]) == comparable(row[0])]
     return row[0], ids[0]
 
 
-def set_status(conn: psycopg.Connection, ids: list, status: str, label_id: int = None, reason: str = None) -> None:
-    decided = None if status == "reviewing" else datetime.now(timezone.utc)
+def decide(conn: psycopg.Connection, ids: list, status: str, label_id: int = None, reason: str = None) -> None:
     with conn.transaction():
         conn.execute("UPDATE label_requests SET status = %s, label_id = %s, reason = %s, decided_at = %s"
-                     " WHERE id = ANY(%s)", (status, label_id, reason, decided, ids))
+                     " WHERE id = ANY(%s)", (status, label_id, reason, datetime.now(timezone.utc), ids))
 
 
 def matches_on_discogs(name: str) -> list:
@@ -98,8 +91,8 @@ def matches_on_discogs(name: str) -> list:
 
 
 def email_status_changes(conn: psycopg.Connection) -> int:
-    """Email each visitor whose request moved on (being reviewed, added, rejected) since
-    they were last told. Each status is emailed once. Returns how many emails failed."""
+    """Email each visitor whose request was decided (added or rejected) and who hasn't
+    been told yet. Each decision is emailed once. Returns how many emails failed."""
     failed = 0
     for request_id, email, name, status, reason, label in conn.execute(
         "SELECT r.id, a.email, r.name, r.status, r.reason, t.name FROM label_requests r"
@@ -128,7 +121,7 @@ def notify(conn: psycopg.Connection) -> int:
     failed = email_status_changes(conn)
     if not config.LABEL_REQUEST_EMAIL:
         return failed
-    for first_id, name, _status, ids, _created in open_requests(conn):
+    for first_id, name, ids, _created in open_requests(conn):
         new = conn.execute("SELECT count(*) FROM label_requests WHERE id = ANY(%s) AND owner_notified_at IS NULL",
                            (ids,)).fetchone()[0]
         if not new:
@@ -179,37 +172,29 @@ def main(argv: list) -> int:
                 groups = open_requests(conn)
                 if not groups:
                     print("No label requests are waiting.")
-                for first_id, name, status, ids, created in groups:
+                for first_id, name, ids, created in groups:
                     asked = f"{len(ids)} {'account' if len(ids) == 1 else 'accounts'}"
-                    print(f"{first_id:>6}  {name}  ({asked}, since {created:%Y-%m-%d}"
-                          f"{', being reviewed' if status == 'reviewing' else ''})")
+                    print(f"{first_id:>6}  {name}  ({asked}, since {created:%Y-%m-%d})")
                 return 0
             if command == "notify":
                 return 1 if notify(conn) else 0
             found = same_label(conn, int(args[0]))
             if found is None:
-                print(f"Request {args[0]} is not open.", file=sys.stderr)
+                print(f"Request {args[0]} is not waiting for review.", file=sys.stderr)
                 return 1
             name, ids = found
-            if command == "review":
-                set_status(conn, ids, "reviewing")
-                print(f"{name}: {len(ids)} request(s), now shown as being reviewed; "
-                      f"{emailed(email_status_changes(conn))}. Labels on Discogs:")
-                for label_id, title, entries in matches_on_discogs(name):
-                    print(f"{label_id:>8}  {title}  ({entries} entries)  https://www.discogs.com/label/{label_id}")
-                return 0
             if command == "reject":
                 reason = " ".join(args[1:]).strip()
                 if not 3 <= len(reason) <= MAX_REASON_LENGTH:
                     print(f"Give a reason of 3 to {MAX_REASON_LENGTH} characters.", file=sys.stderr)
                     return 2
-                set_status(conn, ids, "rejected", reason=reason)
+                decide(conn, ids, "rejected", reason=reason)
                 print(f"Rejected {len(ids)} request(s) for {name}; {emailed(email_status_changes(conn))}, "
                       "with the reason.")
                 return 0
             label_id = discogs_label_id(args[1])
             title = add_label(conn, label_id, added_by="request")
-            set_status(conn, ids, "added", label_id=label_id)
+            decide(conn, ids, "added", label_id=label_id)
             print(f"Tracking {label_id}: {title}. Approved {len(ids)} request(s) for {name}; "
                   f"{emailed(email_status_changes(conn))}.")
             return 0

@@ -13,7 +13,7 @@ Every night a Python pipeline records each tracked label's vinyl releases from D
 **For visitors**
 - Ask about prices, supply and demand on the tracked labels, and open the data behind each answer.
 - Ask 3 questions a day without an account, or up to 50 a day with one: sign up with an email address and a password, confirmed by email.
-- Request a label the site doesn't track yet, and follow it without reloading: waiting for review, being reviewed, added, or rejected with a reason, with an email at each change.
+- Request a label the site doesn't track yet, and follow it without reloading: waiting for review, then added or rejected with a reason, with an email for the decision.
 
 **For the owner**
 - A nightly update of every tracked label, with each run recorded and checkable from one command.
@@ -173,7 +173,6 @@ python -m ingestion.track_labels resume 538
 
    ```bash
    sh scripts/label-requests list                              # open requests, with how many accounts asked
-   sh scripts/label-requests review 3                          # the Discogs matches; visitors see "being reviewed"
    sh scripts/label-requests approve 3 21250                   # or the label's discogs.com link
    sh scripts/label-requests reject 3 "Not a techno label."
    ```
@@ -181,7 +180,7 @@ python -m ingestion.track_labels resume 538
 3. **Approving** tracks the label and starts importing it on the server at once (progress in `logs/import-<label>.log`). After that the nightly run keeps it up to date.
 4. **Rejecting** sends your reason to everyone who asked.
 
-Everyone who asked is emailed at each step: being reviewed, added, or rejected with your reason. If an email fails, the watcher sends it again within 15 minutes. The box shows signed-in visitors where their requests stand, under "Missing a label?", and checks again every 30 seconds while one is open. Discogs' search can miss a label; then find it on discogs.com and approve with the number in its address.
+Everyone who asked is emailed your decision: added, or rejected with your reason. If an email fails, the watcher sends it again within 15 minutes. The box shows signed-in visitors where their requests stand, under "Missing a label?", each with a coloured bullet (yellow waiting, green added, red rejected), and checks again every 30 seconds while one is waiting. Discogs' search can miss a label; then find it on discogs.com and approve with the number in its address.
 
 One command updates every active label: its vinyl releases, that day's prices, and want, have and ratings once a week.
 
@@ -348,7 +347,7 @@ To refresh the list, replace the domains in that file with the project's `dispos
 - `SIGN_IN_RETURN_URL`: where the buttons go afterwards, by default `https://adnsaudio.com/market-trends/`.
 - For trying it on a laptop only: `EMAIL_LOG_LINKS=true` writes the links to the API's log instead of emailing them, and `COOKIE_SECURE=false` lets the cookie work over plain http.
 
-**Asking for a label.** Signed in, a visitor can request a label the site doesn't track: `POST /api/label-requests` with `{"name"}` stores it for you to review, and `GET /api/label-requests` lists the visitor's own requests with their status (`waiting`, `reviewing`, `added` or `rejected`, with your `reason`). A label that is already tracked gets a `tracked` answer and no request; if the tracked labels can't be read, the request is refused rather than stored. Requests are limited to 3 a day per account and 50 a day for the site, and are deleted with the account. The web API never calls Discogs; your review command does.
+**Asking for a label.** Signed in, a visitor can request a label the site doesn't track: `POST /api/label-requests` with `{"name"}` stores it for you to review, and `GET /api/label-requests` lists the visitor's own requests with their status (`waiting`, `added` or `rejected`, with your `reason`). A label that is already tracked gets a `tracked` answer and no request; if the tracked labels can't be read, the request is refused rather than stored. Requests are limited to 3 a day per account and 50 a day for the site, and are deleted with the account. The web API never calls Discogs; your review command does.
 
 The emails carry the ADNS Audio logo from [`web/assets/`](web/assets) inside the message, because many mail apps block images fetched from the web.
 

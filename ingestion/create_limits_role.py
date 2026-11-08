@@ -107,8 +107,10 @@ CREATE_TABLES = """
     END $$;
     ALTER TABLE label_requests DROP CONSTRAINT IF EXISTS label_requests_status_check;
     UPDATE label_requests SET status = 'rejected' WHERE status = 'declined';
+    -- There is no "being reviewed" step any more (issue 83): such requests wait for review again.
+    UPDATE label_requests SET status = 'waiting', visitor_notified_status = NULL WHERE status = 'reviewing';
     ALTER TABLE label_requests ADD CONSTRAINT label_requests_status_check
-        CHECK (status IN ('waiting', 'reviewing', 'added', 'rejected'));
+        CHECK (status IN ('waiting', 'added', 'rejected'));
     CREATE UNIQUE INDEX IF NOT EXISTS label_requests_once_per_account ON label_requests (account_id, lower(name));
     -- A new request wakes the watcher (python -m ingestion.label_requests watch) the moment
     -- it is committed, so the owner is emailed at once (issue 84). NOTIFY needs no rights.
