@@ -202,6 +202,8 @@
 
 .mt-ask-answer-title:focus { outline: none; }
 
+.mt-ask-asked { margin: 0 0 10px; color: var(--mt-muted); font-size: 13px; }
+
 .mt-ask-answer { color: var(--mt-ink); }
 .mt-ask-answer p { margin: 0 0 12px; }
 .mt-ask-answer ul, .mt-ask-answer ol { margin: 0 0 12px; padding-left: 22px; }

@@ -117,10 +117,27 @@ def send_label_request(reviewer: str, request_id: int, name: str, accounts: int,
                                                  "To decide, from the project folder:", *commands]))
 
 
-def send_label_rejected(email: str, name: str, reason: str) -> None:
-    lead = f"Thanks for asking Market Trends to track {name}. We won't add it, for this reason:"
-    note = "You can ask about the labels we do track on the Market Trends page."
-    send(email, f"About your request for {name}", f"{lead}\n\n{reason}\n\n{note}\n\n{config.SIGN_IN_RETURN_URL}\n",
-         html_message(f"About your request for {name}", [lead, reason, note],
-                      ("Go to Market Trends", config.SIGN_IN_RETURN_URL)),
-         config.SIGN_IN_RETURN_URL)
+def label_status_message(name: str, status: str, reason: str = None, label: str = None) -> tuple:
+    """(subject, paragraphs) telling a visitor where their request for a label stands."""
+    if status == "reviewing":
+        return (f"Your request for {name} is being reviewed",
+                [f"Thanks for asking Market Trends to track {name}. We're looking for the right label on Discogs now.",
+                 "You'll get another email when it's decided, and the Market Trends page shows where it stands."])
+    if status == "added":
+        found = f" as {label} on Discogs" if label and label.casefold() != name.casefold() else ""
+        return (f"{label or name} is now on Market Trends",
+                [f"Good news: {name} is added{found}.",
+                 "Its records are being loaded now. For a large label that can take a few hours, and from then on "
+                 "its prices are updated every night. You can ask about it on the Market Trends page."])
+    if status == "rejected":
+        return (f"About your request for {name}",
+                [f"Thanks for asking Market Trends to track {name}. We won't add it, for this reason:", reason or "",
+                 "You can ask about the labels we do track on the Market Trends page."])
+    raise ValueError(f"No email for the status {status!r}")
+
+
+def send_label_status(email: str, name: str, status: str, reason: str = None, label: str = None) -> None:
+    subject, paragraphs = label_status_message(name, status, reason, label)
+    page = config.SIGN_IN_RETURN_URL
+    send(email, subject, "\n\n".join([*paragraphs, page]) + "\n",
+         html_message(subject, paragraphs, ("Go to Market Trends", page)), page)

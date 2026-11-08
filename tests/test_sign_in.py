@@ -276,11 +276,21 @@ def test_the_rejection_email_carries_the_reason_as_text_only(monkeypatch):
     monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
     responses.add(responses.POST, mailer.RESEND_URL, json={"id": "x"})
 
-    mailer.send_label_rejected(EMAIL, "Wax", "Not <b>techno</b>.")
+    mailer.send_label_status(EMAIL, "Wax", "rejected", reason="Not <b>techno</b>.")
 
     body = json.loads(responses.calls[0].request.body)
     assert body["to"] == [EMAIL] and "Not <b>techno</b>." in body["text"]
     assert "<b>techno</b>" not in body["html"] and "&lt;b&gt;techno&lt;/b&gt;" in body["html"]
+
+
+@pytest.mark.parametrize("status, label, subject, says", [
+    ("reviewing", None, "Your request for Polegroup is being reviewed", "looking for the right label on Discogs"),
+    ("added", "Pole Recordings", "Pole Recordings is now on Market Trends", "Polegroup is added as Pole Recordings"),
+    ("added", "Polegroup", "Polegroup is now on Market Trends", "Good news: Polegroup is added."),
+])
+def test_each_request_status_has_its_own_email(status, label, subject, says):
+    title, paragraphs = mailer.label_status_message("Polegroup", status, label=label)
+    assert title == subject and says in " ".join(paragraphs)
 
 
 @responses.activate
