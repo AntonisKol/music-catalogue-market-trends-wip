@@ -482,7 +482,7 @@ sh deploy/deploy.sh server   # only the API
 sh deploy/deploy.sh page     # only the page
 ```
 
-The command logs in as `deploy` and pulls `main`, then rebuilds and restarts the containers. It also adds any new tables and rights (`apply_schema` and `create_limits_role` are safe to run every time), so nothing has to be run by hand after a merge. It waits until `https://api.adnsaudio.com` answers. Last, it copies `ask.js` and `ask.css` from [`widget/`](widget) into `adns-space/market-trends/` and pushes them to the website if anything changed. It signs in with your usual GitHub login.
+The command logs in as `deploy` and pulls `main`, then rebuilds and restarts the containers. It also adds any new tables and rights (`apply_schema` and `create_limits_role` are safe to run every time), so nothing has to be run by hand after a merge. It waits until `https://api.adnsaudio.com` answers. Last, it copies `ask.js` and `ask.css` from [`widget/`](widget) into `adns-space/market-trends/` and, if anything changed, opens a pull request on the website. The website's `main` only takes pull requests with passing checks, so merging that pull request is what publishes the page. It uses your usual GitHub login and the `gh` command.
 
 ### Looking after it
 
