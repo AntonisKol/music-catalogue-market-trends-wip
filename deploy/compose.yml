@@ -1,7 +1,8 @@
 # The live setup on the server: the database, the web API and Caddy in front of it.
 # Run from the project folder, so the settings come from its .env:
 #   docker compose --env-file .env -f deploy/compose.yml up -d --build
-# The nightly update and the backups are started by cron (deploy/crontab).
+# The nightly update, the backups and the admin commands run in the admin container:
+#   docker compose --env-file .env -f deploy/compose.yml run --rm admin python -m ingestion.runs
 name: market-trends
 
 # Container logs are kept up to this size, then the oldest is deleted.
@@ -26,16 +27,55 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ../db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
 
+  # Faces the internet, so it gets only what web/config.py and queries/config.py read,
+  # and the Anthropic key: never the Discogs token or the database owner's password.
+  # A setting missing from .env is left out, so the code's default applies.
   api:
     build: ..
+    image: market-trends-app
     restart: unless-stopped
+    logging: *logging
+    environment:
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      # Caddy is the one proxy in front of the API, so visitor addresses come from it.
+      - TRUSTED_PROXIES=1
+      - POSTGRES_DB
+      - POSTGRES_READER_USER
+      - POSTGRES_READER_PASSWORD
+      - POSTGRES_LIMITS_USER
+      - POSTGRES_LIMITS_PASSWORD
+      - ANTHROPIC_API_KEY
+      - TURNSTILE_SECRET_KEY
+      - VISITOR_HASH_SECRET
+      - QUESTIONS_PER_VISITOR_HOUR
+      - QUESTIONS_PER_VISITOR_DAY
+      - QUESTIONS_PER_ACCOUNT_HOUR
+      - QUESTIONS_PER_ACCOUNT_DAY
+      - QUESTIONS_PER_SITE_DAY
+      - RESEND_API_KEY
+      - SIGN_IN_EMAIL_FROM
+      - SIGN_IN_LOG_LINKS
+      - PUBLIC_API_URL
+      - SIGN_IN_RETURN_URL
+      - COOKIE_SECURE
+      - ALLOWED_ORIGINS
+    volumes:
+      - ../logs:/app/logs
+    depends_on:
+      - db
+
+  # The same code for the nightly update, deploys, restores and the owner's commands,
+  # with every setting. It never runs on its own: only with `docker compose run`.
+  admin:
+    build: ..
+    image: market-trends-app
+    profiles: ["admin"]
     logging: *logging
     env_file: ../.env
     environment:
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
-      # Caddy is the one proxy in front of the API, so visitor addresses come from it.
-      TRUSTED_PROXIES: "1"
     volumes:
       - ../logs:/app/logs
     depends_on:

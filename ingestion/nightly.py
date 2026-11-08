@@ -2,8 +2,7 @@
 
     python -m ingestion.nightly
 
-Started each night by the system scheduler (launchd on a Mac, cron on a server;
-see ops/). It takes the same lock as ingest_label, so it never runs alongside
+Started each night by cron on the server (deploy/crontab). It takes the same lock as ingest_label, so it never runs alongside
 another ingestion run. For each active label in tracked_labels it runs the label
 pipeline, and records the run and every label's result in ingestion_runs and
 ingestion_run_labels. A label that fails does not stop the others.

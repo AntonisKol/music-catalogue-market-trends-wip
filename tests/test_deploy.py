@@ -4,11 +4,13 @@ These read the files rather than starting containers; the full setup was run by
 hand (see the README, Run it on a server, and issue 44).
 """
 import os
+import re
 import shutil
 import stat
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,8 +31,8 @@ def test_the_database_gets_only_its_own_settings():
 
 def test_the_api_trusts_exactly_one_proxy_and_reaches_the_database_by_name():
     environment = SERVICES["api"]["environment"]
-    assert environment["TRUSTED_PROXIES"] == "1"
-    assert environment["POSTGRES_HOST"] == "db"
+    assert "TRUSTED_PROXIES=1" in environment
+    assert "POSTGRES_HOST=db" in environment
 
 
 def test_caddy_forwards_to_the_api():
@@ -116,3 +118,44 @@ def test_the_page_goes_to_the_website_through_a_pull_request():
     page = script[script.index("deploy_page() {"):script.index("\n}\n", script.index("deploy_page() {"))]
     assert "HEAD:main" not in page and "gh pr create" in page
     assert "cp widget/ask.js widget/ask.css" in page
+
+
+# --- What each container is given (issue 68) ---------------------------------------------
+
+
+READ_SETTING = re.compile(r'os\.environ(?:\.get)?[\[(]"([A-Z_]+)"')
+
+
+def settings_read_by(*paths):
+    return {name for path in paths for name in READ_SETTING.findall((ROOT / path).read_text())}
+
+
+def api_settings():
+    return {item.split("=", 1)[0] for item in SERVICES["api"]["environment"]}
+
+
+def test_the_api_gets_every_setting_its_code_reads_and_nothing_else():
+    needed = settings_read_by("web/config.py", "queries/config.py") | {"ANTHROPIC_API_KEY"}
+
+    assert api_settings() == needed
+
+
+def test_the_api_never_gets_the_discogs_token_or_the_owners_database_password():
+    assert "env_file" not in SERVICES["api"]
+    assert not api_settings() & settings_read_by("ingestion/config.py") - {"POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB"}
+
+
+def test_the_admin_container_gets_every_setting_and_only_runs_when_asked():
+    admin = SERVICES["admin"]
+    assert admin["env_file"] == "../.env" and admin["profiles"] == ["admin"]
+    assert admin["image"] == SERVICES["api"]["image"]
+    every_setting = {line.split("=", 1)[0] for line in (ROOT / "deploy" / "server.env.example").read_text().splitlines()
+                     if "=" in line and not line.startswith("#")}
+    assert settings_read_by("ingestion/config.py") - {"POSTGRES_HOST", "POSTGRES_PORT"} <= every_setting
+
+
+@pytest.mark.parametrize("script", ["nightly.sh", "deploy.sh", "restore.sh"])
+def test_ingestion_commands_run_in_the_admin_container(script):
+    text = (ROOT / "deploy" / script).read_text()
+    assert "run --rm -T admin python -m ingestion." in text
+    assert "run --rm -T api python -m ingestion." not in text

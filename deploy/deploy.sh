@@ -25,8 +25,8 @@ deploy_server() {
     COMPOSE="docker compose --env-file .env -f deploy/compose.yml"
     $COMPOSE up -d --build
     # New tables and rights from the update; both are safe to run every time.
-    $COMPOSE run --rm -T api python -m ingestion.apply_schema
-    $COMPOSE run --rm -T api python -m ingestion.create_limits_role
+    $COMPOSE run --rm -T admin python -m ingestion.apply_schema
+    $COMPOSE run --rm -T admin python -m ingestion.create_limits_role
     docker image prune -f > /dev/null
     git log --oneline -1'
   # The API answers once it is up; give it a few seconds.
