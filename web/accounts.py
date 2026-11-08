@@ -12,7 +12,6 @@ a copy of the database cannot be used to sign in. Every time comes from the call
 so tests can move the clock.
 """
 import hashlib
-import hmac
 import re
 import secrets
 from datetime import datetime, timedelta
@@ -64,11 +63,6 @@ def is_disposable(email: str) -> bool:
 def check_new_password(password: str) -> None:
     if not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
         raise ValueError(f"A password is {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_LENGTH} characters.")
-
-
-def email_key(email: str, secret: str) -> str:
-    """A keyed hash of an address, for counting requests without storing it."""
-    return hmac.new(secret.encode(), email.encode(), hashlib.sha256).hexdigest()[:32]
 
 
 def hashed(token: str) -> str:

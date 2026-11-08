@@ -6,7 +6,7 @@ import pytest
 
 from ingestion import create_limits_role as command
 from ingestion.create_limits_role import create_limits_role
-from web.limits import LimitReached, connect_limits, take_question, visitor_id
+from web.limits import LimitReached, connect_limits, keyed_hash, take_question
 
 NOON = datetime(2026, 11, 1, 12, 30, tzinfo=timezone.utc)
 
@@ -89,12 +89,12 @@ def test_counts_older_than_two_days_are_deleted(limits, db):
 
 def test_visitor_ids_are_keyed_hashes_not_addresses():
     ip = "203.0.113.7"
-    one = visitor_id(ip, "secret-one")
+    one = keyed_hash(ip, "secret-one")
 
     assert ip not in one and len(one) == 32
-    assert one == visitor_id(ip, "secret-one")
-    assert one != visitor_id(ip, "secret-two")
-    assert one != visitor_id("203.0.113.8", "secret-one")
+    assert one == keyed_hash(ip, "secret-one")
+    assert one != keyed_hash(ip, "secret-two")
+    assert one != keyed_hash("203.0.113.8", "secret-one")
 
 
 def test_the_limits_login_can_only_touch_its_table(limits_db, db):

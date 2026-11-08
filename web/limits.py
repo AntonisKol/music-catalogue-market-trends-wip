@@ -45,10 +45,10 @@ def connect_limits() -> psycopg.Connection:
     )
 
 
-def visitor_id(ip_address: str, secret: str) -> str:
-    """A keyed one-way hash: the same visitor always maps to the same id, but the
-    address cannot be recovered from it without the secret."""
-    return hmac.new(secret.encode(), ip_address.encode(), hashlib.sha256).hexdigest()[:32]
+def keyed_hash(text: str, secret: str) -> str:
+    """A keyed one-way hash, for counting visitors and addresses without storing them:
+    the same text always gives the same result, but it can't be turned back without the secret."""
+    return hmac.new(secret.encode(), text.encode(), hashlib.sha256).hexdigest()[:32]
 
 
 def seconds_until(end: datetime, now: datetime) -> int:
@@ -98,6 +98,18 @@ def take_question(conn: psycopg.Connection, who: str, now: datetime,
          f"You can ask {per_hour} questions an hour.{later or ' Please'} try again later."),
     ])
     return {"hour": left[(who, "hour")], "day": left[(who, "day")]}
+
+
+def give_back_question(conn: psycopg.Connection, who: str, asked_at: datetime) -> None:
+    """Undo take_question for a question that could not be answered, in the windows it was counted in."""
+    _, hour, day = windows(asked_at)
+    with conn.transaction():
+        for visitor, period, window_start in ((SITE, "day", day), (who, "day", day), (who, "hour", hour)):
+            conn.execute(
+                "UPDATE limit_counts SET count = count - 1"
+                " WHERE visitor = %s AND period = %s AND window_start = %s AND count > 0",
+                (visitor, period, window_start),
+            )
 
 
 def remaining(conn: psycopg.Connection, who: str, now: datetime, per_hour: int, per_day: int) -> dict:

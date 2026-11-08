@@ -67,6 +67,13 @@ QUESTION_ERRORS = {
 }
 
 
+# A field that fails validation gets its own message; any other gets a general one.
+FIELD_ERRORS = {
+    "question": ("invalid_question", f"Please type a question of up to {MAX_QUESTION_LENGTH} characters."),
+    "email": ("invalid_email", "Please type a valid email address."),
+    "password": ("invalid_password", "Please type a password."),
+}
+
 SESSION_COOKIE = "mt_session"
 CONFIRM_COOKIE = "mt_confirm"
 CAPTCHA_TOKEN_LENGTH = 2048
@@ -149,11 +156,16 @@ def back_to_the_site(flag: str, session: str, cookie_path: str):
     """Return to the question box, signed in. The address is fixed in the settings, never
     taken from the request, so links cannot redirect anywhere else."""
     url = config.SIGN_IN_RETURN_URL
-    response = redirect(f"{url}{'&' if '?' in url else '?'}{flag}=1", 303)
-    response.set_cookie(SESSION_COOKIE, session, max_age=int(accounts.SESSION_LIFETIME.total_seconds()),
-                        path="/api", secure=config.COOKIE_SECURE, httponly=True, samesite="Strict")
+    response = with_session(redirect(f"{url}{'&' if '?' in url else '?'}{flag}=1", 303), session)
     response.delete_cookie(CONFIRM_COOKIE, path=cookie_path, secure=config.COOKIE_SECURE,
                            httponly=True, samesite="Strict")
+    return response
+
+
+def with_session(response, session: str):
+    """The session cookie: sent only to the API, only over HTTPS, never readable by scripts."""
+    response.set_cookie(SESSION_COOKIE, session, max_age=int(accounts.SESSION_LIFETIME.total_seconds()),
+                        path="/api", secure=config.COOKIE_SECURE, httponly=True, samesite="Strict")
     return response
 
 
@@ -207,11 +219,14 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
     def visitor_ip() -> str:
         return request.remote_addr or "unknown"
 
+    def hashed(text: str) -> str:
+        return limits.keyed_hash(text, config.VISITOR_HASH_SECRET)
+
     def session_token() -> str:
         return request.cookies.get(SESSION_COOKIE, "")
 
     def counter(account) -> str:
-        return f"account:{account[0]}" if account else limits.visitor_id(visitor_ip(), config.VISITOR_HASH_SECRET)
+        return f"account:{account[0]}" if account else hashed(visitor_ip())
 
     def allowance(account) -> tuple:
         if account:
@@ -231,10 +246,19 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
             return error("captcha_failed", "The human check failed. Please try again.", 403)
         return None
 
-    def database_down(problem: Exception):
-        # Without the database neither limits nor sign-in can be checked, so the request is refused.
-        log.error("Web database unavailable: %s", problem)
-        return error("database", "The question box is unavailable right now. Please try again later.", 503, 60)
+    def read_json(model, wanted: str):
+        """(payload, None) from the request body, or (None, the error response to send)."""
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return None, error("invalid_request", f"Send a JSON object with {wanted}.", 400)
+        try:
+            return model.model_validate(body), None
+        except ValidationError as problem:
+            fields = sorted({str(e["loc"][0]) for e in problem.errors() if e["loc"]})
+            for field, (code, message) in FIELD_ERRORS.items():
+                if field in fields:
+                    return None, error(code, message, 400)
+            return None, error("invalid_request", f"Invalid request: {', '.join(fields) or 'body'}.", 400)
 
     def without_session(response):
         response.delete_cookie(SESSION_COOKIE, path="/api", secure=config.COOKIE_SECURE, httponly=True, samesite="Strict")
@@ -242,38 +266,27 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
 
     @app.post("/api/questions")
     def ask():
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return error("invalid_request", "Send a JSON object with a question.", 400)
-        try:
-            payload = QuestionRequest.model_validate(body)
-        except ValidationError as problem:
-            fields = sorted({str(e["loc"][0]) for e in problem.errors() if e["loc"]})
-            if "question" in fields:
-                return error("invalid_question", f"Please type a question of up to {MAX_QUESTION_LENGTH} characters.", 400)
-            return error("invalid_request", f"Invalid request: {', '.join(fields) or 'body'}.", 400)
-
-        try:
-            with connect_limits() as conn:
-                account = accounts.session_account(conn, session_token(), now())
-                if not account:
-                    refused = human_check(payload.captcha_token)
-                    if refused:
-                        return refused
-                per_hour, per_day = allowance(account)
-                left = limits.take_question(
-                    conn, counter(account), now(), per_hour, per_day, config.QUESTIONS_PER_SITE_DAY,
-                    signed_in=bool(account),
-                )
-        except limits.LimitReached as reached:
-            log.info("Question refused: %s", reached.code)
-            return error(reached.code, str(reached), 429, reached.retry_after)
-        except psycopg.Error as problem:
-            return database_down(problem)
+        payload, refused = read_json(QuestionRequest, "a question")
+        if refused:
+            return refused
+        asked_at = now()
+        with connect_limits() as conn:
+            account = accounts.session_account(conn, session_token(), asked_at)
+            if not account:
+                refused = human_check(payload.captcha_token)
+                if refused:
+                    return refused
+            per_hour, per_day = allowance(account)
+            left = limits.take_question(
+                conn, counter(account), asked_at, per_hour, per_day, config.QUESTIONS_PER_SITE_DAY,
+                signed_in=bool(account),
+            )
 
         try:
             result = answer(payload.question)
         except QuestionError as problem:
+            # Nothing was answered, so the question doesn't count against the visitor.
+            give_back_question(counter(account), asked_at)
             status, retry_after = QUESTION_ERRORS.get(problem.code, (500, None))
             return error(problem.code, str(problem), status, retry_after)
         return jsonify({"answer": result.text, "sources": result.sources,
@@ -281,33 +294,28 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
 
     @app.get("/api/account")
     def account_status():
-        try:
-            with connect_limits() as conn:
-                account = accounts.session_account(conn, session_token(), now())
-                per_hour, per_day = allowance(account)
-                left = limits.remaining(conn, counter(account), now(), per_hour, per_day)
-        except psycopg.Error as problem:
-            return database_down(problem)
+        with connect_limits() as conn:
+            account = accounts.session_account(conn, session_token(), now())
+            per_hour, per_day = allowance(account)
+            left = limits.remaining(conn, counter(account), now(), per_hour, per_day)
         return jsonify({
             # Only a confirmed address can have a session, so signed in also means verified.
             "signed_in": bool(account), "email": account[1] if account else None,
             "limits": {"hour": per_hour, "day": per_day}, "remaining": left,
         })
 
+    def give_back_question(who: str, asked_at: datetime) -> None:
+        try:
+            with connect_limits() as conn:
+                limits.give_back_question(conn, who, asked_at)
+        except psycopg.Error as problem:
+            log.error("A failed question could not be given back: %s", problem)
+
     def read_address(model):
         """(payload, email, None) from the request, or (None, None, the error response)."""
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return None, None, error("invalid_request", "Send a JSON object with an email address.", 400)
-        try:
-            payload = model.model_validate(body)
-        except ValidationError as problem:
-            fields = sorted({str(e["loc"][0]) for e in problem.errors() if e["loc"]})
-            if "email" in fields:
-                return None, None, error("invalid_email", "Please type a valid email address.", 400)
-            if "password" in fields:
-                return None, None, error("invalid_password", "Please type a password.", 400)
-            return None, None, error("invalid_request", f"Invalid request: {', '.join(fields) or 'body'}.", 400)
+        payload, refused = read_json(model, "an email address")
+        if refused:
+            return None, None, refused
         try:
             return payload, accounts.normalize_email(payload.email), None
         except ValueError:
@@ -347,15 +355,9 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
         refused = human_check(payload.captcha_token)
         if refused:
             return refused
-        try:
-            with connect_limits() as conn:
-                limits.take_mail(conn, accounts.email_key(email, config.VISITOR_HASH_SECRET),
-                                 limits.visitor_id(visitor_ip(), config.VISITOR_HASH_SECRET), now())
-                token = accounts.sign_up(conn, email, payload.password, now())
-        except limits.LimitReached as reached:
-            return error(reached.code, str(reached), 429, reached.retry_after)
-        except psycopg.Error as problem:
-            return database_down(problem)
+        with connect_limits() as conn:
+            limits.take_mail(conn, hashed(email), hashed(visitor_ip()), now())
+            token = accounts.sign_up(conn, email, payload.password, now())
         try:
             if token:
                 mail.send_confirmation(email, link_to("/api/sign-up/confirm", token))
@@ -412,23 +414,15 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
         try:
             with connect_limits() as conn:
                 # Counted before the password is checked, right or wrong, so guessing is slow.
-                limits.take_sign_in(conn, accounts.email_key(email, config.VISITOR_HASH_SECRET),
-                                    limits.visitor_id(visitor_ip(), config.VISITOR_HASH_SECRET), now())
+                limits.take_sign_in(conn, hashed(email), hashed(visitor_ip()), now())
                 signed_in = accounts.sign_in(conn, email, payload.password, now())
         except accounts.NotConfirmed:
             return error("email_not_confirmed", "Please confirm your email first, with the link we sent you. "
                          "If you can't find it, sign up again for a new one.", 403)
-        except limits.LimitReached as reached:
-            return error(reached.code, str(reached), 429, reached.retry_after)
-        except psycopg.Error as problem:
-            return database_down(problem)
         if not signed_in:
             # The same answer for an unknown address and a wrong password.
             return error("invalid_credentials", "That email and password don't match.", 401)
-        response = jsonify({"status": "signed_in", "email": email})
-        response.set_cookie(SESSION_COOKIE, signed_in[0], max_age=int(accounts.SESSION_LIFETIME.total_seconds()),
-                            path="/api", secure=config.COOKIE_SECURE, httponly=True, samesite="Strict")
-        return response
+        return with_session(jsonify({"status": "signed_in", "email": email}), signed_in[0])
 
     @app.post("/api/password-reset")
     def ask_for_reset():
@@ -440,15 +434,9 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
         refused = human_check(payload.captcha_token)
         if refused:
             return refused
-        try:
-            with connect_limits() as conn:
-                limits.take_mail(conn, accounts.email_key(email, config.VISITOR_HASH_SECRET),
-                                 limits.visitor_id(visitor_ip(), config.VISITOR_HASH_SECRET), now())
-                token = accounts.ask_for_reset(conn, email, now())
-        except limits.LimitReached as reached:
-            return error(reached.code, str(reached), 429, reached.retry_after)
-        except psycopg.Error as problem:
-            return database_down(problem)
+        with connect_limits() as conn:
+            limits.take_mail(conn, hashed(email), hashed(visitor_ip()), now())
+            token = accounts.ask_for_reset(conn, email, now())
         try:
             if token:
                 mail.send_reset(email, link_to("/api/password-reset/confirm", token))
@@ -522,42 +510,32 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
     def delete_account():
         if not request.is_json:
             return error("invalid_request", "Send a JSON request.", 400)
-        try:
-            with connect_limits() as conn:
-                account = accounts.session_account(conn, session_token(), now())
-                if not account:
-                    return error("not_signed_in", "Sign in first to delete your account.", 401)
-                accounts.delete_account(conn, account[0], counter(account))
-        except psycopg.Error as problem:
-            return database_down(problem)
+        with connect_limits() as conn:
+            account = accounts.session_account(conn, session_token(), now())
+            if not account:
+                return error("not_signed_in", "Sign in first to delete your account.", 401)
+            accounts.delete_account(conn, account[0], counter(account))
         return without_session(jsonify({"status": "deleted"}))
 
     @app.post("/api/label-requests")
     def request_label():
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return error("invalid_request", "Send a JSON object with a label name.", 400)
+        payload, refused = read_json(LabelRequest, "a label name")
+        if refused:
+            return refused
         try:
-            name = label_requests.clean_name(LabelRequest.model_validate(body).name)
-        except ValidationError:
-            return error("invalid_request", "Send a JSON object with a label name.", 400)
+            name = label_requests.clean_name(payload.name)
         except ValueError as problem:
             return error("invalid_label_name", str(problem), 400)
-        try:
-            with connect_limits() as conn:
-                account = accounts.session_account(conn, session_token(), now())
-                if not account:
-                    return error("not_signed_in", "Sign in to request a label.", 401)
-                # Read in full, or the request is refused: a failed read must not let a tracked
-                # label be requested again.
-                known = label_requests.tracked_match(name, list_labels())
-                if known:
-                    return jsonify({"status": "tracked", "message": f"{known} is already tracked. You can ask about it now."})
-                new = label_requests.request_label(conn, account[0], name, now())
-        except limits.LimitReached as reached:
-            return error(reached.code, str(reached), 429, reached.retry_after)
-        except psycopg.Error as problem:
-            return database_down(problem)
+        with connect_limits() as conn:
+            account = accounts.session_account(conn, session_token(), now())
+            if not account:
+                return error("not_signed_in", "Sign in to request a label.", 401)
+            # Read in full, or the request is refused: a failed read must not let a tracked
+            # label be requested again.
+            known = label_requests.tracked_match(name, list_labels())
+            if known:
+                return jsonify({"status": "tracked", "message": f"{known} is already tracked. You can ask about it now."})
+            new = label_requests.request_label(conn, account[0], name, now())
         if not new:
             return jsonify({"status": "requested", "message": f"You have already asked for {name}."})
         response = jsonify({"status": "requested",
@@ -567,21 +545,15 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
 
     @app.get("/api/label-requests")
     def my_label_requests():
-        try:
-            with connect_limits() as conn:
-                account = accounts.session_account(conn, session_token(), now())
-                if not account:
-                    return error("not_signed_in", "Sign in to see your label requests.", 401)
-                return jsonify({"requests": label_requests.requests_of(conn, account[0])})
-        except psycopg.Error as problem:
-            return database_down(problem)
+        with connect_limits() as conn:
+            account = accounts.session_account(conn, session_token(), now())
+            if not account:
+                return error("not_signed_in", "Sign in to see your label requests.", 401)
+            return jsonify({"requests": label_requests.requests_of(conn, account[0])})
 
     @app.get("/api/labels")
     def labels():
-        try:
-            names = list_labels()
-        except psycopg.Error as problem:
-            return database_down(problem)
+        names = list_labels()
         response = jsonify({"labels": names})
         response.headers["Cache-Control"] = f"public, max-age={LABELS_CACHE_SECONDS}"
         return response
@@ -589,6 +561,17 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
     @app.get("/api/health")
     def health():
         return jsonify({"status": "ok"})
+
+    @app.errorhandler(limits.LimitReached)
+    def limit_reached(reached: limits.LimitReached):
+        log.info("Refused: %s", reached.code)
+        return error(reached.code, str(reached), 429, reached.retry_after)
+
+    @app.errorhandler(psycopg.Error)
+    def database_down(problem: psycopg.Error):
+        # Without the database neither limits nor sign-in can be checked, so the request is refused.
+        log.error("Web database unavailable: %s", problem)
+        return error("database", "The question box is unavailable right now. Please try again later.", 503, 60)
 
     @app.errorhandler(HTTPException)
     def http_error(problem: HTTPException):
@@ -628,7 +611,7 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
     @app.after_request
     def write_access_log(response):
         # The path only: a query string could hold anything. The same hash as the question counts.
-        visitor = limits.visitor_id(visitor_ip(), config.VISITOR_HASH_SECRET)
+        visitor = hashed(visitor_ip())
         access_log.info("%s %s %s %s %s", visitor, request.method, for_the_log(request.path), response.status_code,
                         for_the_log(request.headers.get("User-Agent", "-")))
         return response
