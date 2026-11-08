@@ -69,6 +69,10 @@ QUESTION_ERRORS = {
 
 SESSION_COOKIE = "mt_session"
 CONFIRM_COOKIE = "mt_confirm"
+CAPTCHA_TOKEN_LENGTH = 2048
+# Room for spaces typed around an address; accounts.normalize_email trims them and
+# then applies the real limit.
+EMAIL_FIELD_LENGTH = accounts.MAX_EMAIL_LENGTH + 20
 
 
 class QuestionRequest(BaseModel):
@@ -76,7 +80,7 @@ class QuestionRequest(BaseModel):
 
     question: str = Field(min_length=1, max_length=MAX_QUESTION_LENGTH)
     # Not needed when signed in.
-    captcha_token: str = Field(default="", max_length=2048)
+    captcha_token: str = Field(default="", max_length=CAPTCHA_TOKEN_LENGTH)
 
 
 class LabelRequest(BaseModel):
@@ -85,20 +89,20 @@ class LabelRequest(BaseModel):
     name: str = Field(min_length=1, max_length=label_requests.MAX_NAME_LENGTH * 2)
 
 
-class SignUpRequest(BaseModel):
-    # Passwords are taken exactly as typed, so spaces are not stripped here.
+class AddressAndPassword(BaseModel):
+    """Signing up and signing in. Passwords are taken exactly as typed, so spaces are not stripped."""
     model_config = ConfigDict(extra="forbid")
 
-    email: str = Field(min_length=3, max_length=accounts.MAX_EMAIL_LENGTH + 20)
+    email: str = Field(min_length=3, max_length=EMAIL_FIELD_LENGTH)
     password: str = Field(min_length=1, max_length=accounts.MAX_PASSWORD_LENGTH)
-    captcha_token: str = Field(min_length=1, max_length=2048)
+    captcha_token: str = Field(min_length=1, max_length=CAPTCHA_TOKEN_LENGTH)
 
 
 class ResetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    email: str = Field(min_length=3, max_length=accounts.MAX_EMAIL_LENGTH + 20)
-    captcha_token: str = Field(min_length=1, max_length=2048)
+    email: str = Field(min_length=3, max_length=EMAIL_FIELD_LENGTH)
+    captcha_token: str = Field(min_length=1, max_length=CAPTCHA_TOKEN_LENGTH)
 
 
 PAGE = """<!doctype html>
@@ -285,9 +289,8 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
         except psycopg.Error as problem:
             return database_down(problem)
         return jsonify({
+            # Only a confirmed address can have a session, so signed in also means verified.
             "signed_in": bool(account), "email": account[1] if account else None,
-            # Only a confirmed address can have a session.
-            "verified": bool(account),
             "limits": {"hour": per_hour, "day": per_day}, "remaining": left,
         })
 
@@ -315,7 +318,7 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
         return f"{base}{path}?token={quote(token)}"
 
     def mail_is_set_up() -> bool:
-        return bool(config.RESEND_API_KEY or config.SIGN_IN_LOG_LINKS)
+        return bool(config.RESEND_API_KEY or config.EMAIL_LOG_LINKS)
 
     def sent(message: str):
         # The same answer for every address, known or not.
@@ -329,7 +332,7 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
 
     @app.post("/api/sign-up")
     def sign_up():
-        payload, email, refused = read_address(SignUpRequest)
+        payload, email, refused = read_address(AddressAndPassword)
         if refused:
             return refused
         try:
@@ -400,7 +403,7 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
 
     @app.post("/api/sign-in")
     def sign_in():
-        payload, email, refused = read_address(SignUpRequest)
+        payload, email, refused = read_address(AddressAndPassword)
         if refused:
             return refused
         refused = human_check(payload.captcha_token)
@@ -612,7 +615,7 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
         response.headers["Vary"] = "Origin"
         response.headers.setdefault("Cache-Control", "no-store")
         response.headers["X-Content-Type-Options"] = "nosniff"
-        # Sign-in links carry their token in the address; never pass it on.
+        # Confirmation and new-password links carry their token in the address; never pass it on.
         response.headers["Referrer-Policy"] = "no-referrer"
         if response.mimetype == "text/html":
             site = urlsplit(config.SIGN_IN_RETURN_URL)

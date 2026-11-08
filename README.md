@@ -260,7 +260,7 @@ To try it locally, use two terminal windows. In the first, start the API on port
 
 ```bash
 TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA ALLOWED_ORIGINS=http://127.0.0.1:8765 \
-  SIGN_IN_LOG_LINKS=true COOKIE_SECURE=false SIGN_IN_RETURN_URL=http://127.0.0.1:8765/ \
+  EMAIL_LOG_LINKS=true COOKIE_SECURE=false SIGN_IN_RETURN_URL=http://127.0.0.1:8765/ \
   flask --app web.app run --host 127.0.0.1 --port 5050
 ```
 

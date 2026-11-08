@@ -17,7 +17,7 @@ def take(conn, visitor="v1", now=NOON, per_hour=3, per_day=5, site=10):
 
 def counts(db):
     db.commit()
-    rows = db.execute("SELECT visitor, period, window_start, count FROM question_counts ORDER BY 1, 2, 3").fetchall()
+    rows = db.execute("SELECT visitor, period, window_start, count FROM limit_counts ORDER BY 1, 2, 3").fetchall()
     db.commit()
     return rows
 
@@ -105,7 +105,7 @@ def test_the_limits_login_can_only_touch_its_table(limits_db, db):
                           "DELETE FROM releases", "CREATE TABLE stolen (id int)"]:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(statement)
-        conn.execute("SELECT count(*) FROM question_counts")
+        conn.execute("SELECT count(*) FROM limit_counts")
 
 
 def test_rerunning_the_command_changes_the_password_and_keeps_the_counts(limits, postgres_url, limits_role, db):
@@ -130,3 +130,21 @@ def test_command_needs_both_settings(monkeypatch, capsys):
 
     assert command.main([]) == 1
     assert "POSTGRES_LIMITS_USER and POSTGRES_LIMITS_PASSWORD" in capsys.readouterr().err
+
+
+def test_the_old_counts_table_is_renamed_and_keeps_its_counts(db, limits_role):
+    from ingestion.create_limits_role import create_limits_role
+    from tests.conftest import FAKE_SETTINGS
+
+    db.execute("ALTER TABLE limit_counts RENAME TO question_counts")
+    db.execute("ALTER INDEX limit_counts_pkey RENAME TO question_counts_pkey")
+    db.execute("INSERT INTO question_counts VALUES ('site', 'day', now(), 7)")
+    db.commit()
+
+    create_limits_role(db, FAKE_SETTINGS["POSTGRES_LIMITS_USER"], FAKE_SETTINGS["POSTGRES_LIMITS_PASSWORD"])
+    db.commit()
+
+    assert db.execute("SELECT to_regclass('question_counts'), to_regclass('limit_counts')::text").fetchone() == (None, "limit_counts")
+    assert db.execute("SELECT count FROM limit_counts WHERE visitor = 'site'").fetchone() == (7,)
+    db.execute("TRUNCATE limit_counts")
+    db.commit()

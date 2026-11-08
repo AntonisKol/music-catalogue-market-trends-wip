@@ -26,7 +26,10 @@ STATEMENT_TIMEOUT = "5s"
 # visitor is a keyed hash of the visitor's IP address (never the address itself),
 # or "site" for the site-wide count. Rows older than two days are deleted.
 CREATE_TABLES = """
-    CREATE TABLE IF NOT EXISTS question_counts (
+    -- Renamed: it counts sign-in tries, emails and label requests as well as questions.
+    ALTER TABLE IF EXISTS question_counts RENAME TO limit_counts;
+    ALTER INDEX IF EXISTS question_counts_pkey RENAME TO limit_counts_pkey;
+    CREATE TABLE IF NOT EXISTS limit_counts (
         visitor TEXT NOT NULL,
         period TEXT NOT NULL CHECK (period IN ('hour', 'day')),
         window_start TIMESTAMPTZ NOT NULL,
@@ -42,7 +45,7 @@ CREATE_TABLES = """
                    AND table_name = 'accounts')
            AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
                    AND table_name = 'accounts' AND column_name = 'confirmed_at') THEN
-            DELETE FROM question_counts WHERE visitor LIKE 'account:%' OR visitor LIKE 'sign-in-%';
+            DELETE FROM limit_counts WHERE visitor LIKE 'account:%' OR visitor LIKE 'sign-in-%';
             DROP TABLE IF EXISTS label_requests;
             DROP TABLE IF EXISTS sessions;
             DROP TABLE accounts;
@@ -98,7 +101,7 @@ CREATE_TABLES = """
         CHECK (status IN ('waiting', 'reviewing', 'added', 'rejected'));
     CREATE UNIQUE INDEX IF NOT EXISTS label_requests_once_per_account ON label_requests (account_id, lower(name));
 """
-TABLES = ("question_counts", "accounts", "email_tokens", "sessions", "label_requests")
+TABLES = ("limit_counts", "accounts", "email_tokens", "sessions", "label_requests")
 
 
 def create_limits_role(conn: psycopg.Connection, name: str, password: str) -> None:

@@ -30,11 +30,11 @@ QUESTIONS_PER_ACCOUNT_DAY = int(os.environ.get("QUESTIONS_PER_ACCOUNT_DAY", "50"
 # Everyone together: the overall safety net.
 QUESTIONS_PER_SITE_DAY = int(os.environ.get("QUESTIONS_PER_SITE_DAY", "1000"))
 
-# Signing up. Without a Resend key it is off, unless SIGN_IN_LOG_LINKS=true writes
+# Signing up. Without a Resend key it is off, unless EMAIL_LOG_LINKS=true writes
 # the links to the log (for trying it on a laptop only).
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 SIGN_IN_EMAIL_FROM = os.environ.get("SIGN_IN_EMAIL_FROM", "Market Trends <sign-in@adnsaudio.com>")
-SIGN_IN_LOG_LINKS = os.environ.get("SIGN_IN_LOG_LINKS", "").lower() == "true"
+EMAIL_LOG_LINKS = os.environ.get("EMAIL_LOG_LINKS", "").lower() == "true"
 # The API's public address, used in the links, e.g. https://api.adnsaudio.com.
 # Empty: the address the request came to.
 PUBLIC_API_URL = os.environ.get("PUBLIC_API_URL", "").rstrip("/")

@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS demand_snapshots (
     rating_average NUMERIC(3, 2),
     UNIQUE (release_id, snapshot_date)
 );
--- The labels the nightly run updates. Visitors' requests (issue 37) will add to it.
+-- The labels the nightly run updates. added_by says whether the owner added one or approved a visitor's request.
 -- label_id is the Discogs label id; the labels row itself appears once the label is ingested.
 CREATE TABLE IF NOT EXISTS tracked_labels (
     label_id INT PRIMARY KEY,

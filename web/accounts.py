@@ -215,4 +215,4 @@ def delete_account(conn: psycopg.Connection, account_id: int, counter_key: str) 
     """Delete the account, its sessions and links (by cascade) and its question counts."""
     with conn.transaction():
         conn.execute("DELETE FROM accounts WHERE id = %s", (account_id,))
-        conn.execute("DELETE FROM question_counts WHERE visitor = %s", (counter_key,))
+        conn.execute("DELETE FROM limit_counts WHERE visitor = %s", (counter_key,))

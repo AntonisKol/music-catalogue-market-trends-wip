@@ -50,7 +50,7 @@ ANSWER = {
     "model": "claude-haiku-5-5",
     "remaining": {"hour": 2, "day": 2},
 }
-ANONYMOUS = {"signed_in": False, "email": None, "verified": False,
+ANONYMOUS = {"signed_in": False, "email": None,
              "limits": {"hour": 3, "day": 3}, "remaining": {"hour": 3, "day": 3}}
 
 
@@ -434,7 +434,7 @@ def test_a_wrong_password_shows_the_api_message(box):
     assert box.password.input_value() == ""
 
 
-SIGNED_IN = {"signed_in": True, "email": "listener@example.com", "verified": True,
+SIGNED_IN = {"signed_in": True, "email": "listener@example.com",
              "limits": {"hour": 10, "day": 50}, "remaining": {"hour": 10, "day": 50}}
 
 

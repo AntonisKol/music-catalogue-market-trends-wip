@@ -482,7 +482,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       signInForm.hidden = true;
       account.replaceChildren(
         el("span", {}, "Signed in as ", el("strong", {}, state.email)), " ",
-        ...(state.verified ? [el("span", { class: "mt-ask-badge" }, "✓ Verified"), " "] : []), "· ", left, " · ",
+        el("span", { class: "mt-ask-badge" }, "✓ Verified"), " ", "· ", left, " · ",
         link("Sign out", signOut), " · ", link("Delete my account", deleteAccount),
       );
     } else {

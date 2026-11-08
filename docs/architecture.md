@@ -51,7 +51,7 @@ flowchart TB
         CAT[("Catalogue<br/>labels, artists, releases<br/>Code: db/schema.sql")]
         TRK[("Tracked labels and run records<br/>tracked_labels, ingestion_runs<br/>Achieved: what to update, and how each night went")]
         SNAP[("Snapshots<br/>price per release per day,<br/>want, have and ratings per week<br/>Achieved: history that grows with every run")]
-        LIM[("Question counts and accounts<br/>question_counts, accounts, email_tokens,<br/>sessions, label_requests<br/>Code: create_limits_role.py<br/>Achieved: limits that survive restarts; passwords, links<br/>and sessions stored only as hashes")]
+        LIM[("Limit counts and accounts<br/>limit_counts, accounts, email_tokens,<br/>sessions, label_requests<br/>Code: create_limits_role.py<br/>Achieved: limits that survive restarts; passwords, links<br/>and sessions stored only as hashes")]
     end
 
     subgraph QRY["Questions: reads data"]

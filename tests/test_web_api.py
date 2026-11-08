@@ -114,7 +114,7 @@ def test_a_failed_human_check_is_refused_and_not_counted(client, fakes, db):
     assert response.status_code == 403
     assert response.get_json()["error"]["code"] == "captcha_failed"
     assert fakes.questions == []
-    assert db.execute("SELECT count(*) FROM question_counts").fetchone() == (0,)
+    assert db.execute("SELECT count(*) FROM limit_counts").fetchone() == (0,)
 
 
 def test_a_question_without_a_human_check_token_is_refused_when_not_signed_in(client, fakes, db):
@@ -123,7 +123,7 @@ def test_a_question_without_a_human_check_token_is_refused_when_not_signed_in(cl
     assert response.status_code == 403
     assert response.get_json()["error"]["code"] == "captcha_failed"
     assert fakes.tokens == [] and fakes.questions == []
-    assert db.execute("SELECT count(*) FROM question_counts").fetchone() == (0,)
+    assert db.execute("SELECT count(*) FROM limit_counts").fetchone() == (0,)
 
 
 def test_an_unreachable_cloudflare_refuses_the_question(client, fakes):
@@ -181,7 +181,7 @@ def test_behind_a_trusted_proxy_the_forwarded_address_identifies_the_visitor(fak
 def test_addresses_are_never_stored(client, db):
     ask(client, ip="203.0.113.7")
 
-    visitors = [row[0] for row in db.execute("SELECT visitor FROM question_counts").fetchall()]
+    visitors = [row[0] for row in db.execute("SELECT visitor FROM limit_counts").fetchall()]
     assert "203.0.113.7" not in visitors and "203.0.113.7" not in "".join(visitors)
 
 
