@@ -89,6 +89,7 @@ class FakeApi:
         self.requests = []
         self.account = dict(ANONYMOUS)
         self.labels = ["Planet E", "Tresor"]
+        self.label_requests = []
         self.replies = {}
         self.hold = False
         self.held = []
@@ -113,6 +114,8 @@ class FakeApi:
         self.requests.append((request.method, path, body))
         if path == "/api/account":
             reply = (200, self.account, {}, False)
+        elif path == "/api/label-requests" and request.method == "GET":
+            reply = (200, {"requests": self.label_requests}, {}, False)
         elif path == "/api/labels":
             reply = self.replies.get(path, (200, {"labels": self.labels}, {}, False))
         elif path == "/api/questions":
@@ -278,11 +281,11 @@ def test_while_waiting_the_box_says_so_and_sends_only_one_question(box):
     box.page.wait_for_function("document.querySelector('.mt-ask > .mt-ask-status').textContent.startsWith('Looking')")
 
     assert box.page.locator(".mt-ask-form").get_attribute("aria-busy") == "true"
-    assert box.page.locator(".mt-ask-submit").first.inner_text() == "Looking it up…"
-    assert box.page.locator(".mt-ask-submit").first.is_disabled()
+    assert box.page.locator(".mt-ask-form .mt-ask-submit").inner_text() == "Looking it up…"
+    assert box.page.locator(".mt-ask-form .mt-ask-submit").is_disabled()
     assert box.status.inner_text() == "Looking it up… this can take a few seconds."
     box.textarea.press("Control+Enter")
-    box.page.locator(".mt-ask-submit").first.click(force=True)
+    box.page.locator(".mt-ask-form .mt-ask-submit").click(force=True)
     assert len(box.api.sent("/api/questions")) == 1
 
     box.api.release()
@@ -375,7 +378,7 @@ def test_the_box_works_when_the_label_list_cannot_load(browser, site):
 # --- The account form ----------------------------------------------------------------------
 
 def test_signing_up_sends_the_address_and_password_and_keeps_neither_on_the_page(box):
-    box.page.get_by_role("button", name="Sign up or sign in").click()
+    box.page.get_by_role("button", name="Sign up or sign in", exact=True).click()
     box.email.fill("listener@example.com")
     box.password.fill("a long enough password")
     box.page.get_by_role("button", name="Sign up", exact=True).click()
@@ -392,7 +395,7 @@ def test_signing_up_sends_the_address_and_password_and_keeps_neither_on_the_page
     ("listener@example.com", "too short", "Please choose a password of at least 12 characters."),
 ])
 def test_the_sign_up_form_checks_before_sending(box, email, password, message):
-    box.page.get_by_role("button", name="Sign up or sign in").click()
+    box.page.get_by_role("button", name="Sign up or sign in", exact=True).click()
     box.email.fill(email)
     box.password.fill(password)
     box.page.get_by_role("button", name="Sign up", exact=True).click()
@@ -402,7 +405,7 @@ def test_the_sign_up_form_checks_before_sending(box, email, password, message):
 
 
 def test_the_form_switches_between_sign_up_sign_in_and_a_new_password(box):
-    box.page.get_by_role("button", name="Sign up or sign in").click()
+    box.page.get_by_role("button", name="Sign up or sign in", exact=True).click()
     assert box.password.get_attribute("autocomplete") == "new-password"
 
     box.page.get_by_role("button", name="Already have an account? Sign in").click()
@@ -420,7 +423,7 @@ def test_the_form_switches_between_sign_up_sign_in_and_a_new_password(box):
 def test_a_wrong_password_shows_the_api_message(box):
     box.api.reply("/api/sign-in", 401, {"error": {"code": "invalid_credentials",
                                                   "message": "That email and password don't match."}})
-    box.page.get_by_role("button", name="Sign up or sign in").click()
+    box.page.get_by_role("button", name="Sign up or sign in", exact=True).click()
     box.page.get_by_role("button", name="Already have an account? Sign in").click()
     box.email.fill("listener@example.com")
     box.password.fill("not the password")
@@ -464,9 +467,66 @@ def test_coming_back_from_the_confirmation_link_says_so_and_cleans_the_address(m
     assert "verified" not in box.page.url
 
 
+# --- Asking for a label ----------------------------------------------------------------------
+
+def test_visitors_without_an_account_are_offered_sign_up_to_request_a_label(box):
+    box.page.get_by_role("button", name="Sign up or sign in to request it").click()
+
+    assert box.form.is_visible()
+    assert box.focused() == "email"
+
+
+def test_signed_in_visitors_can_request_a_label_and_see_their_requests(make_box):
+    box = make_box(account=SIGNED_IN)
+    box.api.label_requests = [{"name": "Arts", "status": "added"}]
+    box.api.reply("/api/label-requests", 201, {"status": "requested", "message": "Thanks. Orbe Records is waiting for review."})
+
+    box.page.get_by_role("button", name="Request it").click()
+    field = box.page.get_by_role("textbox", name="Label name")
+    assert box.focused() == "label"
+    requests = box.page.get_by_role("list", name="Your label requests")
+    requests.locator("li").first.wait_for()
+    assert requests.locator("li").all_inner_texts() == ["Arts: added"]
+
+    box.api.label_requests = [{"name": "Orbe Records", "status": "waiting"}, {"name": "Arts", "status": "added"}]
+    field.fill("Orbe Records")
+    field.press("Enter")
+
+    box.page.wait_for_function("document.querySelector('.mt-ask-request-form .mt-ask-status').textContent.includes('Thanks')")
+    assert box.api.sent("/api/label-requests") == [{"name": "Orbe Records"}]
+    assert field.input_value() == ""
+    assert requests.locator("li").all_inner_texts() == ["Orbe Records: waiting for review", "Arts: added"]
+
+
+def test_a_label_request_needs_a_name(make_box):
+    box = make_box(account=SIGNED_IN)
+    box.page.get_by_role("button", name="Request it").click()
+    box.page.get_by_role("button", name="Request", exact=True).click()
+
+    assert box.page.locator(".mt-ask-request-form .mt-ask-status").inner_text() == "Please type the label's name."
+    assert box.api.sent("/api/label-requests") == []
+
+
+def test_the_request_limit_is_explained(make_box):
+    box = make_box(account=SIGNED_IN)
+    box.api.reply("/api/label-requests", 429, {"error": {"code": "request_limit_reached",
+                                                         "message": "You can request 3 labels a day."}},
+                  headers={"Retry-After": "7200"})
+    box.page.get_by_role("button", name="Request it").click()
+    box.page.get_by_role("textbox", name="Label name").fill("Arts")
+    box.page.get_by_role("button", name="Request", exact=True).click()
+
+    box.page.wait_for_function("document.querySelector('.mt-ask-request-form .mt-ask-status').classList.contains('mt-ask-status-error')")
+    assert box.page.locator(".mt-ask-request-form .mt-ask-status").inner_text() == (
+        "You can request 3 labels a day. You can ask again in about 2 hours.")
+
+
 # --- Keyboard, labels, focus and announcements ----------------------------------------------
 
 def test_the_box_can_be_used_with_the_keyboard_alone(box):
+    # In the order they appear: the label request link under the label list, then the question.
+    box.page.keyboard.press("Tab")
+    assert box.focused() == "Sign up or sign in to request it"
     box.page.keyboard.press("Tab")
     assert box.focused() == "question"
     box.page.keyboard.type("Cheapest Tresor records?")
@@ -503,7 +563,7 @@ def test_focus_moves_to_the_answer_when_it_arrives(box):
 
 
 def test_every_control_has_a_name_a_screen_reader_can_read(box):
-    box.page.get_by_role("button", name="Sign up or sign in").click()
+    box.page.get_by_role("button", name="Sign up or sign in", exact=True).click()
 
     assert box.textarea.get_attribute("aria-describedby")
     for role, name in [("textbox", "Ask about the vinyl market"), ("button", "Ask"), ("textbox", "Email address"),
@@ -519,7 +579,7 @@ def test_changes_are_announced_politely(box):
         assert status.get_attribute("aria-live") == "polite"
 
 
-@pytest.mark.parametrize("state", ["start", "answer", "account form", "error"])
+@pytest.mark.parametrize("state", ["start", "answer", "account form", "error", "label request"])
 def test_no_serious_accessibility_problems(make_box, state):
     from axe_playwright_python.sync_playwright import Axe
 
@@ -529,7 +589,12 @@ def test_no_serious_accessibility_problems(make_box, state):
         box.page.locator(".mt-ask-answer").wait_for()
         box.page.get_by_text("Show the data").click()
     elif state == "account form":
-        box.page.get_by_role("button", name="Sign up or sign in").click()
+        box.page.get_by_role("button", name="Sign up or sign in", exact=True).click()
+    elif state == "label request":
+        box = make_box(account=SIGNED_IN)
+        box.api.label_requests = [{"name": "Arts", "status": "waiting"}]
+        box.page.get_by_role("button", name="Request it").click()
+        box.page.get_by_role("list", name="Your label requests").locator("li").first.wait_for()
     elif state == "error":
         box.api.reply("/api/questions", 503, {"error": {"code": "busy", "message": "The question service is busy."}})
         box.ask()
@@ -543,7 +608,7 @@ def test_no_serious_accessibility_problems(make_box, state):
 
 def test_nothing_scrolls_sideways_on_a_phone(make_box):
     box = make_box(width=375)
-    box.page.get_by_role("button", name="Sign up or sign in").click()
+    box.page.get_by_role("button", name="Sign up or sign in", exact=True).click()
     box.ask()
     box.page.locator(".mt-ask-answer").wait_for()
 

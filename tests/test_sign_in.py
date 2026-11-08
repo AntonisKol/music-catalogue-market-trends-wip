@@ -790,6 +790,7 @@ def test_setting_up_the_login_replaces_older_accounts(db, limits_role):
     from ingestion.create_limits_role import create_limits_role
     from tests.conftest import FAKE_SETTINGS
 
+    db.execute("DROP TABLE label_requests")
     db.execute("DROP TABLE email_tokens")
     db.execute("DROP TABLE sessions")
     db.execute("DROP TABLE accounts")

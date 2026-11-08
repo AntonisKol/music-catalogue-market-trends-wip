@@ -12,7 +12,9 @@ passed. Errors come back as {"error": {"code", "message"}} with a fitting HTTP
 status and never contain secrets or internal details; those go to the log.
 
 GET /api/labels returns {"labels": [...]}, the labels the site follows, for the list
-on the page.
+on the page. Signed-in visitors can ask for more (see web/label_requests.py):
+    POST /api/label-requests     {"name"}: stores a request for the owner to review
+    GET  /api/label-requests     this account's requests and their status
 
 Each request is written to the access log with a keyed hash of the visitor's
 address, never the address, so abuse can be spotted without keeping addresses.
@@ -44,7 +46,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from queries.labels import tracked_label_names
 from queries.questions import MAX_QUESTION_LENGTH, QuestionError, answer_question
-from web import accounts, captcha, config, limits, mailer
+from web import accounts, captcha, config, label_requests, limits, mailer
 
 log = logging.getLogger(__name__)
 access_log = logging.getLogger("web.access")
@@ -75,6 +77,12 @@ class QuestionRequest(BaseModel):
     question: str = Field(min_length=1, max_length=MAX_QUESTION_LENGTH)
     # Not needed when signed in.
     captcha_token: str = Field(default="", max_length=2048)
+
+
+class LabelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=label_requests.MAX_NAME_LENGTH * 2)
 
 
 class SignUpRequest(BaseModel):
@@ -520,6 +528,51 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
         except psycopg.Error as problem:
             return database_down(problem)
         return without_session(jsonify({"status": "deleted"}))
+
+    @app.post("/api/label-requests")
+    def request_label():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return error("invalid_request", "Send a JSON object with a label name.", 400)
+        try:
+            name = label_requests.clean_name(LabelRequest.model_validate(body).name)
+        except ValidationError:
+            return error("invalid_request", "Send a JSON object with a label name.", 400)
+        except ValueError as problem:
+            return error("invalid_label_name", str(problem), 400)
+        try:
+            with connect_limits() as conn:
+                account = accounts.session_account(conn, session_token(), now())
+                if not account:
+                    return error("not_signed_in", "Sign in to request a label.", 401)
+                try:
+                    known = label_requests.tracked_match(name, list_labels())
+                except psycopg.Error:
+                    known = None
+                if known:
+                    return jsonify({"status": "tracked", "message": f"{known} is already tracked. You can ask about it now."})
+                new = label_requests.request_label(conn, account[0], name, now())
+        except limits.LimitReached as reached:
+            return error(reached.code, str(reached), 429, reached.retry_after)
+        except psycopg.Error as problem:
+            return database_down(problem)
+        if not new:
+            return jsonify({"status": "requested", "message": f"You have already asked for {name}."})
+        response = jsonify({"status": "requested",
+                            "message": f"Thanks. {name} is waiting for review; requests are checked by hand."})
+        response.status_code = 201
+        return response
+
+    @app.get("/api/label-requests")
+    def my_label_requests():
+        try:
+            with connect_limits() as conn:
+                account = accounts.session_account(conn, session_token(), now())
+                if not account:
+                    return error("not_signed_in", "Sign in to see your label requests.", 401)
+                return jsonify({"requests": label_requests.requests_of(conn, account[0])})
+        except psycopg.Error as problem:
+            return database_down(problem)
 
     @app.get("/api/labels")
     def labels():

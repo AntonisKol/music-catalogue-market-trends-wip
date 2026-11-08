@@ -202,6 +202,17 @@ python -m ingestion.track_labels pause 538     # skip it at night, keep its data
 python -m ingestion.track_labels resume 538
 ```
 
+**Labels visitors ask for.** Signed-in visitors can ask for a label from the question box, by name. A request alone tracks nothing: you look it up and decide.
+
+```bash
+python -m ingestion.label_requests list                 # waiting requests, by name, with how many accounts asked
+python -m ingestion.label_requests search 12            # the labels on Discogs matching request 12, with their size
+python -m ingestion.label_requests approve 12 698526    # track Discogs label 698526 for it
+python -m ingestion.label_requests decline 12
+```
+
+Approving tracks the label like `track_labels add`, so its data arrives with the next nightly run. Approving or declining answers every waiting request for the same name, and the visitor sees the result under the box. On the server, put `docker compose --env-file .env -f deploy/compose.yml run --rm -T api` in front, from `/srv/market-trends`.
+
 One command updates every active label: its vinyl releases, that day's prices, and want, have and ratings once a week.
 
 ```bash
@@ -324,7 +335,7 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 
 | Status | Codes |
 | --- | --- |
-| 400 | `invalid_request`, `invalid_question`, `invalid_email`, `invalid_password`, `disposable_email` |
+| 400 | `invalid_request`, `invalid_question`, `invalid_email`, `invalid_password`, `disposable_email`, `invalid_label_name` |
 | 401 | `not_signed_in`, `invalid_credentials` |
 | 403 | `captcha_failed` |
 | 413 | the request is over 8 KB |
@@ -372,6 +383,8 @@ To refresh the list, replace the domains in that file with the project's `dispos
 - `PUBLIC_API_URL`: the API's public address used in the links, for example `https://api.adnsaudio.com`.
 - `SIGN_IN_RETURN_URL`: where the buttons go afterwards, by default `https://adnsaudio.com/market-trends/`.
 - For trying it on a laptop only: `SIGN_IN_LOG_LINKS=true` writes the links to the API's log instead of emailing them, and `COOKIE_SECURE=false` lets the cookie work over plain http.
+
+**Asking for a label.** Signed in, a visitor can request a label the site doesn't track: `POST /api/label-requests` with `{"name"}` stores it for you to review, and `GET /api/label-requests` lists the visitor's own requests with their status (`waiting`, `added` or `declined`). A label that is already tracked gets a `tracked` answer and no request. Requests are limited to 3 a day per account and 50 a day for the site, and are deleted with the account. The web API never calls Discogs; your review command does.
 
 The emails carry the ADNS Audio logo from [`web/assets/`](web/assets) inside the message, because many mail apps block images fetched from the web.
 

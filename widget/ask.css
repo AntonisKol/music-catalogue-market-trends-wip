@@ -126,7 +126,8 @@
 .mt-ask-sign-in .mt-ask-hint { margin-bottom: 10px; }
 .mt-ask-sign-in-row { display: flex; gap: 10px; }
 .mt-ask input[type="email"],
-.mt-ask input[type="password"] {
+.mt-ask input[type="password"],
+.mt-ask input[type="text"] {
   flex: 1;
   min-width: 0;
   min-height: 44px;
@@ -138,6 +139,7 @@
   font: inherit;
 }
 .mt-ask input[type="email"]::placeholder,
+.mt-ask input[type="text"]::placeholder,
 .mt-ask input[type="password"]::placeholder { color: var(--mt-muted); }
 .mt-ask input[hidden] { display: none; }
 .mt-ask-switch { margin: 12px 0 0; font-size: 13px; }
@@ -160,6 +162,10 @@
   line-height: 1.6;
 }
 .mt-ask-labels strong { color: var(--mt-ink); font-weight: 600; }
+.mt-ask-request { margin: -6px 0 14px; color: var(--mt-muted); font-size: 13px; }
+.mt-ask-request-line { margin: 0 0 8px; }
+.mt-ask-request-form { margin-bottom: 8px; }
+.mt-ask-requests { margin: 8px 0 0; padding-left: 18px; }
 
 .mt-ask-privacy { margin: 12px 0 0; color: var(--mt-muted); font-size: 13px; line-height: 1.5; }
 

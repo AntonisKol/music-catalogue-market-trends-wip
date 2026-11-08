@@ -260,6 +260,22 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   );
   // Filled in from the API, and stays hidden if the list can't be loaded.
   const labels = el("aside", { class: "mt-ask-labels", "aria-label": "Labels this site tracks", hidden: "" });
+  // Asking for a label the site doesn't track yet: signed-in visitors only, and the
+  // site's owner decides. Shown once it is known whether the visitor is signed in.
+  const requestName = el("input", {
+    id: `${id}-label-request`, type: "text", name: "label", maxlength: "100", autocomplete: "off",
+    placeholder: "Label name, as on Discogs", "aria-label": "Label name",
+  });
+  const requestButton = el("button", { type: "submit", class: "mt-ask-submit" }, "Request");
+  const requestStatus = el("p", { class: "mt-ask-status", role: "status", "aria-live": "polite" });
+  const requestList = el("ul", { class: "mt-ask-requests", "aria-label": "Your label requests" });
+  const requestForm = el("form", { class: "mt-ask-request-form", novalidate: "", hidden: "" },
+    el("div", { class: "mt-ask-sign-in-row" }, requestName, requestButton),
+    requestStatus,
+    requestList,
+  );
+  const requestLine = el("p", { class: "mt-ask-request-line" });
+  const requestArea = el("div", { class: "mt-ask-request", hidden: "" }, requestLine, requestForm);
   const form = el("form", { class: "mt-ask-form", novalidate: "" },
     el("label", { for: textarea.id, class: "mt-ask-label" }, "Ask about the vinyl market"),
     textarea,
@@ -299,7 +315,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     + "To spot abuse, our logs keep a scrambled version of your network address, never the address itself. "
     + "Cloudflare's human check also sees your address. ",
     el("a", { href: "/privacy/" }, "Privacy"), ".");
-  root.replaceChildren(labels, form, account, signInForm, status, examples, notice, output);
+  root.replaceChildren(labels, requestArea, form, account, signInForm, status, examples, notice, output);
 
   let token = "";
   let widgetId = null;
@@ -385,7 +401,71 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     email.focus();
   }
 
+  const REQUEST_STATUS = { waiting: "waiting for review", added: "added", declined: "not added" };
+
+  async function loadMyRequests() {
+    try {
+      const response = await request("/api/label-requests");
+      const mine = response.ok ? (await response.json()).requests : [];
+      requestList.replaceChildren(...mine.map((item) => el("li", {}, `${item.name}: ${REQUEST_STATUS[item.status] ?? item.status}`)));
+    } catch {
+      // The list is a convenience; requesting still works.
+    }
+  }
+
+  function toggleRequestForm() {
+    requestForm.hidden = !requestForm.hidden;
+    if (!requestForm.hidden) {
+      requestName.focus();
+      loadMyRequests();
+    }
+  }
+
+  function renderRequestArea() {
+    if (!state) {
+      requestArea.hidden = true;
+      return;
+    }
+    requestLine.replaceChildren("Missing a label? ", state.signed_in
+      ? link("Request it", toggleRequestForm)
+      : link("Sign up or sign in to request it", showSignIn));
+    if (!state.signed_in) requestForm.hidden = true;
+    requestArea.hidden = false;
+  }
+
+  requestForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = requestName.value.trim();
+    if (name.length < 2) {
+      requestStatus.textContent = "Please type the label's name.";
+      requestStatus.className = "mt-ask-status mt-ask-status-error";
+      requestName.focus();
+      return;
+    }
+    requestButton.disabled = true;
+    requestStatus.className = "mt-ask-status";
+    requestStatus.textContent = "Sending…";
+    try {
+      const response = await postJson("/api/label-requests", { name });
+      const body = await response.json().catch(() => null);
+      if (response.ok) {
+        requestStatus.textContent = body?.message ?? "Thanks.";
+        requestName.value = "";
+        await loadMyRequests();
+      } else {
+        requestStatus.textContent = errorMessage(response.status, body, response.headers.get("Retry-After"));
+        requestStatus.className = "mt-ask-status mt-ask-status-error";
+      }
+    } catch {
+      requestStatus.textContent = "Could not reach the question service. Please try again.";
+      requestStatus.className = "mt-ask-status mt-ask-status-error";
+    } finally {
+      requestButton.disabled = false;
+    }
+  });
+
   function renderAccount() {
+    renderRequestArea();
     if (!state) {
       account.hidden = true;
       return;
@@ -657,7 +737,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   loadAccount();
   loadLabels();
 
-  return { labels, form, textarea, button, status, output, account, signInForm, email, password };
+  return { labels, requestForm, form, textarea, button, status, output, account, signInForm, email, password };
 }
 
 if (typeof document !== "undefined") {
