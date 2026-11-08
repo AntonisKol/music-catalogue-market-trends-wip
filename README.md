@@ -377,6 +377,7 @@ What the box does:
 - shows example questions and a character count up to 500. The human check is invisible: Cloudflare shows its box only if it is unsure about a visitor;
 - disables the button while a question is answered, so a double click sends one question;
 - shows the answer, any warning, and "Show the data" with the rows behind it, opened automatically when there is a warning;
+- gives every table its own copy button. A copied table pastes into a spreadsheet as cells and into a document as a table. When an answer holds several tables, each is copied on its own;
 - names the model that answered;
 - shows how many questions are left, offers sign-up when the anonymous allowance runs out, and shows the signed-in address with a **Verified** badge, **Sign out** and **Delete my account**;
 - turns errors and limits into plain messages ("You can ask again in about 30 minutes").
@@ -483,6 +484,7 @@ The tests need no `.env` and never use your token or your database: `tests/conft
 
 `tests/test_question_box.py` runs the question box in Chromium. Most tests use a faked API and check:
 - asking a question, the answer, the data behind it and any warning;
+- copying each table on its own, also two tables the model wrote without a gap;
 - loading, validation and error messages;
 - the label list;
 - signing up, signing in and a new password;

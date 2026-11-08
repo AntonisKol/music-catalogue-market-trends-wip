@@ -211,7 +211,25 @@
 .mt-ask-answer code { font-family: var(--mt-mono); font-size: .95em; }
 .mt-ask-heading { color: var(--mt-ink); font-weight: 600; }
 
-.mt-ask-table { overflow-x: auto; margin: 0 0 14px; }
+.mt-ask-table-block { margin: 0 0 14px; }
+.mt-ask-table-bar { display: flex; align-items: center; gap: 10px; min-height: 32px; }
+.mt-ask-table-bar .mt-ask-source-title { margin: 0 auto 0 0; }
+.mt-ask-copy-note { margin-left: auto; color: var(--mt-muted); font: 12px var(--mt-mono); }
+.mt-ask-source-title + .mt-ask-copy-note { margin-left: 0; }
+.mt-ask-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--mt-line);
+  background: transparent;
+  color: var(--mt-muted);
+  cursor: pointer;
+}
+.mt-ask-copy:hover, .mt-ask-copy:focus-visible { border-color: var(--mt-accent); color: var(--mt-ink); }
+.mt-ask-table { overflow-x: auto; }
 
 .mt-ask table {
   width: 100%;
