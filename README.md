@@ -2,88 +2,52 @@
 
 [![Tests](https://github.com/AntonisKol/music-catalogue-market-trends-wip/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/AntonisKol/music-catalogue-market-trends-wip/actions/workflows/tests.yml)
 
-A step-by-step project for building a pipeline that collects vinyl release data from the Discogs REST API, stores catalogue and daily market snapshots in PostgreSQL, and lets people ask questions about the live dataset in natural language.
+Ask questions in plain English about the vinyl market for techno and electronic music labels. **Live at [adnsaudio.com/market-trends](https://adnsaudio.com/market-trends/).**
 
-The language model does not connect directly to PostgreSQL or invent SQL to run. The application gives it a small set of approved, read-only data tools. The model chooses a tool for a user's question, the application runs a parameterized query, and the model explains the returned data.
+Every night a Python pipeline records each tracked label's vinyl releases from Discogs, with that day's lowest price and copies for sale, and want, have and ratings once a week. A visitor asks, for example, "Which Planet E records got more expensive this month?". Claude picks one of five read-only query tools, the application runs it, and the answer comes back with the rows it is based on.
 
-**Stack:** Python, PostgreSQL, Docker, Discogs REST API, Anthropic API, and a browser frontend.
+**Stack:** Python, PostgreSQL 16, Flask, the Anthropic API (Claude Haiku 5.5 with tool use), the Discogs REST API, plain JavaScript, Docker Compose, Caddy, GitHub Actions, Playwright.
 
-## How the app works
+## What it does
+
+**For visitors**
+- Ask about prices, supply and demand on the tracked labels, and open the data behind each answer.
+- Ask 3 questions a day without an account, or up to 50 a day with one: sign up with an email address and a password, confirmed by email.
+- Request a label the site doesn't track yet, and follow it: waiting for review, being reviewed, added, or rejected with a reason.
+
+**For the owner**
+- A nightly update of every tracked label, with each run recorded and checkable from one command.
+- An email for each label request with its Discogs matches, and a script to approve (the label is imported at once) or reject with a reason that reaches the visitor.
+- Nightly backups copied off the server, and one command to deploy.
+
+## How it works
 
 ```mermaid
-flowchart TD
-    A["Discogs REST API"] -->|"label releases, details, marketplace and community data"| B["Python ingestion pipeline"]
-    B -->|"idempotent catalogue writes"| C[("PostgreSQL")]
-    B -->|"daily price and demand rows"| C
-    D["Daily schedule"] -->|"starts pipeline"| B
-    U["User asks in browser frontend"] -->|"question"| E["Python HTTP API"]
-    E -->|"question"| Q["Anthropic question service"]
-    Q -->|"question + approved tool definitions"| F["Anthropic Messages API"]
-    F -->|"selects an approved data tool"| Q
-    Q -->|"call approved query function"| R["Read-only query tools"]
-    R -->|"parameterized, read-only query"| C
-    C -->|"live query results"| R
-    R -->|"tool result"| Q
-    Q -->|"answer grounded in results"| F
-    F -->|"final answer"| Q
-    Q -->|"JSON response"| E
-    E -->|"answer, loading/error state"| U
+flowchart LR
+    DG["Discogs REST API"] -->|"releases, prices, demand"| NI["Nightly pipeline<br/>cron, admin container"]
+    NI -->|"writer login"| PG[("PostgreSQL")]
+    V(["Visitor"]) --> BOX["Question box<br/>adnsaudio.com"]
+    BOX -->|"HTTPS, Caddy"| API["Web API, Flask"]
+    API -->|"human check"| CF["Cloudflare Turnstile"]
+    API -->|"limits, accounts, requests"| PG
+    API --> QS["Question service"]
+    QS <-->|"question, tool calls, rows"| AN["Claude, Anthropic API"]
+    QS -->|"five fixed tools, read-only login"| PG
+    API -->|"confirmation emails"| RS["Resend"]
+    PG -->|"new label requests"| AD["Admin commands"]
+    AD -->|"email to the owner"| RS
 ```
 
-The browser sends questions to the Python API; the server calls the Anthropic API on the user's behalf and uses approved read-only tools to query PostgreSQL. PostgreSQL remains the source of truth. The pipeline updates it, and the web app reads it. API keys and database credentials stay on the server and are never sent to the browser.
+## Engineering choices worth a look
 
-## Project roadmap: one task at a time
+- **The model never writes SQL.** It chooses among five fixed, parameterized query tools. Their arguments are validated by Pydantic, their results are capped, and they run over a database login that can only read, enforced by PostgreSQL itself.
+- **Answers are checked.** Every figure in an answer must appear in the rows it came from; otherwise the visitor sees a warning next to the data.
+- **Guards come before cost.** The human check and the limits per visitor, per account and for the whole site run before any Anthropic call, in one database transaction. A question that can't be answered doesn't count.
+- **Privacy by default.** Visitors are logged only as a keyed hash of their address. Passwords are stored as salted scrypt hashes, and links and sessions only as hashes. An account can be deleted with everything stored for it. The internet-facing API container never holds the Discogs token or the database owner's password.
+- **Ingestion that survives the real world.** Requests are paced under Discogs' rate limit and retried, only one run happens at a time, each release is committed as soon as it is saved, and every run is recorded. Details are refreshed once a week and releases that are never needed are remembered, so a night stays at a few hours.
+- **Tested at every level.** Several hundred tests run on every pull request: a throwaway PostgreSQL, a faked Discogs and Anthropic API, browser tests of the question box with an accessibility audit, and checks on what each server container is given. A before-release test asks the real Claude questions with known answers, judged by a stronger model.
 
-The tasks below are ordered so each step builds on working code from the previous one. Start with **Task 1** and do not start a blocked task early. Every task has a corresponding issue on the [GitHub project board](https://github.com/users/AntonisKol/projects/3), where priority and blocker links are tracked.
-
-| Step | Issue | Priority | Status | What you'll build |
-| --- | --- | --- | --- | --- |
-| 1 | [#5 Persist Discogs vinyl release data in PostgreSQL](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/5) | P0 | Done | A Python/psycopg repository that maps Discogs records to the existing tables and writes them safely and repeatedly. |
-| 2 | [#2 Test Discogs ingestion and PostgreSQL pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/2) | P0 | Done | Automated tests for API handling and database mapping/upserts, using mocked HTTP and a test database. |
-| 3 | [#3 Capture daily vinyl price and demand snapshots](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/3) | P0 | Done | Fetch market supply/price and community demand, then store one snapshot per release per day. |
-| 4 | [#6 Build a repeatable Discogs-to-PostgreSQL ingestion pipeline](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/6) | P0 | Done | A Python command that connects label pagination, release detail fetching, catalogue writes, and snapshot writes. |
-| 5 | [#10 Schedule and operate daily ingestion](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/10) | P2 | Done | Run the pipeline daily, avoid overlapping runs, and document logs, failures, and safe retries. |
-| 6 | [#11 Add safe read-only query tools for the live dataset](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/11) | P1 | Done | A restricted database role and a small set of parameterized query functions for release lookup and price/demand comparisons. |
-| 7 | [#7 Add Anthropic-powered natural-language queries over live data](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/7) | P1 | Done | Use Anthropic tool use: the model selects an approved Python query tool, the app executes it, and the model explains the live results. |
-| 8 | [#9 Test the Anthropic query service and guardrails](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) | P1 | Done | Test the assistant service, tool selection, read-only behavior, query limits, and grounded answers without live API calls. |
-| 9 | [#8 Expose natural-language questions through a Python web API](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) | P1 | Done | Add a validated HTTP/JSON endpoint for the browser to call; keep Anthropic and database credentials server-side. |
-| 10 | [#12 Build the natural-language question web frontend](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) | P1 | Done | Build the user-facing question form and answer view, including loading, validation, and error states. |
-| 11 | [#13 Test web question frontend and accessibility](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) | P1 | Todo | Test the browser experience, API integration, keyboard interaction, focus, and accessibility announcements. |
-
-### What each task teaches
-
-1. **Persist records — Python, psycopg, PostgreSQL.** Follow one Discogs response into the database. Separate API response mapping from SQL, respect foreign-key order, and use `INSERT ... ON CONFLICT` so rerunning ingestion updates records instead of duplicating them.
-2. **Test ingestion — unittest/pytest, mocks, PostgreSQL.** Test the mapping and failure paths without making live Discogs requests. Use a disposable test database for SQL behavior; never point tests at valuable local data.
-3. **Capture snapshots — Discogs REST API, Python, PostgreSQL.** Use the relevant release and marketplace/community endpoints, map only available fields, and use the schema's `(release_id, snapshot_date)` uniqueness to make a daily run repeatable.
-4. **Build the pipeline command — Python CLI.** Compose existing small functions rather than putting the whole workflow in one function: list label releases, fetch details, write catalogue data, then write snapshots. Surface API and database errors instead of hiding them.
-5. **Schedule daily ingestion — scheduler, Docker, logs.** Reuse the same ingestion command on a schedule. Make failures visible and retries safe; scheduling is separate from the pipeline so local development remains simple.
-6. **Add safe query tools — PostgreSQL permissions, parameterized SQL.** Give the question feature a read-only database role. Implement narrowly scoped functions with parameters and bounded results; do not execute SQL text supplied by a user or generated by a model.
-7. **Connect Anthropic — Anthropic Messages API, tool use.** Send the question and descriptions of the approved tools. When the model requests a tool, validate its input, call the matching Python function, return the result to the model, and produce a data-grounded answer. Keep the API key in an environment variable.
-8. **Test the question service — Python tests, mocks.** Mock Anthropic responses and database tools. Confirm unsupported questions and failures are handled clearly, tool arguments are validated, results are bounded, and generated text cannot change database data.
-9. **Expose the question service — Python HTTP API.** Accept a validated question and return a clear JSON response. Keep API keys on the server and return safe, useful error responses.
-10. **Build the frontend — HTML, CSS, and JavaScript.** Create the browser form, example questions, answer display, and loading/error states. Use `fetch` to call the Python API; the browser never connects directly to PostgreSQL or Anthropic.
-11. **Test the frontend — browser and accessibility checks.** Verify submission and response states against a mocked API, then test keyboard use, accessible labels, focus, and screen-reader status announcements.
-
-## What's already implemented
-
-- PostgreSQL schema for labels, artists, releases, release/artist relationships, and daily price and demand snapshots.
-- Docker Compose configuration for PostgreSQL 16; the schema initializes on first database creation.
-- Discogs client functions for fetching a release and paginating through a label's release summaries.
-- Saving one release to PostgreSQL: its label, artists and the release itself, written in one transaction with repeatable upserts (`python -m ingestion.save_release <id>`).
-- A daily price and demand snapshot per release: lowest price (always in EUR) and copies for sale, plus want, have and rating, one row per release per UTC day (`python -m ingestion.save_snapshot <id>`).
-- Ingesting a whole label: every vinyl release on it and today's snapshot of each, with paced requests, retries for temporary Discogs errors, timestamped progress and a summary of any failures (`python -m ingestion.ingest_label <label_id>`).
-- A read-only database login for the question feature, and five validated, capped query tools in `queries/tools.py`: `search_releases`, `rank_releases`, `release_history`, `market_changes` and `compare_labels` (see [Query the data read-only](#query-the-data-read-only)).
-- Automated tests for the Discogs client, the mapping, saving releases and snapshots to PostgreSQL, the commands, the reader login and the query tools, run by GitHub Actions on every pull request (see [Run the tests](#run-the-tests)). Diagrams of the whole system, the task map and the problems solved so far are in [docs/architecture.md](docs/architecture.md).
-
-- A question service: Claude Haiku 5.5 picks among the five query tools, our code runs them through the read-only login, and the answer comes back with the rows it is based on (see [Ask a question](#ask-a-question)).
-
-- A web API (`POST /api/questions`) in front of the question service, with a human check, limits per visitor, per account and for the whole site, and JSON errors (see [Run the web API](#run-the-web-api)).
-- Sign-up with an email address and a password, confirmed by a link in an email, for a larger quota; accounts can be deleted (see [Signing up](#signing-up)).
-- A question box for adnsaudio.com: one JavaScript module and one stylesheet in [`widget/`](widget) (see [Add the question box to a page](#add-the-question-box-to-a-page)).
-
-- A nightly update of every tracked label, with a record of each run and a log of any problems (see [Update the data every night](#update-the-data-every-night)). Prices are fetched every night; want, have and ratings once a week per release.
-
-- Everything ready to run on a server: the database, the API behind HTTPS, the nightly update, nightly backups copied off the server, and one deploy command (see [Run it on a server](#run-it-on-a-server)).
+The [architecture page](docs/architecture.md) has diagrams of the whole system, every task from the first table to the live site, and the problems met on the way with how they were solved.
 
 ## Requirements
 
@@ -92,7 +56,7 @@ The tasks below are ordered so each step builds on working code from the previou
 - A [Discogs personal access token](https://www.discogs.com/settings/developers)
 - An [Anthropic API key](https://console.anthropic.com/) for the natural-language question feature
 
-## Set up the current project
+## Set it up locally
 
 From the repository root, create a `.env` file. Compose and the Python client read these values:
 
