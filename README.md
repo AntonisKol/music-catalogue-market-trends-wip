@@ -220,6 +220,7 @@ python -m ingestion.nightly
 ```
 
 - **It never overlaps.** It takes the same lock as `ingest_label`, so it never runs alongside another ingestion run.
+- **It remembers what it doesn't need.** A release that turned out not to be vinyl, or only credited to the label (for example as its studio), is skipped on later nights without asking Discogs. Each is checked again after 28 to 34 days, so a release Discogs corrects is picked up. This saves about 2,100 requests, roughly 40 minutes, a night.
 - **One label's problem doesn't stop the rest.** The others are still updated, and the command exits with status 1.
 - **Everything is recorded.** Each run, and each label within it, goes into `ingestion_runs` and `ingestion_run_labels`. Progress goes to `logs/nightly.log`, rotated at 5 MB with 10 kept.
 - **A run's status is about that run.** It is `failed` only for its own problems: a label list that could not be fetched, releases that failed, or a lost database connection. If no run at all started in the 36 hours before, the run adds a separate warning that nights were missed; `python -m ingestion.runs` shows it under the run.
