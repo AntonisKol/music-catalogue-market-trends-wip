@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS demand_snapshots (
     rating_average NUMERIC(3, 2),
     UNIQUE (release_id, snapshot_date)
 );
--- The labels the nightly run updates. added_by says whether the owner added one or approved a visitor's request.
+-- The labels the nightly run updates. added_by says whether the owner added one, approved a visitor's
+-- request ('request') or ingestion/grow_labels.py added it ('nightly').
 -- label_id is the Discogs label id; the labels row itself appears once the label is ingested.
 CREATE TABLE IF NOT EXISTS tracked_labels (
     label_id INT PRIMARY KEY,
@@ -57,6 +58,17 @@ CREATE TABLE IF NOT EXISTS tracked_labels (
     added_by TEXT NOT NULL DEFAULT 'site',
     added_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     active BOOLEAN NOT NULL DEFAULT true
+);
+-- Every label ingestion/grow_labels.py looked at, under the name Discogs' search gives it,
+-- with what it found and why the label was added or left out.
+CREATE TABLE IF NOT EXISTS label_candidates (
+    name TEXT PRIMARY KEY,
+    label_id INT,
+    vinyl INT,
+    techno INT,
+    verdict TEXT NOT NULL CHECK (verdict IN ('added', 'not_techno', 'too_big', 'not_found', 'tracked',
+                                             'rejected', 'no_room')),
+    checked_at TIMESTAMPTZ NOT NULL
 );
 
 -- One row per nightly run, and one per label within it.
