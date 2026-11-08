@@ -249,6 +249,18 @@ def test_only_allowed_origins_may_call_from_the_browser(client, monkeypatch):
     assert "Access-Control-Allow-Origin" not in other.headers
 
 
+def test_the_page_may_read_how_long_to_wait(client, monkeypatch):
+    # Without this, a browser on another origin hides Retry-After from the page.
+    monkeypatch.setattr(config, "ALLOWED_ORIGINS", ["https://adnsaudio.com"])
+    monkeypatch.setattr(config, "QUESTIONS_PER_VISITOR_HOUR", 1)
+
+    ask(client, headers={"Origin": "https://adnsaudio.com"})
+    refused = ask(client, headers={"Origin": "https://adnsaudio.com"})
+
+    assert refused.status_code == 429 and refused.headers["Retry-After"]
+    assert refused.headers["Access-Control-Expose-Headers"] == "Retry-After"
+
+
 def test_responses_are_never_cached_or_sniffed(client):
     response = ask(client)
 

@@ -5,7 +5,7 @@ How the project fits together, what each part is made of, and how it was built s
 - **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
 - **Developers:** every box names its code file, and the components table goes into detail.
 
-*Last updated: 7 November 2026, after going live and removing the decisions log. 452 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
+*Last updated: 8 November 2026, after the question box got browser tests. 489 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
 
 **How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
 
@@ -127,7 +127,7 @@ flowchart TD
     S8["Step 8, issue 9: Test the AI service<br/>Code: tests/test_questions.py, test_verify.py,<br/>test_live_answers.py<br/>How: faked AI for guardrails, a free figure check<br/>on every answer, a live test with an AI judge<br/>Achieved: wrong figures flagged to visitors,<br/>tool choice, limits, errors and read-only<br/>access proven, real answers checked before releases"]
     S9["Step 9, issue 8: Web API<br/>Code: web/, create_limits_role.py<br/>How: Flask, Cloudflare Turnstile, limits per<br/>visitor and site in a PostgreSQL table<br/>Achieved: one endpoint for the page, bots and<br/>heavy use stopped before the AI, JSON errors,<br/>no secrets or usage sent to the browser"]
     S10["Step 10, issue 12: Question box<br/>Code: widget/<br/>How: plain HTML, CSS and JavaScript,<br/>no build step, the site's own colours and fonts<br/>Achieved: example questions, loading, answer and<br/>error states, no double submits, model named,<br/>data one click away, nothing in an answer runs;<br/>live on adnsaudio.com/market-trends/"]
-    S11["Step 11, issue 13: Test the web page<br/>How: browser tests against a faked API,<br/>plus one end-to-end check<br/>Will achieve: keyboard, labels, focus and<br/>screen-reader announcements verified"]
+    S11["Step 11, issue 13: Test the web page<br/>Code: tests/test_question_box.py<br/>How: Playwright and Chromium against a faked API,<br/>an axe audit, one end-to-end check with the real API<br/>Achieved: keyboard, labels, focus and<br/>screen-reader announcements verified on every<br/>pull request"]
     F19["Issue 19: CI runs all tests<br/>Code: .github/workflows/tests.yml<br/>How: GitHub Actions on Python 3.10 and 3.13,<br/>Testcontainers PostgreSQL, CI=true,<br/>actions pinned to exact commits<br/>Achieved: no pull request merges into<br/>main unless all tests pass"]
     F24["Issue 24: Tracked techno shops<br/>How: chosen shops' Discogs inventories,<br/>city recorded by us, a sixth query tool<br/>Will achieve: questions by seller city,<br/>such as records sold from Berlin"]
     F27["Issue 27: Fixes from a code review<br/>Code: pipeline.py, ingest_label.py, tools.py<br/>How: one run at a time, credit-only and<br/>deleted releases handled, vinyl-only answers<br/>Achieved: the code does what the docs promise"]
@@ -167,8 +167,7 @@ flowchart TD
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
-    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,F27,F19,F41,F38,F44,F48,F55 built
-    class S11 planned
+    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,F27,F19,F41,F38,F44,F48,F55 built
     class F24,F18 support
 ```
 
@@ -185,7 +184,7 @@ flowchart TD
 | 8 | [9](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) Test AI | Built | Guardrails proven with a faked AI; figures checked on every answer; a live before-release test with an AI judge | pytest, httpx MockTransport, Claude Opus 5.5 as judge |
 | 9 | [8](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) Web API | Built | One endpoint for the page; a human check and limits per visitor and for the site before any AI call | Flask, gunicorn, Cloudflare Turnstile, PostgreSQL |
 | 10 | [12](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) Question box | Built | The question box for adnsaudio.com, checked in a real browser | HTML, CSS, JavaScript, Cloudflare Turnstile |
-| 11 | [13](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) Test page | Planned | Keyboard, focus and screen-reader checks | browser tests |
+| 11 | [13](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) Test page | Built | The question box tested in a browser on every pull request: answers, errors, the account form, keyboard, labels, focus, screen-reader announcements and an accessibility audit | Playwright, Chromium, axe |
 | – | [27](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/27) Review fixes | Built | Malformed data, deleted and credit-only releases handled; one run at a time; vinyl-only answers | Python, PostgreSQL advisory lock |
 | – | [38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38), [49](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/49) Sign-up | Built | Anyone can sign up with an email and a password, confirm by email and return to the page with a Verified badge; quotas per account; account deletion | Flask, PostgreSQL, Resend |
 | – | [41](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/41) Weekly details | Built | Prices every night, want/have/ratings once a week per release, spread over the week; about half the requests a night | Python, PostgreSQL |
@@ -421,7 +420,7 @@ Later visits use `POST /api/sign-in` with the password. A forgotten password tak
 | Label pipeline | [`ingestion/pipeline.py`](../ingestion/pipeline.py), [`ingest_label.py`](../ingestion/ingest_label.py) | Python CLI, logging | Ingests every vinyl release of a label | One run at a time (advisory lock); duplicates dropped; credit-only releases skipped; deleted releases listed as gone; failures, malformed data included, listed and exit 1; commit per release; stops if the label list cannot be fetched or the database connection is lost |
 | Reader login | [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) | PostgreSQL roles | Creates the SELECT-only login | Read-only sessions and a 5 s limit set on the role; future tables readable, never writable; no temporary tables |
 | Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped; vinyl only; timeouts reported as a readable reason |
-| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers | 452 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock; a `--live` before-release test with the real Claude and an AI judge | Database tests skip without Docker on a laptop, fail in CI; live tests never run without `--live` |
+| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers, Playwright, axe | 489 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock, the question box in Chromium; a `--live` before-release test with the real Claude and an AI judge | Database and browser tests skip on a laptop without Docker or Chromium, fail in CI; live tests never run without `--live` |
 | Question service | [`queries/questions.py`](../queries/questions.py) | Anthropic SDK tool runner, Claude Haiku 5.5 | Sends the question and tool descriptions to Claude, runs the tools it asks for, returns the answer with its sources | Claude never sees SQL or the database; refused arguments go back as errors; a database failure stops the run; every error becomes a visitor-safe `QuestionError`; instructions and tools cached |
 | Web API | [`web/app.py`](../web/app.py), [`limits.py`](../web/limits.py), [`captcha.py`](../web/captcha.py), [`create_limits_role.py`](../ingestion/create_limits_role.py) | Flask, gunicorn, Cloudflare Turnstile | `POST /api/questions`: checks the request, the human check and the limits, then asks the question service | Fails closed; limits counted in one transaction by a login that can only touch its four tables; visitors stored as a keyed hash, deleted after two days; forwarded addresses trusted only behind a configured proxy; usage never sent; 8 KB body limit; CORS only for listed origins; the access log holds a keyed hash, never the address, and visitors can't fake a line in it; logs limited in size |
 | Sign-up | [`web/accounts.py`](../web/accounts.py), [`mailer.py`](../web/mailer.py) | PostgreSQL, Resend | Sign-up, confirmation and new-password links, password sign-in, sessions, sign-out and account deletion | Passwords stored as salted scrypt hashes; tokens are 32 random bytes, stored only as hashes; links work once; opening a link uses nothing; unconfirmed accounts can't sign in and are deleted after 7 days; known throwaway services are refused at sign-up; forms checked against a `SameSite=Strict` cookie; session cookie `HttpOnly`, `Secure`, `SameSite=Strict`; the same answer for known and unknown addresses; tries and emails limited per address and visitor |
@@ -509,6 +508,7 @@ The same routine has been used on every task:
 | 12 | Titles in an answer showed with asterisks around them | The box handled `**bold**` but not `*italic*` | Italics are shown as italics; a lone asterisk stays as it is |
 | 49 | Browsers didn't offer to save the password | The box signs in without loading a new page, and the address field wasn't marked as the account's username | The field is marked, and the box asks the browser to save the password where it can |
 | 49 | A saved password wasn't filled in on the next visit | The form opened on sign-up, whose password field is for a new password, and it appears only after a click, so the browser doesn't fill it by itself | The box remembers in the browser that the visitor has an account, opens on sign-in, and asks the browser for the saved password |
+| 13 | The live box never said when a visitor could ask again | The page and the API are on different origins, and browsers hide `Retry-After` from the page unless the API names it | The API names it in `Access-Control-Expose-Headers`; a browser test against the real API checks the message |
 
 ---
 
