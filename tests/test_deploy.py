@@ -27,6 +27,16 @@ def test_the_database_gets_only_its_own_settings():
     assert set(db["environment"]) == {"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"}
 
 
+def test_the_api_gets_only_credentials_it_needs_at_runtime():
+    api = SERVICES["api"]
+    assert "env_file" not in api
+    environment = api["environment"]
+    assert {"POSTGRES_READER_USER", "POSTGRES_READER_PASSWORD", "POSTGRES_LIMITS_USER",
+            "POSTGRES_LIMITS_PASSWORD", "ANTHROPIC_API_KEY", "TURNSTILE_SECRET_KEY",
+            "VISITOR_HASH_SECRET", "RESEND_API_KEY", "LABEL_REQUEST_NOTIFICATION_EMAIL"} <= set(environment)
+    assert not {"DISCOGS_TOKEN", "POSTGRES_USER", "POSTGRES_PASSWORD"} & set(environment)
+
+
 def test_the_api_trusts_exactly_one_proxy_and_reaches_the_database_by_name():
     environment = SERVICES["api"]["environment"]
     assert environment["TRUSTED_PROXIES"] == "1"
@@ -107,7 +117,8 @@ def test_the_server_never_logs_addresses_and_limits_its_logs():
 def test_the_server_settings_template_lists_the_sign_up_settings():
     names = {line.split("=", 1)[0] for line in (ROOT / "deploy" / "server.env.example").read_text().splitlines()
              if "=" in line and not line.startswith("#")}
-    assert {"RESEND_API_KEY", "PUBLIC_API_URL", "SIGN_IN_RETURN_URL", "SIGN_IN_EMAIL_FROM"} <= names
+    assert {"RESEND_API_KEY", "PUBLIC_API_URL", "SIGN_IN_RETURN_URL", "SIGN_IN_EMAIL_FROM",
+            "LABEL_REQUEST_NOTIFICATION_EMAIL"} <= names
 
 
 def test_the_page_goes_to_the_website_through_a_pull_request():

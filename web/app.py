@@ -545,17 +545,36 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
                 account = accounts.session_account(conn, session_token(), now())
                 if not account:
                     return error("not_signed_in", "Sign in to request a label.", 401)
-                try:
-                    known = label_requests.tracked_match(name, list_labels())
-                except psycopg.Error:
-                    known = None
+                known = label_requests.tracked_match(name, list_labels())
                 if known:
                     return jsonify({"status": "tracked", "message": f"{known} is already tracked. You can ask about it now."})
-                new = label_requests.request_label(conn, account[0], name, now())
+                request_id, stored_name, new, notified = label_requests.request_label(conn, account[0], name, now())
         except limits.LimitReached as reached:
             return error(reached.code, str(reached), 429, reached.retry_after)
         except psycopg.Error as problem:
             return database_down(problem)
+        if not notified:
+            try:
+                mail.send_label_request_notification(stored_name, request_id)
+            except mailer.MailUnavailable as problem:
+                log.error("Label request %s was saved but the reviewer notification failed: %s", request_id, problem)
+                return error(
+                    "notification_unavailable",
+                    "Your request was saved, but we could not notify the reviewer. You do not need to submit it again.",
+                    503, 60,
+                )
+            try:
+                with connect_limits() as conn:
+                    label_requests.mark_notification_sent(conn, request_id, now())
+            except psycopg.Error as problem:
+                log.error("Label request %s was emailed but its notification status could not be saved: %s",
+                          request_id, problem)
+                return error(
+                    "notification_unavailable",
+                    "Your request was saved and emailed, but its delivery status could not be recorded. "
+                    "You do not need to submit it again.",
+                    503, 60,
+                )
         if not new:
             return jsonify({"status": "requested", "message": f"You have already asked for {name}."})
         response = jsonify({"status": "requested",

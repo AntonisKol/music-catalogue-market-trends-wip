@@ -17,18 +17,29 @@ import requests
 
 from ingestion import database, discogs_client
 from ingestion.track_labels import add_label
+from web import label_requests as request_logic, mailer
 
-USAGE = ("Usage: python -m ingestion.label_requests list | search <request> | "
+USAGE = ("Usage: python -m ingestion.label_requests list | notify | search <request> | "
          "approve <request> <discogs_label_id> | decline <request>")
 
 
 def waiting(conn: psycopg.Connection) -> list:
-    """(first request id, name, how many accounts asked, first asked) per name."""
-    return conn.execute(
-        "SELECT min(id), (array_agg(name ORDER BY id))[1], count(*), min(created_at) FROM label_requests"
-        " WHERE status = 'waiting'"
-        " GROUP BY lower(name) ORDER BY count(*) DESC, min(created_at)"
+    """(first request id, name, accounts asked, first asked) per equivalent name."""
+    grouped = {}
+    rows = conn.execute(
+        "SELECT id, name, account_id, created_at FROM label_requests WHERE status = 'waiting' ORDER BY id"
     ).fetchall()
+    for request_id, name, account_id, created_at in rows:
+        key = request_logic.comparable(name)
+        if key not in grouped:
+            grouped[key] = [request_id, name, set(), created_at]
+        group = grouped[key]
+        group[2].add(account_id)
+        group[3] = min(group[3], created_at)
+    return sorted(
+        [(request_id, name, len(accounts), first) for request_id, name, accounts, first in grouped.values()],
+        key=lambda row: (-row[2], row[3]),
+    )
 
 
 def request_name(conn: psycopg.Connection, request_id: int):
@@ -37,18 +48,48 @@ def request_name(conn: psycopg.Connection, request_id: int):
 
 
 def decide(conn: psycopg.Connection, name: str, status: str, label_id: int = None, now: datetime = None) -> int:
-    """Mark every waiting request for this name; returns how many."""
+    """Mark every waiting request for an equivalent name; returns how many."""
     with conn.transaction():
+        rows = conn.execute("SELECT id, name FROM label_requests WHERE status = 'waiting'").fetchall()
+        ids = [request_id for request_id, candidate in rows
+               if request_logic.comparable(candidate) == request_logic.comparable(name)]
+        if not ids:
+            return 0
         return conn.execute(
             "UPDATE label_requests SET status = %s, label_id = %s, decided_at = %s"
-            " WHERE lower(name) = lower(%s) AND status = 'waiting'",
-            (status, label_id, now or datetime.now(timezone.utc), name),
+            " WHERE id = ANY(%s)",
+            (status, label_id, now or datetime.now(timezone.utc), ids),
         ).rowcount
+
+
+def notify_pending(conn: psycopg.Connection) -> tuple[int, int]:
+    """Send queued request notifications; leave failed deliveries pending for retry."""
+    rows = conn.execute(
+        "SELECT id, name FROM label_requests"
+        " WHERE status = 'waiting' AND notification_sent_at IS NULL ORDER BY id"
+    ).fetchall()
+    sent = failed = 0
+    for request_id, name in rows:
+        try:
+            mailer.send_label_request_notification(name, request_id)
+        except mailer.MailUnavailable as error:
+            print(f"Request {request_id}: notification failed: {error}", file=sys.stderr)
+            failed += 1
+            continue
+        with conn.transaction():
+            conn.execute(
+                "UPDATE label_requests SET notification_sent_at = %s"
+                " WHERE id = %s AND notification_sent_at IS NULL",
+                (datetime.now(timezone.utc), request_id),
+            )
+        print(f"Notified the reviewer about request {request_id}: {name}.")
+        sent += 1
+    return sent, failed
 
 
 def main(argv: list) -> int:
     command = argv[0] if argv else ""
-    shapes = {"list": 0, "search": 1, "decline": 1, "approve": 2}
+    shapes = {"list": 0, "notify": 0, "search": 1, "decline": 1, "approve": 2}
     if command not in shapes or len(argv) - 1 != shapes[command] or not all(a.isdigit() for a in argv[1:]):
         print(USAGE, file=sys.stderr)
         return 2
@@ -61,6 +102,10 @@ def main(argv: list) -> int:
                 for request_id, name, accounts, first in rows:
                     print(f"{request_id:>6}  {name}  ({accounts} {'account' if accounts == 1 else 'accounts'}, since {first:%Y-%m-%d})")
                 return 0
+            if command == "notify":
+                sent, failed = notify_pending(conn)
+                print(f"Sent {sent} notification(s); {failed} still pending.")
+                return 1 if failed else 0
             name = request_name(conn, int(argv[1]))
             if name is None:
                 print(f"There is no request {argv[1]}.", file=sys.stderr)
