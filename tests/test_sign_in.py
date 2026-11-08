@@ -258,6 +258,32 @@ def test_every_email_goes_through_resend_with_the_logo(monkeypatch, send):
 
 
 @responses.activate
+def test_the_reviewer_email_lists_the_matches_and_the_commands(monkeypatch):
+    monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
+    responses.add(responses.POST, mailer.RESEND_URL, json={"id": "x"})
+
+    mailer.send_label_request("reviewer@example.com", 3, "Polegroup", 2, [(21250, "Pole Recordings", 226)])
+
+    body = json.loads(responses.calls[0].request.body)
+    assert body["to"] == ["reviewer@example.com"] and body["subject"] == "Label request: Polegroup"
+    assert "21250  Pole Recordings  (226 entries)  https://www.discogs.com/label/21250" in body["text"]
+    assert "2 people have asked for it." in body["text"]
+    assert "sh scripts/label-requests approve 3 <discogs id or link>" in body["text"]
+
+
+@responses.activate
+def test_the_rejection_email_carries_the_reason_as_text_only(monkeypatch):
+    monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
+    responses.add(responses.POST, mailer.RESEND_URL, json={"id": "x"})
+
+    mailer.send_label_rejected(EMAIL, "Wax", "Not <b>techno</b>.")
+
+    body = json.loads(responses.calls[0].request.body)
+    assert body["to"] == [EMAIL] and "Not <b>techno</b>." in body["text"]
+    assert "<b>techno</b>" not in body["html"] and "&lt;b&gt;techno&lt;/b&gt;" in body["html"]
+
+
+@responses.activate
 @pytest.mark.parametrize("reply", [
     {"status": 403, "json": {"message": "secret detail"}},
     {"body": requests.ConnectionError("down")},

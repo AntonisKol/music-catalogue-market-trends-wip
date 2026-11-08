@@ -95,3 +95,32 @@ def send_already_registered(email: str) -> None:
     note = "If it was you, sign in on the Market Trends page; \"Forgot your password?\" is there too. If it wasn't, ignore this email."
     send(email, "You already have a Market Trends account", f"{lead}\n\n{note}\n\n{config.SIGN_IN_RETURN_URL}\n",
          html_message(title, [lead, note], ("Go to Market Trends", config.SIGN_IN_RETURN_URL)), config.SIGN_IN_RETURN_URL)
+
+
+def send_label_request(reviewer: str, request_id: int, name: str, accounts: int, matches: list) -> None:
+    """Tell the reviewer about a new request. matches: [(discogs id, name, entries)], best first."""
+    asked = f"{accounts} {'person has' if accounts == 1 else 'people have'} asked for it."
+    if matches:
+        found = [f"{label_id}  {title}  ({entries} entries)  https://www.discogs.com/label/{label_id}"
+                 for label_id, title, entries in matches]
+    else:
+        found = ["Discogs found no match, or could not be reached. Find the label on discogs.com: "
+                 "its id is the number in the address."]
+    commands = [f"sh scripts/label-requests review {request_id}",
+                f"sh scripts/label-requests approve {request_id} <discogs id or link>",
+                f'sh scripts/label-requests reject {request_id} "the reason"']
+    lead = f"A visitor asked Market Trends to track {name!r} (request {request_id}). {asked}"
+    text = "\n".join([lead, "", "Labels on Discogs with that name:", *found, "", "To decide, from the project folder:",
+                      *commands, ""])
+    send(reviewer, f"Label request: {name}", text,
+         html_message(f"Label request: {name}", [lead, "Labels on Discogs with that name:", *found,
+                                                 "To decide, from the project folder:", *commands]))
+
+
+def send_label_rejected(email: str, name: str, reason: str) -> None:
+    lead = f"Thanks for asking Market Trends to track {name}. We won't add it, for this reason:"
+    note = "You can ask about the labels we do track on the Market Trends page."
+    send(email, f"About your request for {name}", f"{lead}\n\n{reason}\n\n{note}\n\n{config.SIGN_IN_RETURN_URL}\n",
+         html_message(f"About your request for {name}", [lead, reason, note],
+                      ("Go to Market Trends", config.SIGN_IN_RETURN_URL)),
+         config.SIGN_IN_RETURN_URL)

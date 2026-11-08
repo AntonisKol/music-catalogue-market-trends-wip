@@ -159,3 +159,16 @@ def test_ingestion_commands_run_in_the_admin_container(script):
     text = (ROOT / "deploy" / script).read_text()
     assert "run --rm -T admin python -m ingestion." in text
     assert "run --rm -T api python -m ingestion." not in text
+
+
+def test_new_label_requests_are_emailed_from_the_admin_container_every_15_minutes():
+    crontab = (ROOT / "deploy" / "crontab").read_text()
+    assert "*/15 * * * *" in crontab and "run --rm -T admin python -m ingestion.label_requests notify" in crontab
+
+
+def test_the_review_script_only_imports_after_an_approval_went_through():
+    script = (ROOT / "scripts" / "label-requests").read_text()
+    assert script.index('[ "$status" -eq 0 ] || exit "$status"') < script.index("python -m ingestion.ingest_label")
+    assert "*[!0-9]*" in script
+    # approve <request> <label>: the label, not the request number, is imported.
+    assert 'printf \'%s\' "$3"' in script

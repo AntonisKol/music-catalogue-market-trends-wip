@@ -42,31 +42,34 @@ def tracked_match(name: str, tracked: list):
 
 
 def request_label(conn: psycopg.Connection, account_id: int, name: str, now: datetime) -> bool:
-    """Store a request. False if this account already asked for this name, which costs
-    nothing; otherwise one request is counted, and LimitReached raised past the limits."""
+    """Store a request, and count it against the limits, in one transaction.
+
+    False when this account already asked for the same label under an equivalent
+    name ("Polegroup", "polegroup records"), which costs nothing. The account's row
+    is locked first, so two requests sent at once can't both be counted.
+    """
     with conn.transaction():
-        asked = conn.execute("SELECT 1 FROM label_requests WHERE account_id = %s AND lower(name) = lower(%s)",
-                             (account_id, name)).fetchone()
-    if asked:
-        return False
-    limits.take(conn, now, [
-        (f"label-request:account:{account_id}", "day", PER_ACCOUNT_DAY, "request_limit_reached",
-         f"You can request {PER_ACCOUNT_DAY} labels a day. Please try again tomorrow."),
-        ("label-request:site", "day", PER_SITE_DAY, "request_limit_reached",
-         "The site has had a lot of label requests today. Please try again tomorrow."),
-    ])
-    with conn.transaction():
-        conn.execute(
-            "INSERT INTO label_requests (account_id, name, created_at) VALUES (%s, %s, %s)"
-            " ON CONFLICT DO NOTHING",
-            (account_id, name, now),
-        )
+        conn.execute("SELECT 1 FROM accounts WHERE id = %s FOR UPDATE", (account_id,))
+        asked = conn.execute("SELECT name FROM label_requests WHERE account_id = %s", (account_id,)).fetchall()
+        if any(comparable(earlier) == comparable(name) for (earlier,) in asked):
+            return False
+        limits.take(conn, now, [
+            (f"label-request:account:{account_id}", "day", PER_ACCOUNT_DAY, "request_limit_reached",
+             f"You can request {PER_ACCOUNT_DAY} labels a day. Please try again tomorrow."),
+            ("label-request:site", "day", PER_SITE_DAY, "request_limit_reached",
+             "The site has had a lot of label requests today. Please try again tomorrow."),
+        ])
+        conn.execute("INSERT INTO label_requests (account_id, name, created_at) VALUES (%s, %s, %s)",
+                     (account_id, name, now))
     return True
 
 
 def requests_of(conn: psycopg.Connection, account_id: int) -> list:
-    """This account's requests, newest first: [{"name", "status"}]."""
+    """This account's requests, newest first: [{"name", "status", "reason"}]. Only a
+    rejection has a reason: the owner's answer."""
     with conn.transaction():
-        rows = conn.execute("SELECT name, status FROM label_requests WHERE account_id = %s ORDER BY created_at DESC, id DESC",
-                            (account_id,)).fetchall()
-    return [{"name": name, "status": status} for name, status in rows]
+        rows = conn.execute(
+            "SELECT name, status, reason FROM label_requests WHERE account_id = %s ORDER BY created_at DESC, id DESC",
+            (account_id,),
+        ).fetchall()
+    return [{"name": name, "status": status, "reason": reason} for name, status, reason in rows]

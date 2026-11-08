@@ -545,10 +545,9 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
                 account = accounts.session_account(conn, session_token(), now())
                 if not account:
                     return error("not_signed_in", "Sign in to request a label.", 401)
-                try:
-                    known = label_requests.tracked_match(name, list_labels())
-                except psycopg.Error:
-                    known = None
+                # Read in full, or the request is refused: a failed read must not let a tracked
+                # label be requested again.
+                known = label_requests.tracked_match(name, list_labels())
                 if known:
                     return jsonify({"status": "tracked", "message": f"{known} is already tracked. You can ask about it now."})
                 new = label_requests.request_label(conn, account[0], name, now())

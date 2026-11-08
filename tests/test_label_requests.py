@@ -1,8 +1,10 @@
-"""Label requests (issue 37): signed-in visitors ask for labels, the owner decides.
+"""Label requests: signed-in visitors ask for labels, the owner reviews and decides.
 
 The web API never calls Discogs; the owner's command does, and Discogs is faked
-here with responses. Everything else runs against the real test database.
+here with responses. Emails are kept by a fake sender. Everything else runs
+against the real test database.
 """
+import psycopg
 import pytest
 import responses
 
@@ -12,6 +14,11 @@ from tests.test_sign_in import NOON, Clock, Fakes, ask, clock, client, fakes, si
 from web import accounts, config, label_requests
 
 DISCOGS = discogs_client.BASE_URL
+
+
+@pytest.fixture(autouse=True)
+def tracked_labels_readable(reader):
+    """The API reads the tracked labels before storing a request, from the test database."""
 
 
 def request_label(client, name="Orbe Records"):
@@ -58,7 +65,7 @@ def test_a_request_is_stored_for_the_owner_and_listed_for_the_visitor(client, fa
 
     assert response.status_code == 201
     assert "waiting for review" in response.get_json()["message"]
-    assert client.get("/api/label-requests").get_json() == {"requests": [{"name": "Orbe Records", "status": "waiting"}]}
+    assert client.get("/api/label-requests").get_json() == {"requests": [{"name": "Orbe Records", "status": "waiting", "reason": None}]}
     db.commit()
     assert db.execute("SELECT name, status, label_id FROM label_requests").fetchall() == [("Orbe Records", "waiting", None)]
 
@@ -135,68 +142,192 @@ def test_a_visitor_sees_only_their_own_requests(client, fakes):
     assert client.get("/api/label-requests").get_json() == {"requests": []}
 
 
+def test_an_equivalent_name_counts_as_the_same_request(client, fakes, db):
+    sign_in(client, fakes)
+    request_label(client, "Polegroup")
+
+    again = request_label(client, "polegroup records")
+
+    assert again.status_code == 200 and "already asked" in again.get_json()["message"]
+    db.commit()
+    assert db.execute("SELECT count(*) FROM label_requests").fetchone() == (1,)
+
+
+def test_a_request_is_refused_when_the_tracked_labels_cannot_be_read(fakes, clock, limits_db, monkeypatch, db):
+    from web.app import create_app
+    from tests.test_sign_in import sign_in as signed_in
+
+    def broken():
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
+    monkeypatch.setattr(config, "COOKIE_SECURE", False)
+    app = create_app(answer=fakes.answer, verify_captcha=fakes.verify, mail=fakes, now=clock, list_labels=broken)
+    client = app.test_client()
+    signed_in(client, fakes)
+
+    response = request_label(client, "Arts")
+
+    assert response.status_code == 503 and response.get_json()["error"]["code"] == "database"
+    db.commit()
+    assert db.execute("SELECT count(*) FROM label_requests").fetchone() == (0,)
+
+
+def test_a_rejected_request_shows_the_owners_reason(client, fakes, db):
+    sign_in(client, fakes)
+    request_label(client, "Arts")
+    db.execute("UPDATE label_requests SET status = 'rejected', reason = 'Not a techno label.'")
+    db.commit()
+
+    assert client.get("/api/label-requests").get_json() == {
+        "requests": [{"name": "Arts", "status": "rejected", "reason": "Not a techno label."}]}
+
+
 # --- The owner's command -------------------------------------------------------------
 
 @pytest.fixture
 def waiting_requests(db, limits_db):
-    """Two accounts asked for Orbe Records, one for Arts."""
-    now = NOON
+    """Two accounts asked for Pole Recordings, under different names; one asked for Arts."""
     for email in ("a@example.com", "b@example.com"):
         db.execute("INSERT INTO accounts (email, password_hash, created_at, confirmed_at) VALUES (%s, 'x', %s, %s)",
-                   (email, now, now))
+                   (email, NOON, NOON))
     db.execute("INSERT INTO label_requests (account_id, name, created_at) VALUES"
-               " (1, 'Orbe Records', %s), (2, 'orbe records', %s), (1, 'Arts', %s)", (now, now, now))
+               " (1, 'Polegroup', %s), (2, 'polegroup records', %s), (1, 'Arts', %s)", (NOON, NOON, NOON))
     db.commit()
 
 
 @pytest.fixture
 def owner_db(db, postgres_url, monkeypatch):
     """ingestion.database.connect() pointed at the test database."""
-    import psycopg
     from ingestion import database
     monkeypatch.setattr(database, "connect", lambda: psycopg.connect(postgres_url))
 
 
-def test_the_owner_sees_waiting_requests_by_name(waiting_requests, owner_db, capsys):
+class Outbox:
+    """Emails the command sends, kept instead of sent."""
+
+    def __init__(self):
+        self.sent = []
+        self.fail = False
+
+    def keep(self, kind):
+        def send(*args):
+            if self.fail:
+                raise owner.mailer.MailUnavailable("Resend did not accept the email (status 500)")
+            self.sent.append((kind, *args))
+        return send
+
+
+@pytest.fixture
+def outbox(monkeypatch):
+    box = Outbox()
+    monkeypatch.setattr(owner.mailer, "send_label_request", box.keep("request"))
+    monkeypatch.setattr(owner.mailer, "send_label_rejected", box.keep("rejected"))
+    monkeypatch.setattr(owner.config, "LABEL_REQUEST_EMAIL", "reviewer@example.com")
+    return box
+
+
+def statuses(db):
+    db.rollback()
+    return db.execute("SELECT name, status, label_id, reason FROM label_requests ORDER BY id").fetchall()
+
+
+def discogs_matches():
+    responses.get(f"{DISCOGS}/database/search", json={"results": [{"id": 21250, "title": "Pole Recordings"},
+                                                                 {"id": 922804, "title": "PoleGroup Radio"}]})
+    responses.get(f"{DISCOGS}/labels/21250/releases", json={"pagination": {"items": 226, "pages": 226}, "releases": []})
+    responses.get(f"{DISCOGS}/labels/922804/releases", json={"pagination": {"items": 6, "pages": 6}, "releases": []})
+
+
+def test_the_owner_sees_open_requests_with_equivalent_names_together(waiting_requests, owner_db, capsys):
     assert owner.main(["list"]) == 0
 
     lines = capsys.readouterr().out.splitlines()
-    assert "Orbe Records  (2 accounts" in lines[0] and "Arts  (1 account," in lines[1]
+    assert "Polegroup  (2 accounts, since 2026-11-01)" in lines[0] and "Arts  (1 account," in lines[1]
 
 
 @responses.activate
-def test_searching_shows_matching_labels_with_their_size(waiting_requests, owner_db, capsys):
-    responses.get(f"{DISCOGS}/database/search", json={"results": [{"id": 698526, "title": "Orbe Records"},
-                                                                 {"id": 120424, "title": "Orbe"}]})
-    responses.get(f"{DISCOGS}/labels/698526/releases", json={"pagination": {"items": 26, "pages": 26}, "releases": []})
-    responses.get(f"{DISCOGS}/labels/120424/releases", json={"pagination": {"items": 1171, "pages": 1171}, "releases": []})
+def test_reviewing_shows_discogs_matches_and_tells_the_visitors(waiting_requests, owner_db, db, capsys):
+    discogs_matches()
 
-    assert owner.main(["search", "1"]) == 0
+    assert owner.main(["review", "2"]) == 0
 
     out = capsys.readouterr().out
-    assert "698526  Orbe Records  (26 entries)" in out and "120424  Orbe  (1171 entries)" in out
-    assert responses.calls[0].request.params == {"type": "label", "q": "Orbe Records", "per_page": "5"}
+    assert "21250  Pole Recordings  (226 entries)  https://www.discogs.com/label/21250" in out
+    assert [row[1] for row in statuses(db)] == ["reviewing", "reviewing", "waiting"]
+    owner.main(["list"])
+    assert "being reviewed" in capsys.readouterr().out
 
 
 @responses.activate
-def test_approving_tracks_the_label_and_answers_everyone_who_asked(waiting_requests, owner_db, db, capsys):
-    responses.get(f"{DISCOGS}/labels/698526", json={"id": 698526, "name": "Orbe Records"})
+@pytest.mark.parametrize("label", ["21250", "https://www.discogs.com/label/21250-Pole-Recordings"])
+def test_approving_tracks_the_label_for_everyone_who_asked(waiting_requests, owner_db, db, capsys, label):
+    responses.get(f"{DISCOGS}/labels/21250", json={"id": 21250, "name": "Pole Recordings"})
 
-    assert owner.main(["approve", "1", "698526"]) == 0
+    assert owner.main(["approve", "1", label]) == 0
 
-    assert "Approved 2 request(s) for Orbe Records" in capsys.readouterr().out
-    db.rollback()
-    assert [(row[0], row[1], row[3]) for row in tracked_labels(db)] == [(698526, "Orbe Records", "request")]
-    assert db.execute("SELECT name, status, label_id FROM label_requests ORDER BY id").fetchall() == [
-        ("Orbe Records", "added", 698526), ("orbe records", "added", 698526), ("Arts", "waiting", None)]
+    assert "Approved 2 request(s) for Polegroup" in capsys.readouterr().out
+    assert statuses(db)[:2] == [("Polegroup", "added", 21250, None), ("polegroup records", "added", 21250, None)]
+    assert [(row[0], row[1], row[3]) for row in tracked_labels(db)] == [(21250, "Pole Recordings", "request")]
 
 
-def test_declining_answers_everyone_who_asked_for_that_name(waiting_requests, owner_db, db):
-    assert owner.main(["decline", "3"]) == 0
+def test_rejecting_emails_the_reason_to_everyone_who_asked(waiting_requests, owner_db, db, outbox):
+    assert owner.main(["reject", "2", "Not", "a", "techno", "label."]) == 0
 
-    db.rollback()
-    assert db.execute("SELECT status FROM label_requests WHERE name = 'Arts'").fetchone() == ("declined",)
-    assert db.execute("SELECT count(*) FROM label_requests WHERE status = 'waiting'").fetchone() == (2,)
+    assert statuses(db)[:2] == [("Polegroup", "rejected", None, "Not a techno label."),
+                                ("polegroup records", "rejected", None, "Not a techno label.")]
+    assert sorted(outbox.sent) == [("rejected", "a@example.com", "Polegroup", "Not a techno label."),
+                                   ("rejected", "b@example.com", "polegroup records", "Not a techno label.")]
+    assert db.execute("SELECT count(*) FROM label_requests WHERE visitor_notified_at IS NOT NULL").fetchone() == (2,)
+
+
+def test_a_failed_rejection_email_is_retried_later(waiting_requests, owner_db, db, outbox):
+    outbox.fail = True
+    owner.main(["reject", "3", "Already covered by another label."])
+    assert outbox.sent == []
+
+    outbox.fail = False
+    assert owner.main(["notify"]) == 0
+    owner.main(["notify"])
+
+    assert [mail[:2] for mail in outbox.sent if mail[0] == "rejected"] == [("rejected", "a@example.com")]
+
+
+@pytest.mark.parametrize("reason", ["no", "x" * 501])
+def test_a_rejection_needs_a_real_reason(waiting_requests, owner_db, db, outbox, reason):
+    assert owner.main(["reject", "3", reason]) == 2
+
+    assert statuses(db)[2][1] == "waiting" and outbox.sent == []
+
+
+@responses.activate
+def test_new_requests_are_emailed_to_the_reviewer_once(waiting_requests, owner_db, db, outbox):
+    discogs_matches()
+    responses.get(f"{DISCOGS}/database/search", json={"results": []})
+
+    assert owner.main(["notify"]) == 0
+    owner.main(["notify"])
+
+    reviewer = [mail for mail in outbox.sent if mail[0] == "request"]
+    assert [(m[1], m[2], m[3], m[4]) for m in reviewer] == [
+        ("reviewer@example.com", 1, "Polegroup", 2), ("reviewer@example.com", 3, "Arts", 1)]
+    assert reviewer[0][5] == [(21250, "Pole Recordings", 226), (922804, "PoleGroup Radio", 6)]
+
+
+@responses.activate
+def test_a_request_is_still_emailed_when_discogs_is_down(waiting_requests, owner_db, outbox, capsys):
+    responses.get(f"{DISCOGS}/database/search", status=500)
+
+    owner.main(["notify"])
+
+    assert [(mail[3], mail[5]) for mail in outbox.sent] == [("Polegroup", []), ("Arts", [])]
+
+
+def test_without_a_reviewer_address_nothing_is_emailed(waiting_requests, owner_db, outbox, monkeypatch):
+    monkeypatch.setattr(owner.config, "LABEL_REQUEST_EMAIL", "")
+
+    assert owner.main(["notify"]) == 0
+    assert outbox.sent == []
 
 
 @responses.activate
@@ -206,16 +337,50 @@ def test_a_label_missing_on_discogs_changes_nothing(waiting_requests, owner_db, 
     assert owner.main(["approve", "1", "999999999"]) == 1
 
     assert "not on Discogs" in capsys.readouterr().err
-    db.rollback()
-    assert db.execute("SELECT count(*) FROM label_requests WHERE status = 'waiting'").fetchone() == (3,)
+    assert [row[1] for row in statuses(db)] == ["waiting", "waiting", "waiting"]
 
 
-@pytest.mark.parametrize("argv", [[], ["approve", "1"], ["search"], ["decline", "x"], ["delete", "1"]])
+@pytest.mark.parametrize("text, expected", [("21250", 21250), ("https://www.discogs.com/label/21250-Pole-Recordings", 21250),
+                                            ("https://www.discogs.com/de/label/347-Planet-Rhythm-Records", 347)])
+def test_a_label_can_be_given_by_id_or_link(text, expected):
+    assert owner.discogs_label_id(text) == expected
+
+
+def test_a_link_that_is_not_a_label_is_refused(waiting_requests, owner_db, capsys):
+    assert owner.main(["approve", "1", "https://www.discogs.com/artist/123-Someone"]) == 2
+    assert "not a Discogs label id or link" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("argv", [[], ["approve", "1"], ["review"], ["reject", "1"], ["review", "x"], ["delete", "1"],
+                                  ["list", "1"]])
 def test_wrong_use_shows_how(argv, capsys):
     assert owner.main(argv) == 2
     assert "Usage" in capsys.readouterr().err
 
 
-def test_an_unknown_request_is_reported(waiting_requests, owner_db, capsys):
-    assert owner.main(["decline", "99"]) == 1
-    assert "no request 99" in capsys.readouterr().err
+def test_a_decided_request_cannot_be_decided_again(waiting_requests, owner_db, db, outbox, capsys):
+    owner.main(["reject", "3", "Not a techno label."])
+
+    assert owner.main(["reject", "3", "Another reason."]) == 1
+    assert "not open" in capsys.readouterr().err
+
+
+def test_old_declined_requests_become_rejected(db, limits_role):
+    from ingestion.create_limits_role import create_limits_role
+    from tests.conftest import FAKE_SETTINGS
+
+    db.execute("TRUNCATE label_requests, accounts RESTART IDENTITY CASCADE")
+    db.execute("ALTER TABLE label_requests DROP CONSTRAINT label_requests_status_check")
+    db.execute("INSERT INTO accounts (email, password_hash, created_at) VALUES ('a@example.com', 'x', now())")
+    db.execute("INSERT INTO label_requests (account_id, name, status, created_at) VALUES (1, 'Arts', 'declined', now())")
+    db.commit()
+
+    create_limits_role(db, FAKE_SETTINGS["POSTGRES_LIMITS_USER"], FAKE_SETTINGS["POSTGRES_LIMITS_PASSWORD"])
+    db.commit()
+
+    assert db.execute("SELECT status FROM label_requests").fetchone() == ("rejected",)
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute("UPDATE label_requests SET status = 'declined'")
+    db.rollback()
+    db.execute("TRUNCATE label_requests, accounts RESTART IDENTITY CASCADE")
+    db.commit()
