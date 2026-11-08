@@ -5,13 +5,13 @@ How the project fits together, what each part is made of, and how it was built s
 - **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
 - **Developers:** every box names its code file, and the components table goes into detail.
 
-*Last updated: 8 November 2026, after the question box got browser tests. 489 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
+*Last updated: 8 November 2026, after visitors could request labels. 526 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
 
 **How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
 
 - **Achieved:** the part is built, tested and merged. Green boxes.
 - **Will achieve:** the part is planned. Grey boxes with dashed borders.
-- Orange boxes are supporting work alongside the main steps that is still open: seller locations and documentation. Supporting work that is finished, such as CI, is green.
+- Orange boxes are supporting work alongside the main steps that is still open: documentation. Supporting work that is finished, such as CI, is green.
 
 Steps are numbered as in the README roadmap (step 1 to step 11). Each step is one GitHub issue, whose number is given too.
 
@@ -41,7 +41,7 @@ flowchart TB
     subgraph ING["Ingestion: writes data"]
         SCH["Nightly update, step 5<br/>Code: ingestion/nightly.py, track_labels.py, ops/<br/>How: cron on the server at 03:00 UTC runs<br/>one command for every tracked label;<br/>details once a week per release, issue 41<br/>Achieved: fresh prices every night, want/have<br/>weekly, each run recorded, problems logged"]
         CLI["Label command, step 4 and issue 27<br/>Code: ingest_label.py, pipeline.py<br/>How: one run at a time, lists a label,<br/>skips non-vinyl and credit-only releases,<br/>saves each release, logs a summary<br/>Achieved: a whole label in one command,<br/>failures reported, never silently lost"]
-        SHOP["Shop tracker, issue 24<br/>How: reads chosen record shops'<br/>Discogs inventories every day<br/>Will achieve: prices by seller city,<br/>such as Berlin"]
+        LRQ["Label requests, issue 37<br/>Code: ingestion/label_requests.py<br/>How: the owner lists what signed-in visitors<br/>asked for, looks each name up on Discogs,<br/>then approves or declines<br/>Achieved: visitors suggest labels,<br/>the owner decides what is tracked"]
         CL["Discogs client, steps 1 and 4<br/>Code: discogs_client.py<br/>How: one request every 1.1 s,<br/>retries after 5, 15, 60 s<br/>Achieved: stays under the limit of<br/>60 requests a minute, rides out<br/>Discogs hiccups of up to 80 s"]
         MAP["Mapping, steps 1, 3, 4<br/>Code: mapping.py<br/>How: turns Discogs JSON into rows,<br/>decides vinyl or not<br/>Achieved: exact prices, NULL instead<br/>of a misleading 0"]
         REP["Repository, steps 1 and 3<br/>Code: repository.py<br/>How: upserts in one transaction per save<br/>Achieved: reruns update rows<br/>instead of duplicating them, and<br/>artists no longer credited are removed"]
@@ -51,15 +51,14 @@ flowchart TB
         CAT[("Catalogue<br/>labels, artists, releases<br/>Code: db/schema.sql")]
         TRK[("Tracked labels and run records<br/>tracked_labels, ingestion_runs<br/>Achieved: what to update, and how each night went")]
         SNAP[("Snapshots<br/>price per release per day,<br/>want, have and ratings per week<br/>Achieved: history that grows with every run")]
-        LST[("Shop listings, issue 24<br/>one row per listing per day")]
-        LIM[("Question counts and accounts<br/>question_counts, accounts, email_tokens, sessions<br/>Code: create_limits_role.py<br/>Achieved: limits that survive restarts; passwords, links<br/>and sessions stored only as hashes")]
+        LIM[("Question counts and accounts<br/>question_counts, accounts, email_tokens,<br/>sessions, label_requests<br/>Code: create_limits_role.py<br/>Achieved: limits that survive restarts; passwords, links<br/>and sessions stored only as hashes")]
     end
 
     subgraph QRY["Questions: reads data"]
         RD["Reader login, step 6<br/>Code: create_reader_role.py<br/>How: SELECT-only role, read-only<br/>sessions, 5 s query limit<br/>Achieved: nothing using this login can<br/>change data, enforced by the database"]
         TL["Five query tools, step 6 and issue 27<br/>Code: queries/tools.py<br/>How: fixed SQL, arguments checked<br/>by Pydantic, capped results, vinyl only<br/>Achieved: safe, predictable reads<br/>an AI can call"]
         QS["Question service, steps 7 and 8<br/>Code: queries/questions.py, queries/verify.py<br/>How: Claude Haiku 5.5 via the SDK tool runner,<br/>gets only the question and tool descriptions,<br/>our code checks and runs each tool it picks,<br/>then checks every figure against the rows<br/>Achieved: answers from our rows, returned<br/>with their sources, a warning when a figure<br/>cannot be found, clear errors for failures"]
-        API["Web API, step 9, issues 38, 48, 49, 55<br/>Code: web/app.py, limits.py, captcha.py,<br/>accounts.py, mailer.py<br/>How: Flask under gunicorn, JSON in and out;<br/>Turnstile human check, limits per visitor,<br/>account and site; sign-up with email and<br/>password, confirmed by email; throwaway<br/>services refused; the tracked labels' names<br/>Achieved: questions checked and limited<br/>before the AI, a larger quota when verified,<br/>keys and passwords stay on the server"]
+        API["Web API, step 9, issues 37, 38, 48, 49, 55<br/>Code: web/app.py, limits.py, captcha.py,<br/>accounts.py, mailer.py<br/>How: Flask under gunicorn, JSON in and out;<br/>Turnstile human check, limits per visitor,<br/>account and site; sign-up with email and<br/>password, confirmed by email; throwaway<br/>services refused; the tracked labels' names<br/>Achieved: questions checked and limited<br/>before the AI, a larger quota when verified,<br/>keys and passwords stay on the server"]
         UI["Question box, step 10, live on adnsaudio.com<br/>Code: widget/ask.js, widget/ask.css<br/>How: plain JavaScript, invisible Turnstile check,<br/>the tracked labels, safe Markdown as text nodes,<br/>collapsible data table, sign-up and sign-in<br/>with a Verified badge and saved passwords<br/>Achieved: anyone can ask about vinyl prices<br/>on phone or desktop, with the model named"]
     end
 
@@ -67,17 +66,13 @@ flowchart TB
 
     SCH -->|"reads the list, records the run"| TRK
     SCH --> CLI
-    SCH --> SHOP
     CLI --> CL
-    SHOP --> CL
     CL <-->|"HTTPS, about 55 requests a minute"| DG
     CL --> MAP --> REP
     REP -->|"writer login"| CAT
     REP -->|"writer login"| SNAP
-    REP -->|"writer login"| LST
     CAT --> RD
     SNAP --> RD
-    LST --> RD
     TRK --> RD
     RD --> TL
     RD -->|"label names"| API
@@ -86,6 +81,9 @@ flowchart TB
     QS --> API
     API <-->|"verify token"| CF
     API <-->|"web login, only these tables"| LIM
+    LIM -->|"waiting requests"| LRQ
+    LRQ -->|"look up a name"| CL
+    LRQ -->|"approved labels"| TRK
     API -->|"JSON answer"| CAD
     API -->|"hashed visitor"| LOG
     API -->|"confirmation and new-password links"| RS
@@ -98,9 +96,8 @@ flowchart TB
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200,stroke-dasharray: 4 3
-    class CLI,CL,MAP,REP,CAT,SNAP,RD,TL,QS,API,LIM,CF,RS,UI,TRK,CAD,BK,GP,SB,LOG built
+    class CLI,CL,MAP,REP,CAT,SNAP,RD,TL,QS,API,LIM,CF,RS,UI,TRK,CAD,BK,GP,SB,LOG,LRQ built
     class SCH built
-    class SHOP,LST support
 ```
 
 Two separate logins protect the data. The **writer** (used only by ingestion) can change tables. The **reader** (used by everything a visitor can reach) can only read, and the database itself enforces that. The Discogs token, the Anthropic key and both passwords stay on the server and never reach the browser.
@@ -129,7 +126,7 @@ flowchart TD
     S10["Step 10, issue 12: Question box<br/>Code: widget/<br/>How: plain HTML, CSS and JavaScript,<br/>no build step, the site's own colours and fonts<br/>Achieved: example questions, loading, answer and<br/>error states, no double submits, model named,<br/>data one click away, nothing in an answer runs;<br/>live on adnsaudio.com/market-trends/"]
     S11["Step 11, issue 13: Test the web page<br/>Code: tests/test_question_box.py<br/>How: Playwright and Chromium against a faked API,<br/>an axe audit, one end-to-end check with the real API<br/>Achieved: keyboard, labels, focus and<br/>screen-reader announcements verified on every<br/>pull request"]
     F19["Issue 19: CI runs all tests<br/>Code: .github/workflows/tests.yml<br/>How: GitHub Actions on Python 3.10 and 3.13,<br/>Testcontainers PostgreSQL, CI=true,<br/>actions pinned to exact commits<br/>Achieved: no pull request merges into<br/>main unless all tests pass"]
-    F24["Issue 24: Tracked techno shops<br/>How: chosen shops' Discogs inventories,<br/>city recorded by us, a sixth query tool<br/>Will achieve: questions by seller city,<br/>such as records sold from Berlin"]
+    F37["Issue 37: Label requests<br/>Code: web/label_requests.py, ingestion/label_requests.py<br/>How: signed-in visitors name a label; the owner<br/>looks it up on Discogs and approves or declines<br/>Achieved: visitors suggest labels, a few a day;<br/>nothing is tracked without the owner"]
     F27["Issue 27: Fixes from a code review<br/>Code: pipeline.py, ingest_label.py, tools.py<br/>How: one run at a time, credit-only and<br/>deleted releases handled, vinyl-only answers<br/>Achieved: the code does what the docs promise"]
     F38["Issues 38, 49: Sign-up and quotas<br/>Code: web/accounts.py, mailer.py, widget/<br/>How: email and password, a confirmation link by<br/>Resend, a sessions table, counts per account<br/>Achieved: 3 questions a day to try, 10 an hour<br/>and 50 a day when verified, fake addresses never<br/>get a working account, accounts deletable"]
     F44["Issue 44: Hosting<br/>Code: Dockerfile, deploy/<br/>How: a Hetzner server with Docker Compose,<br/>Caddy for HTTPS, cron for the nightly update,<br/>backups to a Storage Box, one deploy command,<br/>the box on the site's own page<br/>Achieved: live since 7 November 2026, the<br/>Mac's data moved, backups copied off the server"]
@@ -159,16 +156,16 @@ flowchart TD
     S10 --> F48
     F38 --> F55
     S2 --> F19
-    S4 --> F24
-    S6 --> F24
+    F38 --> F37
+    S5 --> F37
     S4 --> F27
     S6 --> F27
 
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
-    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,F27,F19,F41,F38,F44,F48,F55 built
-    class F24,F18 support
+    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,F27,F19,F41,F38,F44,F48,F55,F37 built
+    class F18 support
 ```
 
 | Step | Issue | Status | What it gives | Main tech |
@@ -192,7 +189,7 @@ flowchart TD
 | – | [19](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/19) CI | Built | Every pull request runs all tests, including the database ones, and must pass to merge | GitHub Actions, Dependabot |
 | – | [48](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/48) Label list and private logs | Built | Visitors see which labels are covered, live from the database; abuse can be spotted from logs that hold no addresses | Flask, PostgreSQL, logging |
 | – | [55](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/55) Throwaway addresses | Built | Sign-up refuses addresses at known throwaway services, so one person can't as easily make many accounts | A public list kept in the repo |
-| – | [24](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/24) Tracked shops | Planned | Questions by seller city, e.g. Berlin | Discogs inventory API |
+| – | [37](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/37) Label requests | Built | Signed-in visitors ask for labels by name; the owner looks each up on Discogs and approves or declines; visitors see the result | Flask, PostgreSQL, Discogs search |
 | – | [18](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/18), [25](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/25) Documentation | Ongoing | README and this page kept current | Markdown, Mermaid |
 
 ---
@@ -420,11 +417,12 @@ Later visits use `POST /api/sign-in` with the password. A forgotten password tak
 | Label pipeline | [`ingestion/pipeline.py`](../ingestion/pipeline.py), [`ingest_label.py`](../ingestion/ingest_label.py) | Python CLI, logging | Ingests every vinyl release of a label | One run at a time (advisory lock); duplicates dropped; credit-only releases skipped; deleted releases listed as gone; failures, malformed data included, listed and exit 1; commit per release; stops if the label list cannot be fetched or the database connection is lost |
 | Reader login | [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) | PostgreSQL roles | Creates the SELECT-only login | Read-only sessions and a 5 s limit set on the role; future tables readable, never writable; no temporary tables |
 | Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped; vinyl only; timeouts reported as a readable reason |
-| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers, Playwright, axe | 489 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock, the question box in Chromium; a `--live` before-release test with the real Claude and an AI judge | Database and browser tests skip on a laptop without Docker or Chromium, fail in CI; live tests never run without `--live` |
+| Tests | [`tests/`](../tests) | pytest, responses, Testcontainers, Playwright, axe | 526 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock, the question box in Chromium; a `--live` before-release test with the real Claude and an AI judge | Database and browser tests skip on a laptop without Docker or Chromium, fail in CI; live tests never run without `--live` |
 | Question service | [`queries/questions.py`](../queries/questions.py) | Anthropic SDK tool runner, Claude Haiku 5.5 | Sends the question and tool descriptions to Claude, runs the tools it asks for, returns the answer with its sources | Claude never sees SQL or the database; refused arguments go back as errors; a database failure stops the run; every error becomes a visitor-safe `QuestionError`; instructions and tools cached |
 | Web API | [`web/app.py`](../web/app.py), [`limits.py`](../web/limits.py), [`captcha.py`](../web/captcha.py), [`create_limits_role.py`](../ingestion/create_limits_role.py) | Flask, gunicorn, Cloudflare Turnstile | `POST /api/questions`: checks the request, the human check and the limits, then asks the question service | Fails closed; limits counted in one transaction by a login that can only touch its four tables; visitors stored as a keyed hash, deleted after two days; forwarded addresses trusted only behind a configured proxy; usage never sent; 8 KB body limit; CORS only for listed origins; the access log holds a keyed hash, never the address, and visitors can't fake a line in it; logs limited in size |
 | Sign-up | [`web/accounts.py`](../web/accounts.py), [`mailer.py`](../web/mailer.py) | PostgreSQL, Resend | Sign-up, confirmation and new-password links, password sign-in, sessions, sign-out and account deletion | Passwords stored as salted scrypt hashes; tokens are 32 random bytes, stored only as hashes; links work once; opening a link uses nothing; unconfirmed accounts can't sign in and are deleted after 7 days; known throwaway services are refused at sign-up; forms checked against a `SameSite=Strict` cookie; session cookie `HttpOnly`, `Secure`, `SameSite=Strict`; the same answer for known and unknown addresses; tries and emails limited per address and visitor |
 | Question box | [`widget/ask.js`](../widget/ask.js), [`ask.css`](../widget/ask.css), [`index.html`](../widget/index.html) | HTML, CSS, JavaScript, Cloudflare Turnstile | The list of tracked labels, the form, example questions, states, answer, warning, model and data table | Answers drawn from text nodes only; no double submits; token reset after each question; no secrets in the page; 90-second request timeout; the box still works if the label list can't load |
+| Label requests | [`web/label_requests.py`](../web/label_requests.py), [`ingestion/label_requests.py`](../ingestion/label_requests.py) | PostgreSQL, Discogs search | Stores labels signed-in visitors ask for; the owner's command lists them, searches Discogs and approves or declines | Signed-in only; 3 a day per account, 50 for the site; asking twice costs nothing; tracked labels refused; the web side never calls Discogs; deleted with the account |
 | Nightly update | [`ingestion/nightly.py`](../ingestion/nightly.py), [`track_labels.py`](../ingestion/track_labels.py), [`runs.py`](../ingestion/runs.py), [`ops/`](../ops) | launchd, cron | Updates every active tracked label each night (prices nightly, details weekly per release) and records each run and label | Shares the ingestion lock; interrupted runs marked failed; missed nights flagged; one label's failure doesn't stop the rest; rotating log |
 | Schema command | [`ingestion/apply_schema.py`](../ingestion/apply_schema.py) | PostgreSQL | Adds tables introduced since a database was created | Every statement is `CREATE TABLE IF NOT EXISTS`; existing data untouched |
 | Server setup | [`Dockerfile`](../Dockerfile), [`deploy/compose.yml`](../deploy/compose.yml), [`Caddyfile`](../deploy/Caddyfile), [`setup-server.sh`](../deploy/setup-server.sh), [`crontab`](../deploy/crontab), [`nightly.sh`](../deploy/nightly.sh) | Docker Compose, Caddy, cron, Ubuntu 24.04 | Runs the database, the API under gunicorn and Caddy; cron starts the nightly update at 03:00 UTC, then the backup | Only Caddy publishes ports; the database container gets only its own settings; `.env` never in the image; containers run as an ordinary user; firewall open for SSH, 80 and 443 only; SSH by key only, no root login; automatic security updates; tests check these |

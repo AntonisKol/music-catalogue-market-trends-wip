@@ -43,6 +43,7 @@ CREATE_TABLES = """
            AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()
                    AND table_name = 'accounts' AND column_name = 'confirmed_at') THEN
             DELETE FROM question_counts WHERE visitor LIKE 'account:%' OR visitor LIKE 'sign-in-%';
+            DROP TABLE IF EXISTS label_requests;
             DROP TABLE IF EXISTS sessions;
             DROP TABLE accounts;
         END IF;
@@ -73,8 +74,21 @@ CREATE_TABLES = """
         created_at TIMESTAMPTZ NOT NULL,
         expires_at TIMESTAMPTZ NOT NULL
     );
+    -- Labels signed-in visitors asked for, by name as typed. A request alone tracks
+    -- nothing: the owner looks it up and decides with ingestion/label_requests.py.
+    -- Deleted with the account.
+    CREATE TABLE IF NOT EXISTS label_requests (
+        id BIGSERIAL PRIMARY KEY,
+        account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'added', 'declined')),
+        label_id INT,
+        created_at TIMESTAMPTZ NOT NULL,
+        decided_at TIMESTAMPTZ
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS label_requests_once_per_account ON label_requests (account_id, lower(name));
 """
-TABLES = ("question_counts", "accounts", "email_tokens", "sessions")
+TABLES = ("question_counts", "accounts", "email_tokens", "sessions", "label_requests")
 
 
 def create_limits_role(conn: psycopg.Connection, name: str, password: str) -> None:
@@ -95,7 +109,8 @@ def create_limits_role(conn: psycopg.Connection, name: str, password: str) -> No
         cur.execute(sql.SQL("REVOKE CREATE ON SCHEMA public FROM {}").format(role))
         for table in TABLES:
             cur.execute(sql.SQL("GRANT SELECT, INSERT, UPDATE, DELETE ON {} TO {}").format(sql.Identifier(table), role))
-        cur.execute(sql.SQL("GRANT USAGE ON SEQUENCE accounts_id_seq TO {}").format(role))
+        for sequence in ("accounts_id_seq", "label_requests_id_seq"):
+            cur.execute(sql.SQL("GRANT USAGE ON SEQUENCE {} TO {}").format(sql.Identifier(sequence), role))
 
 
 def main(argv: list) -> int:

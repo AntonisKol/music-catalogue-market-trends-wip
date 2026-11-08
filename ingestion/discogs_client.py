@@ -81,6 +81,18 @@ def get_label(label_id: int) -> dict:
     return _get(f"{BASE_URL}/labels/{label_id}")
 
 
+def search_labels(name: str, limit: int = 5) -> list[dict]:
+    """Discogs labels whose name matches, best first: [{"id", "title"}, ...]."""
+    data = _get(f"{BASE_URL}/database/search", params={"type": "label", "q": name, "per_page": limit})
+    return [{"id": r["id"], "title": r["title"]} for r in data.get("results", [])[:limit]]
+
+
+def label_size(label_id: int) -> int:
+    """How many entries a label's list has on Discogs, from its first page."""
+    data = _get(f"{BASE_URL}/labels/{label_id}/releases", params={"page": 1, "per_page": 1})
+    return data["pagination"]["items"]
+
+
 def get_label_releases(label_id: int) -> list[dict]:
     releases = []
     page = 1
