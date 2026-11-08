@@ -80,3 +80,14 @@ CREATE TABLE IF NOT EXISTS ingestion_run_labels (
     error TEXT,
     PRIMARY KEY (run_id, label_id)
 );
+
+-- Releases on a tracked label's list that turned out not to be vinyl, or only
+-- credited to the label (for example as its studio). Nightly runs skip them
+-- without asking Discogs, and check each again after about a month (issue 63).
+CREATE TABLE IF NOT EXISTS skipped_releases (
+    release_id INT NOT NULL,
+    label_id INT NOT NULL,
+    reason TEXT NOT NULL CHECK (reason IN ('not vinyl', 'not on label')),
+    checked_on DATE NOT NULL,
+    PRIMARY KEY (release_id, label_id)
+);
