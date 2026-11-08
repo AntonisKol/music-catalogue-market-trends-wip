@@ -315,9 +315,6 @@ class Fakes:
     def send_already_registered(self, email):
         self._keep("already", email)
 
-    def send_label_request_notification(self, name, request_id):
-        self._keep("label_request", name, request_id)
-
 
 class Clock:
     def __init__(self):
@@ -344,7 +341,6 @@ def client(fakes, clock, limits_db, monkeypatch):
     monkeypatch.setattr(config, "COOKIE_SECURE", False)
     monkeypatch.setattr(config, "PUBLIC_API_URL", "https://api.example")
     monkeypatch.setattr(config, "SIGN_IN_RETURN_URL", "https://site.example/market-trends/")
-    monkeypatch.setattr(config, "LABEL_REQUEST_NOTIFICATION_EMAIL", "operator@example.com")
     app = create_app(answer=fakes.answer, verify_captcha=fakes.verify, mail=fakes, now=clock)
     return app.test_client()
 

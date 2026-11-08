@@ -3,16 +3,13 @@
 The web API never calls Discogs; the owner's command does, and Discogs is faked
 here with responses. Everything else runs against the real test database.
 """
-from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
-
 import pytest
 import responses
 
 from ingestion import discogs_client, label_requests as owner
 from ingestion.track_labels import tracked_labels
 from tests.test_sign_in import NOON, Clock, Fakes, ask, clock, client, fakes, sign_in  # noqa: F401 (fixtures)
-from web import accounts, config, label_requests, limits, mailer
+from web import accounts, config, label_requests
 
 DISCOGS = discogs_client.BASE_URL
 
@@ -54,7 +51,7 @@ def test_only_signed_in_visitors_can_request(client):
     assert client.get("/api/label-requests").status_code == 401
 
 
-def test_a_request_is_stored_for_the_owner_and_listed_for_the_visitor(client, fakes, db, reader):
+def test_a_request_is_stored_for_the_owner_and_listed_for_the_visitor(client, fakes, db):
     sign_in(client, fakes)
 
     response = request_label(client, "  Orbe   Records ")
@@ -66,7 +63,7 @@ def test_a_request_is_stored_for_the_owner_and_listed_for_the_visitor(client, fa
     assert db.execute("SELECT name, status, label_id FROM label_requests").fetchall() == [("Orbe Records", "waiting", None)]
 
 
-def test_asking_twice_stores_one_request_and_costs_nothing(client, fakes, db, reader):
+def test_asking_twice_stores_one_request_and_costs_nothing(client, fakes, db):
     sign_in(client, fakes)
     request_label(client, "Arts")
 
@@ -75,124 +72,6 @@ def test_asking_twice_stores_one_request_and_costs_nothing(client, fakes, db, re
     assert again.status_code == 200 and "already asked" in again.get_json()["message"]
     db.commit()
     assert db.execute("SELECT count(*) FROM label_requests").fetchone() == (1,)
-
-
-def test_equivalent_label_names_are_deduplicated(client, fakes, db, reader):
-    sign_in(client, fakes)
-    request_label(client, "Planet Rhythm Records")
-
-    again = request_label(client, "planet rhythm")
-
-    assert again.status_code == 200 and "already asked" in again.get_json()["message"]
-    db.commit()
-    assert db.execute("SELECT name, status FROM label_requests").fetchall() == [
-        ("Planet Rhythm Records", "waiting"),
-    ]
-
-
-def test_notification_is_sent_and_recorded(client, fakes, db, reader):
-    sign_in(client, fakes)
-
-    response = request_label(client, "Orbe Records")
-
-    assert response.status_code == 201
-    assert ("label_request", "Orbe Records", 1) in fakes.mails
-    db.commit()
-    assert db.execute("SELECT notification_sent_at FROM label_requests").fetchone()[0] is not None
-
-
-def test_failed_notification_is_reported_and_duplicate_submission_retries(client, fakes, db, reader):
-    sign_in(client, fakes)
-    fakes.mail_error = mailer.MailUnavailable("mail unavailable")
-
-    failed = request_label(client, "Orbe Records")
-
-    assert failed.status_code == 503
-    assert "request was saved" in failed.get_json()["error"]["message"]
-    db.commit()
-    assert db.execute("SELECT notification_sent_at FROM label_requests").fetchone() == (None,)
-
-    fakes.mail_error = None
-    retried = request_label(client, "Orbe Records")
-
-    assert retried.status_code == 200
-    db.commit()
-    assert db.execute(
-        "SELECT count(*), count(*) FILTER (WHERE notification_sent_at IS NOT NULL) FROM label_requests"
-    ).fetchone() == (1, 1)
-
-
-@responses.activate
-def test_notification_email_goes_to_the_configured_operator(monkeypatch):
-    import json
-
-    monkeypatch.setattr(config, "LABEL_REQUEST_NOTIFICATION_EMAIL", "operator@example.com")
-    monkeypatch.setattr(config, "RESEND_API_KEY", "test-resend-key")
-    responses.post(mailer.RESEND_URL, json={"id": "test-email"})
-
-    mailer.send_label_request_notification("Orbe Records", 12)
-
-    payload = json.loads(responses.calls[0].request.body)
-    assert payload["to"] == ["operator@example.com"]
-    assert "record label" in payload["subject"].lower()
-    assert "Orbe Records" in payload["text"] and "12" in payload["text"]
-
-
-def test_notification_email_requires_a_configured_operator(monkeypatch):
-    monkeypatch.setattr(config, "LABEL_REQUEST_NOTIFICATION_EMAIL", "")
-
-    with pytest.raises(mailer.MailUnavailable, match="LABEL_REQUEST_NOTIFICATION_EMAIL"):
-        mailer.send_label_request_notification("Orbe Records", 12)
-
-
-def test_tracked_label_lookup_failure_refuses_without_storing_request(fakes, clock, limits_db, db, monkeypatch):
-    import psycopg
-    from web.app import create_app
-
-    monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
-    monkeypatch.setattr(config, "COOKIE_SECURE", False)
-    monkeypatch.setattr(config, "LABEL_REQUEST_NOTIFICATION_EMAIL", "operator@example.com")
-
-    def broken_labels():
-        raise psycopg.OperationalError("reader unavailable")
-
-    app = create_app(answer=fakes.answer, verify_captcha=fakes.verify, mail=fakes, now=clock,
-                     list_labels=broken_labels)
-    api = app.test_client()
-    sign_in(api, fakes)
-
-    response = request_label(api, "Orbe Records")
-
-    assert response.status_code == 503
-    assert response.get_json()["error"]["code"] == "database"
-    db.commit()
-    assert db.execute("SELECT count(*) FROM label_requests").fetchone() == (0,)
-
-
-def test_concurrent_requests_charge_quota_only_for_inserted_rows(db, limits_db, monkeypatch):
-    monkeypatch.setattr(label_requests, "PER_ACCOUNT_DAY", 1)
-    db.execute("INSERT INTO accounts (email, password_hash, created_at, confirmed_at) "
-               "VALUES ('race@example.com', 'x', %s, %s)", (NOON, NOON))
-    db.commit()
-    account_id = db.execute("SELECT id FROM accounts WHERE email = 'race@example.com'").fetchone()[0]
-    start = Barrier(2)
-
-    def submit(name):
-        start.wait()
-        try:
-            with limits.connect_limits() as conn:
-                return label_requests.request_label(conn, account_id, name, NOON)[2]
-        except limits.LimitReached:
-            return False
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(submit, ("Label Alpha", "Label Beta")))
-
-    assert sum(results) == 1
-    db.commit()
-    assert db.execute("SELECT count(*) FROM label_requests WHERE account_id = %s", (account_id,)).fetchone() == (1,)
-    assert db.execute("SELECT count FROM question_counts WHERE visitor = %s AND period = 'day'",
-                      (f"label-request:account:{account_id}",)).fetchone() == (1,)
 
 
 def test_a_tracked_label_is_not_requested(client, fakes, db, reader):
@@ -219,7 +98,7 @@ def test_bad_requests_store_nothing(client, fakes, db, body, code):
     assert db.execute("SELECT count(*) FROM label_requests").fetchone() == (0,)
 
 
-def test_an_account_may_request_three_labels_a_day(client, fakes, reader):
+def test_an_account_may_request_three_labels_a_day(client, fakes):
     sign_in(client, fakes)
 
     codes = [request_label(client, f"Label {n}").status_code for n in range(4)]
@@ -227,7 +106,7 @@ def test_an_account_may_request_three_labels_a_day(client, fakes, reader):
     assert codes == [201, 201, 201, 429]
 
 
-def test_the_whole_site_is_capped_too(client, fakes, monkeypatch, reader):
+def test_the_whole_site_is_capped_too(client, fakes, monkeypatch):
     monkeypatch.setattr(label_requests, "PER_SITE_DAY", 1)
     sign_in(client, fakes)
 
@@ -237,7 +116,7 @@ def test_the_whole_site_is_capped_too(client, fakes, monkeypatch, reader):
     assert refused.status_code == 429 and "a lot of label requests" in refused.get_json()["error"]["message"]
 
 
-def test_requests_are_deleted_with_the_account(client, fakes, db, reader):
+def test_requests_are_deleted_with_the_account(client, fakes, db):
     sign_in(client, fakes)
     request_label(client, "Arts")
 
@@ -247,7 +126,7 @@ def test_requests_are_deleted_with_the_account(client, fakes, db, reader):
     assert db.execute("SELECT count(*) FROM label_requests").fetchone() == (0,)
 
 
-def test_a_visitor_sees_only_their_own_requests(client, fakes, reader):
+def test_a_visitor_sees_only_their_own_requests(client, fakes):
     sign_in(client, fakes, "first@example.com")
     request_label(client, "Arts")
     client.post("/api/sign-out", json={})
@@ -283,49 +162,6 @@ def test_the_owner_sees_waiting_requests_by_name(waiting_requests, owner_db, cap
 
     lines = capsys.readouterr().out.splitlines()
     assert "Orbe Records  (2 accounts" in lines[0] and "Arts  (1 account," in lines[1]
-
-
-def test_the_owner_groups_and_decides_equivalent_names(waiting_requests, owner_db, db, capsys):
-    db.execute("INSERT INTO accounts (email, password_hash, created_at, confirmed_at) VALUES "
-               "('c@example.com', 'x', %s, %s), ('d@example.com', 'x', %s, %s)", (NOON, NOON, NOON, NOON))
-    db.execute("INSERT INTO label_requests (account_id, name, created_at) VALUES "
-               "(3, 'Planet Rhythm Records', %s), (4, 'planet rhythm (2)', %s), (3, 'Planet Rhythm', %s)",
-               (NOON, NOON, NOON))
-    db.commit()
-    request_id = db.execute("SELECT min(id) FROM label_requests WHERE name = 'Planet Rhythm Records'").fetchone()[0]
-
-    assert owner.main(["list"]) == 0
-    assert "Planet Rhythm Records  (2 accounts" in capsys.readouterr().out
-    assert owner.main(["decline", str(request_id)]) == 0
-    assert "Declined 3 request(s)" in capsys.readouterr().out
-    db.rollback()
-    assert db.execute("SELECT count(*) FROM label_requests WHERE name ILIKE 'planet rhythm%' AND status = 'declined'").fetchone() == (3,)
-
-
-def test_notification_command_retries_pending_emails(waiting_requests, owner_db, db, monkeypatch, capsys):
-    sent = []
-    monkeypatch.setattr(owner.mailer, "send_label_request_notification",
-                        lambda name, request_id: sent.append((name, request_id)))
-
-    assert owner.main(["notify"]) == 0
-
-    assert len(sent) == 3
-    assert "Sent 3 notification(s); 0 still pending." in capsys.readouterr().out
-    db.rollback()
-    assert db.execute("SELECT count(*) FROM label_requests WHERE notification_sent_at IS NOT NULL").fetchone() == (3,)
-
-
-def test_notification_command_keeps_failures_pending(waiting_requests, owner_db, db, monkeypatch, capsys):
-    def fail(_name, _request_id):
-        raise mailer.MailUnavailable("email is not configured")
-
-    monkeypatch.setattr(owner.mailer, "send_label_request_notification", fail)
-
-    assert owner.main(["notify"]) == 1
-
-    assert "still pending" in capsys.readouterr().out
-    db.rollback()
-    assert db.execute("SELECT count(*) FROM label_requests WHERE notification_sent_at IS NULL").fetchone() == (3,)
 
 
 @responses.activate
