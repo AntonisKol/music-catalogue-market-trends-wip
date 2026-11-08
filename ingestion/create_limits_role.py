@@ -75,17 +75,27 @@ CREATE_TABLES = """
         expires_at TIMESTAMPTZ NOT NULL
     );
     -- Labels signed-in visitors asked for, by name as typed. A request alone tracks
-    -- nothing: the owner looks it up and decides with ingestion/label_requests.py.
-    -- Deleted with the account.
+    -- nothing: the owner reviews it and decides with ingestion/label_requests.py.
+    -- reason is the owner's answer to a rejection. Deleted with the account.
     CREATE TABLE IF NOT EXISTS label_requests (
         id BIGSERIAL PRIMARY KEY,
         account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         name TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'added', 'declined')),
+        status TEXT NOT NULL DEFAULT 'waiting',
         label_id INT,
+        reason TEXT,
         created_at TIMESTAMPTZ NOT NULL,
-        decided_at TIMESTAMPTZ
+        decided_at TIMESTAMPTZ,
+        owner_notified_at TIMESTAMPTZ,
+        visitor_notified_at TIMESTAMPTZ
     );
+    ALTER TABLE label_requests ADD COLUMN IF NOT EXISTS reason TEXT;
+    ALTER TABLE label_requests ADD COLUMN IF NOT EXISTS owner_notified_at TIMESTAMPTZ;
+    ALTER TABLE label_requests ADD COLUMN IF NOT EXISTS visitor_notified_at TIMESTAMPTZ;
+    ALTER TABLE label_requests DROP CONSTRAINT IF EXISTS label_requests_status_check;
+    UPDATE label_requests SET status = 'rejected' WHERE status = 'declined';
+    ALTER TABLE label_requests ADD CONSTRAINT label_requests_status_check
+        CHECK (status IN ('waiting', 'reviewing', 'added', 'rejected'));
     CREATE UNIQUE INDEX IF NOT EXISTS label_requests_once_per_account ON label_requests (account_id, lower(name));
 """
 TABLES = ("question_counts", "accounts", "email_tokens", "sessions", "label_requests")

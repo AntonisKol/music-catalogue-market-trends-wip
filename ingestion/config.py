@@ -16,3 +16,6 @@ POSTGRES_DB = os.environ["POSTGRES_DB"]
 # same unit whoever's Discogs account runs the job. Changing it splits the price
 # history into two currencies.
 SNAPSHOT_CURRENCY = "EUR"
+
+# Where new label requests are emailed for review. Empty: they are only listed.
+LABEL_REQUEST_EMAIL = os.environ.get("LABEL_REQUEST_EMAIL", "").strip()

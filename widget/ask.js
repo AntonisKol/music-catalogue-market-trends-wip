@@ -401,13 +401,20 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     email.focus();
   }
 
-  const REQUEST_STATUS = { waiting: "waiting for review", added: "added", declined: "not added" };
+  const REQUEST_STATUS = {
+    waiting: "waiting for review", reviewing: "being reviewed", added: "added", rejected: "rejected",
+  };
+
+  function describeRequest({ name, status, reason }) {
+    const text = `${name}: ${REQUEST_STATUS[status] ?? status}`;
+    return reason ? `${text} (${reason})` : text;
+  }
 
   async function loadMyRequests() {
     try {
       const response = await request("/api/label-requests");
       const mine = response.ok ? (await response.json()).requests : [];
-      requestList.replaceChildren(...mine.map((item) => el("li", {}, `${item.name}: ${REQUEST_STATUS[item.status] ?? item.status}`)));
+      requestList.replaceChildren(...mine.map((item) => el("li", {}, describeRequest(item))));
     } catch {
       // The list is a convenience; requesting still works.
     }

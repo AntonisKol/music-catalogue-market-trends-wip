@@ -498,6 +498,24 @@ def test_signed_in_visitors_can_request_a_label_and_see_their_requests(make_box)
     assert requests.locator("li").all_inner_texts() == ["Orbe Records: waiting for review", "Arts: added"]
 
 
+def test_each_request_shows_where_it_stands(make_box):
+    box = make_box(account=SIGNED_IN)
+    box.api.label_requests = [
+        {"name": "Arts", "status": "waiting", "reason": None},
+        {"name": "Polegroup", "status": "reviewing", "reason": None},
+        {"name": "Pole Recordings", "status": "added", "reason": None},
+        {"name": "Wax", "status": "rejected", "reason": "Not a techno label."},
+    ]
+
+    box.page.get_by_role("button", name="Request it").click()
+    requests = box.page.get_by_role("list", name="Your label requests")
+    requests.locator("li").first.wait_for()
+
+    assert requests.locator("li").all_inner_texts() == [
+        "Arts: waiting for review", "Polegroup: being reviewed", "Pole Recordings: added",
+        "Wax: rejected (Not a techno label.)"]
+
+
 def test_a_label_request_needs_a_name(make_box):
     box = make_box(account=SIGNED_IN)
     box.page.get_by_role("button", name="Request it").click()

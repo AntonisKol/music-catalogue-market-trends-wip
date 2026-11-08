@@ -1,0 +1,33 @@
+#!/bin/sh
+# Review label requests from your Mac. Run from the project folder:
+#   sh scripts/label-requests list
+#   sh scripts/label-requests review 3                 # Discogs matches; the visitor sees "being reviewed"
+#   sh scripts/label-requests approve 3 21250          # or the label's discogs.com link; imports it at once
+#   sh scripts/label-requests reject 3 "Not a techno label."
+# Logs in to DEPLOY_SERVER (from the local .env) and runs ingestion.label_requests
+# in the admin container there.
+set -eu
+cd "$(dirname "$0")/.."
+SERVER=$(sed -n "s/^DEPLOY_SERVER=//p" .env | tail -1)
+[ -n "$SERVER" ] || { echo "Set DEPLOY_SERVER in .env first." >&2; exit 1; }
+[ $# -ge 1 ] || { sed -n '2,6p' "$0" | sed 's/^# //'; exit 2; }
+
+# The arguments travel as separate words, so a reason with spaces or quotes arrives intact.
+ssh "$SERVER" sh -s -- "$@" <<'REMOTE'
+set -eu
+cd /srv/market-trends
+COMPOSE="docker compose --env-file .env -f deploy/compose.yml"
+status=0
+output=$($COMPOSE run --rm -T admin python -m ingestion.label_requests "$@" 2>&1) || status=$?
+printf '%s\n' "$output" | grep -v "^ *Container \|level=warning" || true
+# Only an approval that went through starts an import.
+[ "$status" -eq 0 ] || exit "$status"
+if [ "$1" = approve ]; then
+  # approve <request> <label>: the label is the third word.
+  label=$(printf '%s' "$3" | sed -E 's#.*label/([0-9]+).*#\1#')
+  case "$label" in ''|*[!0-9]*) echo "Could not read a label id from $3." >&2; exit 1 ;; esac
+  # The import takes minutes; it runs on the server, and the nightly run would pick the label up anyway.
+  $COMPOSE run -d --rm -T admin sh -c "python -m ingestion.ingest_label $label >> logs/import-$label.log 2>&1" > /dev/null
+  echo "Importing $label on the server now; progress is in logs/import-$label.log there."
+fi
+REMOTE
