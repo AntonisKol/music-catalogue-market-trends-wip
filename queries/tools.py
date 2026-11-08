@@ -1,8 +1,8 @@
 """The only way the question feature reads the database: five fixed query tools.
 
 Each tool has a Pydantic model for its arguments (types, ranges, allowed values),
-which validates what the language model sends and later gives #7 the JSON schema
-to describe the tool. The SQL of every tool is written here; arguments only ever
+which validates what the language model sends and gives the JSON schema that
+describes the tool to it. The SQL of every tool is written here; arguments only ever
 reach it as query parameters. Sort orders and metrics are picked from fixed
 lists, never pasted from input. Every result is capped and says how many rows
 matched in total, and only vinyl releases are ever returned.

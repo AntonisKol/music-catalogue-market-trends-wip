@@ -1,6 +1,6 @@
 """The emails behind signing up, sent through Resend's HTTP API.
 
-Without RESEND_API_KEY, links are written to the log instead when SIGN_IN_LOG_LINKS
+Without RESEND_API_KEY, links are written to the log instead when EMAIL_LOG_LINKS
 is true (for trying it on a laptop), and otherwise signing up is switched off: the
 API says so rather than pretending to send.
 
@@ -51,7 +51,7 @@ def html_message(title: str, paragraphs: list, button: tuple = None) -> str:
 
 def send(email: str, subject: str, text: str, html: str, link: str = None) -> None:
     if not config.RESEND_API_KEY:
-        if config.SIGN_IN_LOG_LINKS:
+        if config.EMAIL_LOG_LINKS:
             log.warning("Email sending is not set up; %r for %s: %s", subject, email, link)
             return
         raise MailUnavailable("RESEND_API_KEY is not set")

@@ -6,7 +6,7 @@ import pytest
 
 from ingestion import create_limits_role as command
 from ingestion.create_limits_role import create_limits_role
-from web.limits import LimitReached, connect_limits, take_question, visitor_id
+from web.limits import LimitReached, connect_limits, keyed_hash, take_question
 
 NOON = datetime(2026, 11, 1, 12, 30, tzinfo=timezone.utc)
 
@@ -17,7 +17,7 @@ def take(conn, visitor="v1", now=NOON, per_hour=3, per_day=5, site=10):
 
 def counts(db):
     db.commit()
-    rows = db.execute("SELECT visitor, period, window_start, count FROM question_counts ORDER BY 1, 2, 3").fetchall()
+    rows = db.execute("SELECT visitor, period, window_start, count FROM limit_counts ORDER BY 1, 2, 3").fetchall()
     db.commit()
     return rows
 
@@ -89,12 +89,12 @@ def test_counts_older_than_two_days_are_deleted(limits, db):
 
 def test_visitor_ids_are_keyed_hashes_not_addresses():
     ip = "203.0.113.7"
-    one = visitor_id(ip, "secret-one")
+    one = keyed_hash(ip, "secret-one")
 
     assert ip not in one and len(one) == 32
-    assert one == visitor_id(ip, "secret-one")
-    assert one != visitor_id(ip, "secret-two")
-    assert one != visitor_id("203.0.113.8", "secret-one")
+    assert one == keyed_hash(ip, "secret-one")
+    assert one != keyed_hash(ip, "secret-two")
+    assert one != keyed_hash("203.0.113.8", "secret-one")
 
 
 def test_the_limits_login_can_only_touch_its_table(limits_db, db):
@@ -105,7 +105,7 @@ def test_the_limits_login_can_only_touch_its_table(limits_db, db):
                           "DELETE FROM releases", "CREATE TABLE stolen (id int)"]:
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(statement)
-        conn.execute("SELECT count(*) FROM question_counts")
+        conn.execute("SELECT count(*) FROM limit_counts")
 
 
 def test_rerunning_the_command_changes_the_password_and_keeps_the_counts(limits, postgres_url, limits_role, db):
@@ -130,3 +130,21 @@ def test_command_needs_both_settings(monkeypatch, capsys):
 
     assert command.main([]) == 1
     assert "POSTGRES_LIMITS_USER and POSTGRES_LIMITS_PASSWORD" in capsys.readouterr().err
+
+
+def test_the_old_counts_table_is_renamed_and_keeps_its_counts(db, limits_role):
+    from ingestion.create_limits_role import create_limits_role
+    from tests.conftest import FAKE_SETTINGS
+
+    db.execute("ALTER TABLE limit_counts RENAME TO question_counts")
+    db.execute("ALTER INDEX limit_counts_pkey RENAME TO question_counts_pkey")
+    db.execute("INSERT INTO question_counts VALUES ('rename-check', 'day', now(), 7)")
+    db.commit()
+
+    create_limits_role(db, FAKE_SETTINGS["POSTGRES_LIMITS_USER"], FAKE_SETTINGS["POSTGRES_LIMITS_PASSWORD"])
+    db.commit()
+
+    assert db.execute("SELECT to_regclass('question_counts'), to_regclass('limit_counts')::text").fetchone() == (None, "limit_counts")
+    assert db.execute("SELECT count FROM limit_counts WHERE visitor = 'rename-check'").fetchone() == (7,)
+    db.execute("DELETE FROM limit_counts WHERE visitor = 'rename-check'")
+    db.commit()

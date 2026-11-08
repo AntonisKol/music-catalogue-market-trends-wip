@@ -114,7 +114,7 @@ def test_a_failed_human_check_is_refused_and_not_counted(client, fakes, db):
     assert response.status_code == 403
     assert response.get_json()["error"]["code"] == "captcha_failed"
     assert fakes.questions == []
-    assert db.execute("SELECT count(*) FROM question_counts").fetchone() == (0,)
+    assert db.execute("SELECT count(*) FROM limit_counts").fetchone() == (0,)
 
 
 def test_a_question_without_a_human_check_token_is_refused_when_not_signed_in(client, fakes, db):
@@ -123,7 +123,7 @@ def test_a_question_without_a_human_check_token_is_refused_when_not_signed_in(cl
     assert response.status_code == 403
     assert response.get_json()["error"]["code"] == "captcha_failed"
     assert fakes.tokens == [] and fakes.questions == []
-    assert db.execute("SELECT count(*) FROM question_counts").fetchone() == (0,)
+    assert db.execute("SELECT count(*) FROM limit_counts").fetchone() == (0,)
 
 
 def test_an_unreachable_cloudflare_refuses_the_question(client, fakes):
@@ -181,7 +181,7 @@ def test_behind_a_trusted_proxy_the_forwarded_address_identifies_the_visitor(fak
 def test_addresses_are_never_stored(client, db):
     ask(client, ip="203.0.113.7")
 
-    visitors = [row[0] for row in db.execute("SELECT visitor FROM question_counts").fetchall()]
+    visitors = [row[0] for row in db.execute("SELECT visitor FROM limit_counts").fetchall()]
     assert "203.0.113.7" not in visitors and "203.0.113.7" not in "".join(visitors)
 
 
@@ -339,7 +339,7 @@ def test_the_access_log_has_the_visitors_hash_and_never_the_address(client, capl
                headers={"User-Agent": "test-browser"})
 
     line = next(record.getMessage() for record in caplog.records if record.name == "web.access")
-    assert line == f"{limits.visitor_id('203.0.113.7', config.VISITOR_HASH_SECRET)} GET /api/health 200 test-browser"
+    assert line == f"{limits.keyed_hash('203.0.113.7', config.VISITOR_HASH_SECRET)} GET /api/health 200 test-browser"
     assert "203.0.113.7" not in caplog.text
 
 
@@ -354,3 +354,16 @@ def test_a_visitor_cannot_fake_a_line_in_the_access_log(client, caplog):
 def test_why_cloudflare_refused_a_token_reaches_the_log(client):
     assert logging.getLogger("web.captcha").isEnabledFor(logging.INFO)
     assert logging.getLogger("web").handlers
+
+
+def test_a_question_that_could_not_be_answered_is_given_back(client, fakes, db):
+    fakes.answer_with = QuestionError("busy", "Too many questions at the moment. Please try again in a minute.")
+    assert ask(client).status_code == 503
+    fakes.answer_with = ANSWER
+
+    response = ask(client)
+
+    assert response.get_json()["remaining"] == {"hour": config.QUESTIONS_PER_VISITOR_HOUR - 1,
+                                                "day": config.QUESTIONS_PER_VISITOR_DAY - 1}
+    db.commit()
+    assert db.execute("SELECT count FROM limit_counts WHERE visitor = 'site'").fetchone() == (1,)

@@ -19,6 +19,7 @@
 
 const MAX_QUESTION_LENGTH = 500;
 const MIN_PASSWORD_LENGTH = 12;
+const UNREACHABLE = "Could not reach the question service. Please check your connection and try again.";
 // Remembered in this browser only, so a returning visitor sees the sign-in form first.
 const HAS_ACCOUNT_KEY = "mt-ask-has-account";
 const REQUEST_TIMEOUT_MS = 90_000;
@@ -464,7 +465,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
         requestStatus.className = "mt-ask-status mt-ask-status-error";
       }
     } catch {
-      requestStatus.textContent = "Could not reach the question service. Please try again.";
+      requestStatus.textContent = UNREACHABLE;
       requestStatus.className = "mt-ask-status mt-ask-status-error";
     } finally {
       requestButton.disabled = false;
@@ -482,7 +483,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       signInForm.hidden = true;
       account.replaceChildren(
         el("span", {}, "Signed in as ", el("strong", {}, state.email)), " ",
-        ...(state.verified ? [el("span", { class: "mt-ask-badge" }, "✓ Verified"), " "] : []), "· ", left, " · ",
+        el("span", { class: "mt-ask-badge" }, "✓ Verified"), " ", "· ", left, " · ",
         link("Sign out", signOut), " · ", link("Delete my account", deleteAccount),
       );
     } else {
@@ -521,7 +522,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       await postJson("/api/sign-out", {});
       showStatus("You are signed out.");
     } catch {
-      showStatus("Could not reach the question service. Please try again.", "error");
+      showStatus(UNREACHABLE, "error");
     }
     await loadAccount();
   }
@@ -533,7 +534,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       const body = await response.json().catch(() => null);
       showStatus(response.ok ? "Your account has been deleted." : errorMessage(response.status, body), response.ok ? "" : "error");
     } catch {
-      showStatus("Could not reach the question service. Please try again.", "error");
+      showStatus(UNREACHABLE, "error");
     }
     await loadAccount();
   }
@@ -669,7 +670,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
         signInStatus.textContent = body?.message ?? "Please check your inbox.";
       }
     } catch {
-      showAccountProblem("Could not reach the question service. Please check your connection and try again.");
+      showAccountProblem(UNREACHABLE);
     } finally {
       // The password is never kept on the page, whether it worked or not.
       password.value = "";
@@ -723,7 +724,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     } catch (error) {
       showStatus(error?.name === "AbortError"
         ? "The answer took too long. Please try again."
-        : "Could not reach the question service. Please check your connection and try again.", "error");
+        : UNREACHABLE, "error");
     } finally {
       clearTimeout(timer);
       setBusy(false);

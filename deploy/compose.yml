@@ -55,7 +55,7 @@ services:
       - QUESTIONS_PER_SITE_DAY
       - RESEND_API_KEY
       - SIGN_IN_EMAIL_FROM
-      - SIGN_IN_LOG_LINKS
+      - EMAIL_LOG_LINKS
       - PUBLIC_API_URL
       - SIGN_IN_RETURN_URL
       - COOKIE_SECURE

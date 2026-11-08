@@ -202,14 +202,14 @@ def test_deleting_an_account_removes_everything_stored_for_it(conn, db):
     _, account_id = accounts.confirm_email(conn, token, NOON)
     accounts.ask_for_reset(conn, EMAIL, NOON)
     counter = f"account:{account_id}"
-    conn.execute("INSERT INTO question_counts VALUES (%s, 'day', %s, 1)", (counter, NOON))
+    conn.execute("INSERT INTO limit_counts VALUES (%s, 'day', %s, 1)", (counter, NOON))
 
     accounts.delete_account(conn, account_id, counter)
 
     db.commit()
     for table in ("accounts", "email_tokens", "sessions"):
         assert db.execute(f"SELECT count(*) FROM {table}").fetchone() == (0,), table
-    assert db.execute("SELECT count(*) FROM question_counts WHERE visitor = %s", (counter,)).fetchone() == (0,)
+    assert db.execute("SELECT count(*) FROM limit_counts WHERE visitor = %s", (counter,)).fetchone() == (0,)
 
 
 # --- mailer.py -------------------------------------------------------------------
@@ -299,11 +299,11 @@ def test_a_refused_or_failed_send_is_reported(monkeypatch, reply):
 
 def test_without_a_key_nothing_is_sent_unless_links_go_to_the_log(monkeypatch, caplog):
     monkeypatch.setattr(config, "RESEND_API_KEY", "")
-    monkeypatch.setattr(config, "SIGN_IN_LOG_LINKS", False)
+    monkeypatch.setattr(config, "EMAIL_LOG_LINKS", False)
     with pytest.raises(mailer.MailUnavailable):
         mailer.send_confirmation(EMAIL, "https://api.example/x?token=abc")
 
-    monkeypatch.setattr(config, "SIGN_IN_LOG_LINKS", True)
+    monkeypatch.setattr(config, "EMAIL_LOG_LINKS", True)
     mailer.send_confirmation(EMAIL, "https://api.example/x?token=abc")
     assert "token=abc" in caplog.text
 
@@ -463,7 +463,7 @@ def test_throwaway_addresses_cannot_sign_up_and_cost_nothing(client, fakes, db, 
     assert fakes.mails == [] and fakes.tokens == []
     db.commit()
     assert db.execute("SELECT count(*) FROM accounts").fetchone() == (0,)
-    assert db.execute("SELECT count(*) FROM question_counts WHERE visitor LIKE 'mail-%'").fetchone() == (0,)
+    assert db.execute("SELECT count(*) FROM limit_counts WHERE visitor LIKE 'mail-%'").fetchone() == (0,)
 
 
 @pytest.mark.parametrize("email", ["a@gmail.com", "a@googlemail.com", "a@outlook.com", "a@hotmail.com", "a@yahoo.com",
@@ -508,7 +508,7 @@ def test_emails_are_limited_per_visitor(client, fakes):
 
 def test_without_email_set_up_signing_up_says_so(client, fakes, monkeypatch):
     monkeypatch.setattr(config, "RESEND_API_KEY", "")
-    monkeypatch.setattr(config, "SIGN_IN_LOG_LINKS", False)
+    monkeypatch.setattr(config, "EMAIL_LOG_LINKS", False)
 
     response = sign_up(client)
 
@@ -558,7 +558,7 @@ def test_confirming_returns_to_the_site_verified_and_signed_in(client, fakes):
     assert response.status_code == 303
     assert response.headers["Location"] == "https://site.example/market-trends/?verified=1"
     account = client.get("/api/account").get_json()
-    assert account["signed_in"] is True and account["email"] == EMAIL and account["verified"] is True
+    assert account["signed_in"] is True and account["email"] == EMAIL
     assert account["limits"]["day"] == config.QUESTIONS_PER_ACCOUNT_DAY
 
 
@@ -569,7 +569,7 @@ def test_later_visits_use_the_password(client, fakes):
     response = sign_in_with_password(client, " LISTENER@example.com")
 
     assert response.status_code == 200
-    assert client.get("/api/account").get_json()["verified"] is True
+    assert client.get("/api/account").get_json()["signed_in"] is True
 
 
 def test_a_wrong_password_and_an_unknown_address_get_the_same_answer(client, fakes):
@@ -728,7 +728,7 @@ def test_anonymous_visitors_see_what_is_left(client):
     ask(client, ip="203.0.113.7")
 
     assert client.get("/api/account", environ_base={"REMOTE_ADDR": "203.0.113.7"}).get_json() == {
-        "signed_in": False, "email": None, "verified": False,
+        "signed_in": False, "email": None,
         "limits": {"hour": config.QUESTIONS_PER_VISITOR_HOUR, "day": config.QUESTIONS_PER_VISITOR_DAY},
         "remaining": {"hour": config.QUESTIONS_PER_VISITOR_HOUR - 1, "day": config.QUESTIONS_PER_VISITOR_DAY - 1},
     }
@@ -766,7 +766,7 @@ def test_deleting_the_account_signs_out_and_removes_it(client, fakes, db):
     assert client.get("/api/account").get_json()["signed_in"] is False
     db.commit()
     assert db.execute("SELECT count(*) FROM accounts").fetchone() == (0,)
-    assert db.execute("SELECT count(*) FROM question_counts WHERE visitor LIKE 'account:%'").fetchone() == (0,)
+    assert db.execute("SELECT count(*) FROM limit_counts WHERE visitor LIKE 'account:%'").fetchone() == (0,)
 
 
 def test_deleting_needs_a_session(client):
@@ -806,7 +806,7 @@ def test_signed_in_questions_count_against_the_account_not_the_address(client, f
     assert anonymous["remaining"] == {"hour": config.QUESTIONS_PER_VISITOR_HOUR, "day": config.QUESTIONS_PER_VISITOR_DAY}
     db.commit()
     questions = db.execute(
-        "SELECT visitor, count FROM question_counts"
+        "SELECT visitor, count FROM limit_counts"
         " WHERE period = 'day' AND visitor <> 'site' AND visitor NOT LIKE 'sign-in-%' AND visitor NOT LIKE 'mail-%'"
     ).fetchall()
     assert questions == [("account:1", 2)]
@@ -825,14 +825,14 @@ def test_setting_up_the_login_replaces_older_accounts(db, limits_role):
     db.execute("""CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, account_id BIGINT NOT NULL REFERENCES accounts(id),
                   created_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL)""")
     db.execute("INSERT INTO accounts (username, password_hash, created_at) VALUES ('owner', 'hash', now())")
-    db.execute("""INSERT INTO question_counts VALUES ('account:1', 'day', now(), 1), ('sign-in-user:x', 'day', now(), 1),
+    db.execute("""INSERT INTO limit_counts VALUES ('account:1', 'day', now(), 1), ('sign-in-user:x', 'day', now(), 1),
                   ('some-visitor', 'day', now(), 1)""")
 
     create_limits_role(db, FAKE_SETTINGS["POSTGRES_LIMITS_USER"], FAKE_SETTINGS["POSTGRES_LIMITS_PASSWORD"])
     db.commit()
 
     assert db.execute("SELECT count(*) FROM accounts").fetchone() == (0,)
-    left = [visitor for (visitor,) in db.execute("SELECT visitor FROM question_counts").fetchall()]
+    left = [visitor for (visitor,) in db.execute("SELECT visitor FROM limit_counts").fetchall()]
     assert "some-visitor" in left and "account:1" not in left and "sign-in-user:x" not in left
     db.execute("INSERT INTO accounts (email, password_hash, created_at) VALUES ('a@example.com', 'hash', now())")
     db.rollback()

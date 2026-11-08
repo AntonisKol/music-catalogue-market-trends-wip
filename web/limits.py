@@ -1,6 +1,6 @@
 """How often visitors, and the site as a whole, may ask.
 
-Counts are kept in PostgreSQL (question_counts, see ingestion/create_limits_role.py)
+Counts are kept in PostgreSQL (limit_counts, see ingestion/create_limits_role.py)
 per fixed UTC hour and day, so they survive restarts and are shared by every API
 process. One question takes one unit from each of three counts at once: the
 visitor's (or, when signed in, the account's) hour and day, and the site's day.
@@ -19,9 +19,9 @@ SITE = "site"
 KEEP = timedelta(days=2)
 
 TAKE = """
-    INSERT INTO question_counts (visitor, period, window_start, count)
+    INSERT INTO limit_counts (visitor, period, window_start, count)
     VALUES (%(visitor)s, %(period)s, %(window_start)s, 1)
-    ON CONFLICT (visitor, period, window_start) DO UPDATE SET count = question_counts.count + 1
+    ON CONFLICT (visitor, period, window_start) DO UPDATE SET count = limit_counts.count + 1
     RETURNING count
 """
 
@@ -45,10 +45,10 @@ def connect_limits() -> psycopg.Connection:
     )
 
 
-def visitor_id(ip_address: str, secret: str) -> str:
-    """A keyed one-way hash: the same visitor always maps to the same id, but the
-    address cannot be recovered from it without the secret."""
-    return hmac.new(secret.encode(), ip_address.encode(), hashlib.sha256).hexdigest()[:32]
+def keyed_hash(text: str, secret: str) -> str:
+    """A keyed one-way hash, for counting visitors and addresses without storing them:
+    the same text always gives the same result, but it can't be turned back without the secret."""
+    return hmac.new(secret.encode(), text.encode(), hashlib.sha256).hexdigest()[:32]
 
 
 def seconds_until(end: datetime, now: datetime) -> int:
@@ -71,7 +71,7 @@ def take(conn: psycopg.Connection, now: datetime, checks: list) -> dict:
     starts = {"hour": (hour, hour + timedelta(hours=1)), "day": (day, day + timedelta(days=1))}
     left = {}
     with conn.transaction():
-        conn.execute("DELETE FROM question_counts WHERE window_start < %s", (now - KEEP,))
+        conn.execute("DELETE FROM limit_counts WHERE window_start < %s", (now - KEEP,))
         for who, period, limit, code, message in checks:
             window_start, ends = starts[period]
             count = conn.execute(TAKE, {"visitor": who, "period": period, "window_start": window_start}).fetchone()[0]
@@ -100,12 +100,24 @@ def take_question(conn: psycopg.Connection, who: str, now: datetime,
     return {"hour": left[(who, "hour")], "day": left[(who, "day")]}
 
 
+def give_back_question(conn: psycopg.Connection, who: str, asked_at: datetime) -> None:
+    """Undo take_question for a question that could not be answered, in the windows it was counted in."""
+    _, hour, day = windows(asked_at)
+    with conn.transaction():
+        for visitor, period, window_start in ((SITE, "day", day), (who, "day", day), (who, "hour", hour)):
+            conn.execute(
+                "UPDATE limit_counts SET count = count - 1"
+                " WHERE visitor = %s AND period = %s AND window_start = %s AND count > 0",
+                (visitor, period, window_start),
+            )
+
+
 def remaining(conn: psycopg.Connection, who: str, now: datetime, per_hour: int, per_day: int) -> dict:
     """What is left of a visitor's or account's counts, without taking anything."""
     _, hour, day = windows(now)
     with conn.transaction():
         rows = dict(conn.execute(
-            "SELECT period, count FROM question_counts WHERE visitor = %s"
+            "SELECT period, count FROM limit_counts WHERE visitor = %s"
             " AND ((period = 'hour' AND window_start = %s) OR (period = 'day' AND window_start = %s))",
             (who, hour, day),
         ).fetchall())
