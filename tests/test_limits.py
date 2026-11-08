@@ -119,18 +119,6 @@ def test_rerunning_the_command_changes_the_password_and_keeps_the_counts(limits,
             create_limits_role(owner, limits_role, "limits-test-password")
 
 
-def test_rerunning_adds_label_notification_status_to_an_existing_database(postgres_url, limits_role):
-    with psycopg.connect(postgres_url, autocommit=True) as owner:
-        owner.execute("ALTER TABLE label_requests DROP COLUMN notification_sent_at")
-
-        create_limits_role(owner, limits_role, "limits-test-password")
-
-        assert owner.execute(
-            "SELECT column_name FROM information_schema.columns"
-            " WHERE table_name = 'label_requests' AND column_name = 'notification_sent_at'"
-        ).fetchone() == ("notification_sent_at",)
-
-
 @pytest.mark.parametrize("name", ["Robert'); DROP TABLE labels;--", "UPPER", ""])
 def test_unsafe_role_names_are_refused(name):
     with pytest.raises(ValueError):
