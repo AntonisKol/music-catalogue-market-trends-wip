@@ -4,7 +4,8 @@
     python -m ingestion.label_requests review <request>           # Discogs matches; marks it "being reviewed"
     python -m ingestion.label_requests approve <request> <label>  # a Discogs label id or link
     python -m ingestion.label_requests reject <request> <reason>  # the reason goes to everyone who asked
-    python -m ingestion.label_requests notify                     # cron: email new requests, retry failed emails
+    python -m ingestion.label_requests notify                     # email new requests, retry failed emails
+    python -m ingestion.label_requests watch                      # runs on the server: notify the moment a request arrives
 
 Everyone who asked is emailed each time their request changes: being reviewed,
 added, or rejected with the reason.
@@ -26,13 +27,16 @@ from web import mailer
 from web.label_requests import comparable
 
 USAGE = ("Usage: python -m ingestion.label_requests list | review <request> | approve <request> <label> | "
-         "reject <request> <reason> | notify")
+         "reject <request> <reason> | notify | watch")
 OPEN = ("waiting", "reviewing")
 MATCHES = 5
 MAX_REASON_LENGTH = 500
+# The database's trigger on label_requests (create_limits_role.py) notifies this channel.
+CHANNEL = "label_requests"
+RETRY_SECONDS = 15 * 60
 DISCOGS_LINK = re.compile(r"discogs\.com/(?:[a-z]{2}/)?label/(\d+)")
 # How many arguments each command takes: (at least, at most). A reason may be several words.
-ARGUMENTS = {"list": (0, 0), "notify": (0, 0), "review": (1, 1), "approve": (2, 2), "reject": (2, None)}
+ARGUMENTS = {"list": (0, 0), "notify": (0, 0), "watch": (0, 0), "review": (1, 1), "approve": (2, 2), "reject": (2, None)}
 
 
 def well_formed(argv: list) -> bool:
@@ -116,7 +120,7 @@ def email_status_changes(conn: psycopg.Connection) -> int:
 
 def emailed(failed: int) -> str:
     """How the visitors' emails went, for the owner's terminal."""
-    return f"everyone who asked was emailed{f', except {failed} (retried every 15 minutes)' if failed else ''}"
+    return f"everyone who asked was emailed{f', except {failed} (retried within 15 minutes)' if failed else ''}"
 
 
 def notify(conn: psycopg.Connection) -> int:
@@ -141,12 +145,35 @@ def notify(conn: psycopg.Connection) -> int:
     return failed
 
 
+def watch(rounds: int = None, retry_seconds: float = RETRY_SECONDS) -> None:
+    """Email new requests the moment the database says one arrived, and retry failed
+    emails every 15 minutes even when nothing arrives. Runs until stopped; a lost
+    connection ends it, and Docker starts it again. rounds limits it, for tests."""
+    with database.connect() as listener:
+        listener.autocommit = True
+        listener.execute(f"LISTEN {CHANNEL}")
+        print("Watching for label requests.")
+        count = 0
+        while rounds is None or count < rounds:
+            # Requests that arrived while the watcher was down are found on the first round.
+            with database.connect() as conn:
+                notify(conn)
+            count += 1
+            if rounds is None or count < rounds:
+                # Returns at the first notification, or after retry_seconds without one.
+                for _ in listener.notifies(timeout=retry_seconds, stop_after=1):
+                    pass
+
+
 def main(argv: list) -> int:
     if not well_formed(argv):
         print(USAGE, file=sys.stderr)
         return 2
     command, args = argv[0], argv[1:]
     try:
+        if command == "watch":
+            watch()
+            return 0
         with database.connect() as conn:
             if command == "list":
                 groups = open_requests(conn)

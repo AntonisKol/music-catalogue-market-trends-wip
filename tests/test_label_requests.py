@@ -436,3 +436,71 @@ def test_old_declined_requests_become_rejected(db, limits_role):
     db.rollback()
     db.execute("TRUNCATE label_requests, accounts RESTART IDENTITY CASCADE")
     db.commit()
+
+
+# --- Emailed the moment a request arrives (issue 84) ---------------------------------
+
+def test_a_new_request_wakes_the_watcher_through_the_database(client, fakes, postgres_url):
+    with psycopg.connect(postgres_url, autocommit=True) as listener:
+        listener.execute(f"LISTEN {owner.CHANNEL}")
+        sign_in(client, fakes)
+
+        assert request_label(client, "Orbe Records").status_code == 201
+
+        assert [n.channel for n in listener.notifies(timeout=5, stop_after=1)] == [owner.CHANNEL]
+
+
+def test_the_watcher_emails_a_request_as_soon_as_it_arrives(waiting_requests, owner_db, db, outbox, monkeypatch):
+    import threading
+
+    monkeypatch.setattr(owner, "matches_on_discogs", lambda name: [])
+    first_round = threading.Event()
+    notify = owner.notify
+
+    def notify_and_tell(conn):
+        failed = notify(conn)
+        first_round.set()
+        return failed
+
+    monkeypatch.setattr(owner, "notify", notify_and_tell)
+    # Without the database waking it, the second round would come only after 60 seconds.
+    watcher = threading.Thread(target=owner.watch, kwargs={"rounds": 2, "retry_seconds": 60})
+    watcher.start()
+    assert first_round.wait(10)
+    assert [mail[3] for mail in outbox.sent] == ["Polegroup", "Arts"]
+
+    db.execute("INSERT INTO label_requests (account_id, name, created_at) VALUES (2, 'Ostgut Ton', now())")
+    db.commit()
+
+    watcher.join(10)
+    assert not watcher.is_alive()
+    assert [mail[3] for mail in outbox.sent] == ["Polegroup", "Arts", "Ostgut Ton"]
+
+
+def test_the_watcher_retries_failed_emails_when_nothing_arrives(waiting_requests, owner_db, outbox, monkeypatch):
+    monkeypatch.setattr(owner, "matches_on_discogs", lambda name: [])
+    outbox.fail = True
+    notify = owner.notify
+
+    def notify_then_recover(conn):
+        failed = notify(conn)
+        outbox.fail = False
+        return failed
+
+    monkeypatch.setattr(owner, "notify", notify_then_recover)
+
+    owner.watch(rounds=2, retry_seconds=0.2)
+
+    assert [mail[3] for mail in outbox.sent] == ["Polegroup", "Arts"]
+
+
+def test_the_watcher_stops_with_an_error_when_the_database_is_unreachable(monkeypatch, capsys):
+    from ingestion import database
+
+    def unreachable():
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(database, "connect", unreachable)
+
+    assert owner.main(["watch"]) == 1
+    assert "connection refused" in capsys.readouterr().err
