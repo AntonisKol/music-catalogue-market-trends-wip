@@ -6,10 +6,8 @@ Run it once per database, as the app's own login (POSTGRES_USER), like
 create_reader_role. The login's name and password come from POSTGRES_LIMITS_USER
 and POSTGRES_LIMITS_PASSWORD. Running it again updates the password.
 
-The web API writes two kinds of things: how many questions each visitor, account
-and the whole site have asked in the current hour and day, and signing up
-(accounts, confirmation and new-password links, sessions). This login may read and change those
-four tables and nothing else, so the reader login stays read-only and the
+The web API writes counters, accounts, links, sessions and label requests. This
+login may read and change those tables and nothing else, so the reader login stays read-only and the
 catalogue cannot be changed from the web.
 """
 import os
@@ -84,8 +82,10 @@ CREATE_TABLES = """
         status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'added', 'declined')),
         label_id INT,
         created_at TIMESTAMPTZ NOT NULL,
-        decided_at TIMESTAMPTZ
+        decided_at TIMESTAMPTZ,
+        notification_sent_at TIMESTAMPTZ
     );
+    ALTER TABLE label_requests ADD COLUMN IF NOT EXISTS notification_sent_at TIMESTAMPTZ;
     CREATE UNIQUE INDEX IF NOT EXISTS label_requests_once_per_account ON label_requests (account_id, lower(name));
 """
 TABLES = ("question_counts", "accounts", "email_tokens", "sessions", "label_requests")

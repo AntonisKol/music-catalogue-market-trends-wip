@@ -708,6 +708,8 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
         return;
       }
       showStatus("");
+      textarea.value = "";
+      update();
       showAnswer(body);
       if (state && body.remaining) {
         state.remaining = body.remaining;

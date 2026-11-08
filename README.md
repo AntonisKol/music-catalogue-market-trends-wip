@@ -48,7 +48,7 @@ The tasks below are ordered so each step builds on working code from the previou
 | 8 | [#9 Test the Anthropic query service and guardrails](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/9) | P1 | Done | Test the assistant service, tool selection, read-only behavior, query limits, and grounded answers without live API calls. |
 | 9 | [#8 Expose natural-language questions through a Python web API](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/8) | P1 | Done | Add a validated HTTP/JSON endpoint for the browser to call; keep Anthropic and database credentials server-side. |
 | 10 | [#12 Build the natural-language question web frontend](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/12) | P1 | Done | Build the user-facing question form and answer view, including loading, validation, and error states. |
-| 11 | [#13 Test web question frontend and accessibility](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) | P1 | Todo | Test the browser experience, API integration, keyboard interaction, focus, and accessibility announcements. |
+| 11 | [#13 Test web question frontend and accessibility](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/13) | P1 | Done | Test the browser experience, API integration, keyboard interaction, focus, and accessibility announcements. |
 
 ### What each task teaches
 
@@ -111,6 +111,7 @@ POSTGRES_LIMITS_USER=catalogue_limits
 POSTGRES_LIMITS_PASSWORD=choose_another_password
 TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA
 VISITOR_HASH_SECRET=a_long_random_string
+LABEL_REQUEST_NOTIFICATION_EMAIL=operator@example.com
 ```
 
 `DISCOGS_USER_AGENT` must identify this app. Discogs rejects generic clients. Use your own token and password; these values are examples for local development, not production credentials. Do not commit `.env`.
@@ -209,9 +210,10 @@ python -m ingestion.label_requests list                 # waiting requests, by n
 python -m ingestion.label_requests search 12            # the labels on Discogs matching request 12, with their size
 python -m ingestion.label_requests approve 12 698526    # track Discogs label 698526 for it
 python -m ingestion.label_requests decline 12
+python -m ingestion.label_requests notify              # retry any email notifications that could not be sent
 ```
 
-Approving tracks the label like `track_labels add`, so its data arrives with the next nightly run. Approving or declining answers every waiting request for the same name, and the visitor sees the result under the box. On the server, put `docker compose --env-file .env -f deploy/compose.yml run --rm -T api` in front, from `/srv/market-trends`.
+Each new request emails the address in `LABEL_REQUEST_NOTIFICATION_EMAIL`. If email delivery fails, the request remains saved and the API tells the visitor; retrying the submission retries the notification, or run `notify` to retry all pending notifications. Delivery is at-least-once, so a rare retry after a provider accepted an email but before the sent status was saved can produce a duplicate. Approving tracks the label like `track_labels add`, so its data arrives with the next nightly run. Approving or declining answers every waiting request for equivalent label names, and the visitor sees the result under the box. On the server, put `docker compose --env-file .env -f deploy/compose.yml run --rm -T api` in front, from `/srv/market-trends`.
 
 One command updates every active label: its vinyl releases, that day's prices, and want, have and ratings once a week.
 
@@ -342,7 +344,7 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 | 413 | the request is over 8 KB |
 | 429 | `visitor_limit_reached`, `account_limit_reached`, `site_limit_reached`, `sign_in_limit_reached`, with a `Retry-After` header |
 | 500 | `configuration`, `internal_error` |
-| 503 | `captcha_unavailable`, `busy`, `unavailable`, `database`, `sign_in_unavailable`, with `Retry-After` where waiting helps |
+| 503 | `captcha_unavailable`, `busy`, `unavailable`, `database`, `sign_in_unavailable`, `notification_unavailable`, with `Retry-After` where waiting helps |
 
 **Settings in `.env`:**
 - **Required:**
@@ -378,14 +380,17 @@ To refresh the list, replace the domains in that file with the project's `dispos
 
 **What is stored:** the email address, a salted scrypt hash of the password, when the account was created, confirmed and last signed in, and question counts for two days. Links and sessions are stored only as SHA-256 hashes, so a copy of the database cannot be used to sign in.
 
+The web API container receives only the runtime settings it needs. Ingestion-only credentials, including the Discogs token and PostgreSQL writer password, are not passed into the public-facing API process.
+
 **Settings in `.env`:**
 - `RESEND_API_KEY`: a key from [Resend](https://resend.com), which sends the emails. Add Resend's DNS records for adnsaudio.com so the emails arrive from the site's own domain and don't land in spam. Without a key, signing up is switched off and the API says so.
 - `SIGN_IN_EMAIL_FROM`: the sender, by default `Market Trends <sign-in@adnsaudio.com>`.
+- `LABEL_REQUEST_NOTIFICATION_EMAIL`: the operator mailbox that receives new record-label requests. Set this to an address you monitor; there is no built-in recipient.
 - `PUBLIC_API_URL`: the API's public address used in the links, for example `https://api.adnsaudio.com`.
 - `SIGN_IN_RETURN_URL`: where the buttons go afterwards, by default `https://adnsaudio.com/market-trends/`.
 - For trying it on a laptop only: `SIGN_IN_LOG_LINKS=true` writes the links to the API's log instead of emailing them, and `COOKIE_SECURE=false` lets the cookie work over plain http.
 
-**Asking for a label.** Signed in, a visitor can request a label the site doesn't track: `POST /api/label-requests` with `{"name"}` stores it for you to review, and `GET /api/label-requests` lists the visitor's own requests with their status (`waiting`, `added` or `declined`). A label that is already tracked gets a `tracked` answer and no request. Requests are limited to 3 a day per account and 50 a day for the site, and are deleted with the account. The web API never calls Discogs; your review command does.
+**Asking for a label.** Signed in, a visitor can request a label the site doesn't track: `POST /api/label-requests` with `{"name"}` stores it for you to review, and `GET /api/label-requests` lists the visitor's own requests with their status (`waiting`, `added` or `declined`). A label that is already tracked gets a `tracked` answer and no request. Requests are limited to 3 a day per account and 50 a day for the site, and are deleted with the account. The operator is emailed at `LABEL_REQUEST_NOTIFICATION_EMAIL`; if delivery fails, the request stays queued and the API reports that it was saved without claiming notification succeeded. The web API never calls Discogs; your review command does.
 
 The emails carry the ADNS Audio logo from [`web/assets/`](web/assets) inside the message, because many mail apps block images fetched from the web.
 
@@ -460,7 +465,7 @@ Cron starts the nightly update at 03:00 UTC and then the backup. The page is par
 4. **Storage Box.** Order a Storage Box in the Hetzner Console, switch on SSH access, and add the printed key to it ([Hetzner's guide](https://docs.hetzner.com/storage/storage-box/ssh-keys/add-ssh-keys/)).
 5. **Turnstile.** In Cloudflare, add a Turnstile widget for `adnsaudio.com` in invisible mode. It gives a public site key and a secret key.
 6. **Resend.** Add the domain `adnsaudio.com` in Resend and create the DNS records it lists in Cloudflare. They live on their own subdomain, so the site's existing email forwarding keeps working. Then create an API key, which goes in `RESEND_API_KEY` in the next step.
-7. **Settings.** [`deploy/server.env.example`](deploy/server.env.example) lists every setting the server needs. Copy it over and fill it in on the server, taking the database, Discogs and Anthropic values from your Mac's `.env`:
+7. **Settings.** [`deploy/server.env.example`](deploy/server.env.example) lists every setting the server needs. Copy it over and fill it in on the server, including `LABEL_REQUEST_NOTIFICATION_EMAIL` with an operator mailbox you monitor, and taking the database, Discogs and Anthropic values from your Mac's `.env`:
    ```bash
    scp deploy/server.env.example deploy@<server-ip>:/srv/market-trends/.env
    ssh deploy@<server-ip> 'chmod 600 /srv/market-trends/.env && nano /srv/market-trends/.env'

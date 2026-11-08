@@ -95,3 +95,20 @@ def send_already_registered(email: str) -> None:
     note = "If it was you, sign in on the Market Trends page; \"Forgot your password?\" is there too. If it wasn't, ignore this email."
     send(email, "You already have a Market Trends account", f"{lead}\n\n{note}\n\n{config.SIGN_IN_RETURN_URL}\n",
          html_message(title, [lead, note], ("Go to Market Trends", config.SIGN_IN_RETURN_URL)), config.SIGN_IN_RETURN_URL)
+
+
+def send_label_request_notification(name: str, request_id: int) -> None:
+    """Notify the configured operator; never log a request as a substitute for email."""
+    recipient = config.LABEL_REQUEST_NOTIFICATION_EMAIL
+    if not recipient:
+        raise MailUnavailable("LABEL_REQUEST_NOTIFICATION_EMAIL is not set")
+    title = "A record label was requested"
+    text = (
+        f"A visitor requested the record label {name!r} (request {request_id}).\n\n"
+        "Review it with `python -m ingestion.label_requests list` and `search <request_id>`.\n"
+    )
+    send(recipient, "A record label was requested", text,
+         html_message(title, [
+             f'A visitor requested the record label "{name}" (request {request_id}).',
+             "Review it with the label-request command in the README.",
+         ]))

@@ -35,6 +35,7 @@ QUESTIONS_PER_SITE_DAY = int(os.environ.get("QUESTIONS_PER_SITE_DAY", "1000"))
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 SIGN_IN_EMAIL_FROM = os.environ.get("SIGN_IN_EMAIL_FROM", "Market Trends <sign-in@adnsaudio.com>")
 SIGN_IN_LOG_LINKS = os.environ.get("SIGN_IN_LOG_LINKS", "").lower() == "true"
+LABEL_REQUEST_NOTIFICATION_EMAIL = os.environ.get("LABEL_REQUEST_NOTIFICATION_EMAIL", "").strip()
 # The API's public address, used in the links, e.g. https://api.adnsaudio.com.
 # Empty: the address the request came to.
 PUBLIC_API_URL = os.environ.get("PUBLIC_API_URL", "").rstrip("/")
