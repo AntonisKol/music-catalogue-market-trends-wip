@@ -5,7 +5,7 @@ How the project fits together, what each part is made of, and how it was built s
 - **Everyone:** the diagrams, the *In one sentence* lines and the problem log read without coding knowledge.
 - **Developers:** every box names its code file, and the components table goes into detail.
 
-*Last updated: 8 November 2026, after run status was separated from missed nights. 537 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
+*Last updated: 8 November 2026, after questions were made independent of the price history's length. 537 automated tests, run by GitHub Actions on every pull request, plus a before-release test with the real Claude and a browser check of the question box.*
 
 **How to read the diagrams.** Each box gives the part's name, its **code** (file), **how** it works, and its outcome:
 
@@ -511,6 +511,7 @@ The same routine has been used on every task:
 | 37 | Publishing the new box failed: the website refused the push | `deploy.sh page` pushed straight to the website's `main`, which only takes pull requests with passing checks | It now opens a pull request on the website; merging it publishes the page |
 | 63 | Each night about 2,100 releases cost a request and were skipped anyway | Releases only credited to a label, or not vinyl by their details, can only be told apart with a request, and nothing remembered the answer | The answer is stored per release and label, and checked again after 28 to 34 days, spread by release id |
 | 10 | The server's first night saved everything with no failures, yet showed as failed | A run checked for missed nights against the last successful run, so one failed night made the next good one fail too | Status covers only the run's own problems; missed nights, meaning no run at all for 36 hours, are a separate warning |
+| 69 | Questions would have hit the 5-second query limit within a year | Every tool found each release's latest price by reading the whole price history, which grows by about 19,000 rows a night: 87 ms at 87,000 rows, 2.5 to 4.5 s at a year's 6.6 million | Each release's latest price and demand are one index lookup each; a year of history now takes 0.02 s for one label and 0.15 to 0.28 s for every release |
 
 ---
 
