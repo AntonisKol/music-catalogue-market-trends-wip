@@ -138,13 +138,13 @@ def test_the_old_counts_table_is_renamed_and_keeps_its_counts(db, limits_role):
 
     db.execute("ALTER TABLE limit_counts RENAME TO question_counts")
     db.execute("ALTER INDEX limit_counts_pkey RENAME TO question_counts_pkey")
-    db.execute("INSERT INTO question_counts VALUES ('site', 'day', now(), 7)")
+    db.execute("INSERT INTO question_counts VALUES ('rename-check', 'day', now(), 7)")
     db.commit()
 
     create_limits_role(db, FAKE_SETTINGS["POSTGRES_LIMITS_USER"], FAKE_SETTINGS["POSTGRES_LIMITS_PASSWORD"])
     db.commit()
 
     assert db.execute("SELECT to_regclass('question_counts'), to_regclass('limit_counts')::text").fetchone() == (None, "limit_counts")
-    assert db.execute("SELECT count FROM limit_counts WHERE visitor = 'site'").fetchone() == (7,)
-    db.execute("TRUNCATE limit_counts")
+    assert db.execute("SELECT count FROM limit_counts WHERE visitor = 'rename-check'").fetchone() == (7,)
+    db.execute("DELETE FROM limit_counts WHERE visitor = 'rename-check'")
     db.commit()
