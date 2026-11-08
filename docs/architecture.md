@@ -27,7 +27,7 @@ flowchart TB
         DG["Discogs REST API<br/>Source of releases, label lists<br/>and marketplace prices"]
         AN["Anthropic API, Claude<br/>Reads a question and picks<br/>which query tool to call"]
         CF["Cloudflare Turnstile<br/>Confirms the visitor is a person"]
-        GP["GitHub Pages<br/>Serves adnsaudio.com from the<br/>adns-space repo: the question box at<br/>/market-trends/ and the privacy page"]
+        GP["GitHub Pages<br/>Serves adnsaudio.com from the<br/>adnsaudio.com repo: the question box at<br/>/market-trends/ and the privacy page"]
         RS["Resend<br/>Sends the sign-up emails<br/>from adnsaudio.com"]
         SB["Hetzner Storage Box<br/>Keeps a copy of the last<br/>14 nightly backups"]
     end
@@ -500,7 +500,7 @@ The same routine has been used on every task:
 | 44 | The test copy's files could not be mounted into the containers | Colima shares only the home folder with its virtual machine, not the temporary folder | Ran the test copy from a folder in the home folder; the server has no such limit |
 | 44 | The setup script stopped on a clean Ubuntu 24.04: "UID 1000 is not unique" | The image already has a user with that id, the one the containers run as | The deploy user takes any free id, and the logs folder is shared by both through its group |
 | 44 | A deploy user that already existed would not have been able to run Docker | The docker group was only given when the user was created | The script now adds the user to the group every time it runs |
-| 44 | The planned page repo would have been published outside adnsaudio.com | Only the website repo (`adns-space`) carries the domain; other repos are served at `antoniskol.github.io` | Checked before creating it; the box goes into the website's existing Market Trends page, and the deploy command copies its files there |
+| 44 | The planned page repo would have been published outside adnsaudio.com | Only the website repo (`adns-space`, renamed `adnsaudio.com` in November 2026) carries the domain; other repos are served at `antoniskol.github.io` | Checked before creating it; the box goes into the website's existing Market Trends page, and the deploy command copies its files there |
 | 44 | The first copy to the Storage Box would have failed | The settings template had comments after two values, and `backup.sh` reads everything after the `=` as the value | The comments moved to their own lines, and a test keeps them there |
 | 44 | The setup script could stop at the SSH step on Ubuntu 24.04 | `ssh.service` may not be running there, because connections start it through `ssh.socket`, and a plain reload then fails | The script reloads only if the service is running; new logins read the settings anyway |
 | 44 | Empty `.partial` files piled up on the server and would have been copied to the Storage Box | A failed dump leaves its temporary file, and only finished dumps were ever deleted | Each backup now deletes leftovers first, and a test runs the script to check it |

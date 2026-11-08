@@ -5,13 +5,14 @@
 #   sh deploy/deploy.sh page     only the question box on adnsaudio.com/market-trends/
 # Reads DEPLOY_SERVER (for example deploy@203.0.113.10) from the local .env; it is
 # not secret, since the server's address is public through DNS. The page goes to
-# the website's repository (adns-space), which GitHub Pages serves as adnsaudio.com.
+# the website's repository (adnsaudio.com, called adns-space until November 2026),
+# which GitHub Pages serves as adnsaudio.com.
 set -eu
 cd "$(dirname "$0")/.."
 setting() { sed -n "s/^$1=//p" .env | tail -1; }
 SERVER=$(setting DEPLOY_SERVER)
 API_URL=https://api.adnsaudio.com
-SITE_REPO=AntonisKol/adns-space
+SITE_REPO=AntonisKol/adnsaudio.com
 SITE_DIR=${SITE_DIR:-$HOME/.cache/market-trends-site}
 what=${1:-all}
 
@@ -41,6 +42,8 @@ deploy_server() {
 deploy_page() {
   rev=$(git rev-parse --short HEAD)
   [ -d "$SITE_DIR/.git" ] || git clone --quiet "https://github.com/$SITE_REPO.git" "$SITE_DIR"
+  # A copy made before the repository was renamed still points at the old name.
+  git -C "$SITE_DIR" remote set-url origin "https://github.com/$SITE_REPO.git"
   # Always start from the website's current main, even if an earlier run left a commit behind.
   git -C "$SITE_DIR" fetch --quiet origin
   git -C "$SITE_DIR" checkout --quiet -B main origin/main
