@@ -108,15 +108,21 @@ VINYL = sql.SQL("""r.formats @> '[{"name": "Vinyl"}]'::jsonb""")
 
 # Each release's most recent price, with its most recent want/have/ratings.
 # Prices are saved every night and details once a week, so the two dates differ.
+# Each is one lookup in its table's (release_id, snapshot_date) index, so the cost
+# grows with the number of releases, not with the nights of history.
 LATEST = sql.SQL("""
     latest AS (
-        SELECT p.release_id, p.snapshot_date, p.num_for_sale, p.lowest_price, p.currency,
+        SELECT rel.id AS release_id, p.snapshot_date, p.num_for_sale, p.lowest_price, p.currency,
                d.want, d.have, d.rating_count, d.rating_average, d.snapshot_date AS details_date
-        FROM (SELECT DISTINCT ON (release_id) release_id, snapshot_date, num_for_sale, lowest_price, currency
-              FROM price_snapshots ORDER BY release_id, snapshot_date DESC) p
-        LEFT JOIN (SELECT DISTINCT ON (release_id) release_id, snapshot_date, want, have, rating_count, rating_average
-                   FROM demand_snapshots ORDER BY release_id, snapshot_date DESC) d
-            ON d.release_id = p.release_id
+        FROM releases rel
+        CROSS JOIN LATERAL (
+            SELECT snapshot_date, num_for_sale, lowest_price, currency FROM price_snapshots
+            WHERE release_id = rel.id ORDER BY snapshot_date DESC LIMIT 1
+        ) p
+        LEFT JOIN LATERAL (
+            SELECT snapshot_date, want, have, rating_count, rating_average FROM demand_snapshots
+            WHERE release_id = rel.id ORDER BY snapshot_date DESC LIMIT 1
+        ) d ON true
     )
 """)
 
