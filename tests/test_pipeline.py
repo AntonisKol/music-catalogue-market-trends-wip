@@ -404,3 +404,100 @@ def test_details_date_is_only_trusted_for_vinyl_of_the_same_label(db):
     assert details_fetched_on(db, 3, 1) is None  # stored, but not vinyl
     assert details_fetched_on(db, 4, 1) is None  # stored under another label
     assert details_fetched_on(db, 5, 1) is None  # not stored
+
+
+# --- Releases that are never needed are remembered (issue 63) -----------------------------------
+
+def credited_only(release_id):
+    details(release_id, labels=[{"id": 7, "name": "Other Label"}])
+
+
+@responses.activate
+def test_a_release_only_credited_to_the_label_is_remembered_and_skipped_without_a_request(db, committed, caplog):
+    caplog.set_level(logging.INFO)
+    label_list(summary(1, '12"'))
+    credited_only(1)
+    ingest_label(db, 1, DAY)
+    responses.calls.reset()
+
+    run = ingest_label(db, 1, DAY + timedelta(days=1))
+
+    assert run.not_on_label == [1] and run.ok
+    assert requested("/releases/1") == 0 and requested("/marketplace/stats/1") == 0
+    assert "skipped, only credited to label 1 (remembered)" in caplog.text
+    assert committed("SELECT release_id, label_id, reason, checked_on FROM skipped_releases") == [(1, 1, "not on label", DAY)]
+
+
+@responses.activate
+def test_a_release_that_is_not_vinyl_by_its_details_is_remembered(db, committed, caplog):
+    caplog.set_level(logging.INFO)
+    label_list(summary(2, "Box, Comp"))
+    details(2, formats=CD)
+    ingest_label(db, 1, DAY)
+    responses.calls.reset()
+
+    run = ingest_label(db, 1, DAY + timedelta(days=1))
+
+    assert run.not_vinyl == [2]
+    assert requested("/releases/2") == 0
+    assert "[1/1] 2 skipped, not vinyl (remembered)" in caplog.text
+
+
+@responses.activate
+def test_a_remembered_release_is_checked_again_after_about_a_month(db, committed):
+    label_list(summary(7, '12"'))
+    credited_only(7)
+    ingest_label(db, 1, DAY)
+    due = 28 + 7 % 7  # release 7 comes due after exactly 28 days
+    responses.calls.reset()
+
+    ingest_label(db, 1, DAY + timedelta(days=due - 1))
+    assert requested("/releases/7") == 0
+    ingest_label(db, 1, DAY + timedelta(days=due))
+
+    assert requested("/releases/7") == 1
+    assert committed("SELECT checked_on FROM skipped_releases") == [(DAY + timedelta(days=due),)]
+
+
+def test_rechecks_are_spread_over_a_week(db, committed):
+    from ingestion.repository import remember_skip, remembered_skip
+
+    for release_id in range(10, 17):
+        remember_skip(db, release_id, 1, "not vinyl", DAY)
+
+    due_after = {release_id: next(days for days in range(1, 60)
+                                  if remembered_skip(db, release_id, 1, DAY + timedelta(days=days)) is None)
+                 for release_id in range(10, 17)}
+
+    assert sorted(due_after.values()) == list(range(28, 35))
+
+
+@responses.activate
+def test_a_release_discogs_corrected_is_saved_and_forgotten(db, committed):
+    label_list(summary(7, '12"'))
+    credited_only(7)
+    ingest_label(db, 1, DAY)
+    responses.replace(responses.GET, f"{BASE_URL}/releases/7",
+                      json={"id": 7, "title": "Release 7", "labels": ON_LABEL_1, "formats": VINYL,
+                            "community": {"want": 1, "have": 1, "rating": {"count": 0, "average": 0}}})
+    stats(7)
+
+    run = ingest_label(db, 1, DAY + timedelta(days=28))
+
+    assert run.saved == [7]
+    assert committed("SELECT count(*) FROM skipped_releases") == [(0,)]
+
+
+@responses.activate
+def test_a_skip_is_remembered_for_that_label_only(db, committed):
+    """Release 3 is only credited to label 1, but issued on label 2, which is tracked too."""
+    label_list(summary(3, '12"'), label_id=1)
+    label_list(summary(3, '12"'), label_id=2)
+    details(3, labels=[{"id": 2, "name": "Label 2"}])
+    stats(3)
+    ingest_label(db, 1, DAY)
+
+    run = ingest_label(db, 2, DAY)
+
+    assert run.saved == [3]
+    assert committed("SELECT release_id, label_id FROM skipped_releases") == [(3, 1)]

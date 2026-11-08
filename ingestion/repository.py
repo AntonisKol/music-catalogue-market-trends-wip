@@ -3,7 +3,7 @@
 Every write is an upsert, so saving the same release again updates it instead of
 adding a duplicate, and a second snapshot on the same day replaces that day's.
 """
-from datetime import date
+from datetime import date, timedelta
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -199,3 +199,36 @@ def details_fetched_on(conn: psycopg.Connection, release_id: int, label_id: int)
             (release_id, label_id),
         ).fetchone()
     return row[0] if row else None
+
+
+# A remembered skip is checked again after this many days, plus 0 to 6 more taken
+# from the release id, so a month's skips don't all come due on the same night.
+RECHECK_AFTER_DAYS = 28
+
+
+def remembered_skip(conn: psycopg.Connection, release_id: int, label_id: int, night: date):
+    """Why this release of the label was skipped on an earlier night ("not vinyl" or
+    "not on label"), while that is still recent enough to trust; otherwise None."""
+    with conn.transaction():
+        row = conn.execute(
+            "SELECT reason FROM skipped_releases WHERE release_id = %s AND label_id = %s AND checked_on > %s",
+            (release_id, label_id, night - timedelta(days=RECHECK_AFTER_DAYS + release_id % 7)),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def remember_skip(conn: psycopg.Connection, release_id: int, label_id: int, reason: str, night: date) -> None:
+    with conn.transaction():
+        conn.execute(
+            """
+            INSERT INTO skipped_releases (release_id, label_id, reason, checked_on) VALUES (%s, %s, %s, %s)
+            ON CONFLICT (release_id, label_id) DO UPDATE SET reason = EXCLUDED.reason, checked_on = EXCLUDED.checked_on
+            """,
+            (release_id, label_id, reason, night),
+        )
+
+
+def forget_skip(conn: psycopg.Connection, release_id: int, label_id: int) -> None:
+    """A release that is now saved, for example after Discogs corrected its format."""
+    with conn.transaction():
+        conn.execute("DELETE FROM skipped_releases WHERE release_id = %s AND label_id = %s", (release_id, label_id))

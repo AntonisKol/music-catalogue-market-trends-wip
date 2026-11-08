@@ -19,7 +19,8 @@ from ingestion import config
 from ingestion.discogs_client import get_label_releases, get_marketplace_stats, get_release
 from ingestion.mapping import MappingError, is_clearly_not_vinyl, is_vinyl
 from ingestion.repository import (
-    details_fetched_on, get_saved_snapshot, save_price_snapshot, save_release, save_snapshots,
+    details_fetched_on, forget_skip, get_saved_snapshot, remember_skip, remembered_skip, save_price_snapshot,
+    save_release, save_snapshots,
 )
 
 log = logging.getLogger(__name__)
@@ -148,6 +149,15 @@ def ingest_label(conn: psycopg.Connection, label_id: int, snapshot_date: date) -
             run.not_vinyl.append(release_id)
             log.info("%s skipped, not vinyl (%s)", step, summary.get("format"))
             continue
+        remembered = remembered_skip(conn, release_id, label_id, snapshot_date)
+        if remembered == NOT_ON_LABEL:
+            run.not_on_label.append(release_id)
+            log.info("%s skipped, only credited to label %s (remembered)", step, label_id)
+            continue
+        if remembered == NOT_VINYL:
+            run.not_vinyl.append(release_id)
+            log.info("%s skipped, not vinyl (remembered)", step)
+            continue
         try:
             saved = ingest_release(conn, release_id, snapshot_date, label_id)
         except requests.HTTPError as error:
@@ -167,14 +177,18 @@ def ingest_label(conn: psycopg.Connection, label_id: int, snapshot_date: date) -
             continue
         if saved == NOT_ON_LABEL:
             run.not_on_label.append(release_id)
+            remember_skip(conn, release_id, label_id, NOT_ON_LABEL, snapshot_date)
             log.info("%s skipped, only credited to label %s, not issued on it", step, label_id)
         elif saved == NOT_VINYL:
             run.not_vinyl.append(release_id)
+            remember_skip(conn, release_id, label_id, NOT_VINYL, snapshot_date)
             log.info("%s skipped, not vinyl (details)", step)
         else:
             run.saved.append(release_id)
             if saved[-1] == snapshot_date:
                 run.with_details.append(release_id)
+                # Details were fetched, so a release skipped before may have been corrected.
+                forget_skip(conn, release_id, label_id)
             log.info("%s saved: %s", step, describe_snapshot(saved, snapshot_date))
 
     return run
