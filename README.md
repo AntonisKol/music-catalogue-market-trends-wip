@@ -503,6 +503,26 @@ python -m pytest
 
 The tests need no `.env` and never use your token or your database: `tests/conftest.py` sets fake settings, and Discogs is faked with the [`responses`](https://github.com/getsentry/responses) library.
 
+### The question box in a browser
+
+`tests/test_question_box.py` runs the question box in Chromium. Most tests use a faked API and check:
+- asking a question, the answer, the data behind it and any warning;
+- loading, validation and error messages;
+- the label list;
+- signing up, signing in and a new password;
+- keyboard use, names for every control, focus and announcements for screen readers;
+- an [axe](https://github.com/dequelabs/axe-core) accessibility audit.
+
+One test runs the box against the real web API and the throwaway test database.
+
+They need Playwright's Chromium once:
+
+```bash
+python -m playwright install chromium
+```
+
+Without it they are skipped with a reason, except in CI, where they fail.
+
 ### Before-release test with the real Claude
 
 `tests/test_live_answers.py` asks nine questions with known answers through the real Anthropic API, against a small catalogue of its own. The questions include ones the data cannot answer, a request to delete data, and a release title that tries to give Claude instructions. Each answer is checked:

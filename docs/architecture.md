@@ -127,7 +127,7 @@ flowchart TD
     S8["Step 8, issue 9: Test the AI service<br/>Code: tests/test_questions.py, test_verify.py,<br/>test_live_answers.py<br/>How: faked AI for guardrails, a free figure check<br/>on every answer, a live test with an AI judge<br/>Achieved: wrong figures flagged to visitors,<br/>tool choice, limits, errors and read-only<br/>access proven, real answers checked before releases"]
     S9["Step 9, issue 8: Web API<br/>Code: web/, create_limits_role.py<br/>How: Flask, Cloudflare Turnstile, limits per<br/>visitor and site in a PostgreSQL table<br/>Achieved: one endpoint for the page, bots and<br/>heavy use stopped before the AI, JSON errors,<br/>no secrets or usage sent to the browser"]
     S10["Step 10, issue 12: Question box<br/>Code: widget/<br/>How: plain HTML, CSS and JavaScript,<br/>no build step, the site's own colours and fonts<br/>Achieved: example questions, loading, answer and<br/>error states, no double submits, model named,<br/>data one click away, nothing in an answer runs;<br/>live on adnsaudio.com/market-trends/"]
-    S11["Step 11, issue 13: Test the web page<br/>How: browser tests against a faked API,<br/>plus one end-to-end check<br/>Will achieve: keyboard, labels, focus and<br/>screen-reader announcements verified"]
+    S11["Step 11, issue 13: Test the web page<br/>Code: tests/test_question_box.py<br/>How: Playwright and Chromium against a faked API,<br/>an axe audit, one end-to-end check with the real API<br/>Achieved: keyboard, labels, focus and<br/>screen-reader announcements verified on every<br/>pull request"]
     F19["Issue 19: CI runs all tests<br/>Code: .github/workflows/tests.yml<br/>How: GitHub Actions on Python 3.10 and 3.13,<br/>Testcontainers PostgreSQL, CI=true,<br/>actions pinned to exact commits<br/>Achieved: no pull request merges into<br/>main unless all tests pass"]
     F24["Issue 24: Tracked techno shops<br/>How: chosen shops' Discogs inventories,<br/>city recorded by us, a sixth query tool<br/>Will achieve: questions by seller city,<br/>such as records sold from Berlin"]
     F27["Issue 27: Fixes from a code review<br/>Code: pipeline.py, ingest_label.py, tools.py<br/>How: one run at a time, credit-only and<br/>deleted releases handled, vinyl-only answers<br/>Achieved: the code does what the docs promise"]
@@ -167,8 +167,7 @@ flowchart TD
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
-    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,F27,F19,F41,F38,F44,F48,F55 built
-    class S11 planned
+    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,F27,F19,F41,F38,F44,F48,F55 built
     class F24,F18 support
 ```
 

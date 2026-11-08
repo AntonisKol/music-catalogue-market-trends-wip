@@ -554,6 +554,8 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
             response.headers["Access-Control-Allow-Headers"] = "Content-Type"
             # The page sends the session cookie with its requests.
             response.headers["Access-Control-Allow-Credentials"] = "true"
+            # The page is on another origin, so it may only read this header if it is named here.
+            response.headers["Access-Control-Expose-Headers"] = "Retry-After"
             response.headers["Access-Control-Max-Age"] = "600"
         response.headers["Vary"] = "Origin"
         response.headers.setdefault("Cache-Control", "no-store")
