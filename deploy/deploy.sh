@@ -41,7 +41,9 @@ deploy_server() {
 deploy_page() {
   rev=$(git rev-parse --short HEAD)
   [ -d "$SITE_DIR/.git" ] || git clone --quiet "https://github.com/$SITE_REPO.git" "$SITE_DIR"
-  git -C "$SITE_DIR" pull --ff-only --quiet
+  # Always start from the website's current main, even if an earlier run left a commit behind.
+  git -C "$SITE_DIR" fetch --quiet origin
+  git -C "$SITE_DIR" checkout --quiet -B main origin/main
   # The page itself (market-trends/index.html, with the live API address and the
   # site key) belongs to the website; only the question box's two files come from here.
   cp widget/ask.js widget/ask.css "$SITE_DIR/market-trends/"
@@ -50,11 +52,17 @@ deploy_page() {
   if git diff --cached --quiet; then
     echo "The website already has this question box."
   else
+    # The website's main only takes pull requests with passing checks, so the box goes
+    # through one; merging it publishes the page.
+    branch="market-trends/publish-$rev"
     git commit --quiet -m "Market Trends: publish AntonisKol/music-catalogue-market-trends-wip@$rev"
-    # The website may have moved on meanwhile.
-    git pull --rebase --quiet origin main
-    git push --quiet origin HEAD:main
-    echo "Pushed to $SITE_REPO; GitHub Pages publishes https://adnsaudio.com/market-trends/ within a minute or two."
+    git push --quiet --force origin "HEAD:refs/heads/$branch"
+    git checkout --quiet -B main origin/main
+    gh pr create --repo "$SITE_REPO" --base main --head "$branch" \
+      --title "Market Trends: publish the question box from $rev" \
+      --body "Publishes market-trends/ask.js and ask.css from AntonisKol/music-catalogue-market-trends-wip@$rev. Merging this publishes the page." \
+      || echo "A pull request for $branch may already be open."
+    echo "Merge that pull request to publish https://adnsaudio.com/market-trends/; GitHub Pages then needs a few minutes."
   fi
 }
 

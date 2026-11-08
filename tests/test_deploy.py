@@ -108,3 +108,11 @@ def test_the_server_settings_template_lists_the_sign_up_settings():
     names = {line.split("=", 1)[0] for line in (ROOT / "deploy" / "server.env.example").read_text().splitlines()
              if "=" in line and not line.startswith("#")}
     assert {"RESEND_API_KEY", "PUBLIC_API_URL", "SIGN_IN_RETURN_URL", "SIGN_IN_EMAIL_FROM"} <= names
+
+
+def test_the_page_goes_to_the_website_through_a_pull_request():
+    # The website's main only takes pull requests with passing checks.
+    script = (ROOT / "deploy" / "deploy.sh").read_text()
+    page = script[script.index("deploy_page() {"):script.index("\n}\n", script.index("deploy_page() {"))]
+    assert "HEAD:main" not in page and "gh pr create" in page
+    assert "cp widget/ask.js widget/ask.css" in page
