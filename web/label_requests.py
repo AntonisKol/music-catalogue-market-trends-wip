@@ -65,12 +65,11 @@ def request_label(conn: psycopg.Connection, account_id: int, name: str, now: dat
 
 
 def requests_of(conn: psycopg.Connection, account_id: int) -> list:
-    """This account's requests, newest first: [{"name", "status", "reason"}]. The
-    reason is the owner's answer to a rejection, otherwise None."""
+    """This account's requests, newest first: [{"name", "status", "reason"}]. Only a
+    rejection has a reason: the owner's answer."""
     with conn.transaction():
         rows = conn.execute(
             "SELECT name, status, reason FROM label_requests WHERE account_id = %s ORDER BY created_at DESC, id DESC",
             (account_id,),
         ).fetchall()
-    return [{"name": name, "status": status, "reason": reason if status == "rejected" else None}
-            for name, status, reason in rows]
+    return [{"name": name, "status": status, "reason": reason} for name, status, reason in rows]
