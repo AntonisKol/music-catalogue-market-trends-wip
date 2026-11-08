@@ -28,7 +28,6 @@ const CHECK_WAIT_MS = 8_000;
 
 // While a label request is open, its status is checked this often, so a decision shows without a reload.
 const REQUEST_CHECK_MS = 30_000;
-const OPEN_REQUEST = new Set(["waiting", "reviewing"]);
 
 const EXAMPLES = [
   "Which Ostgut Ton records are the most wanted?",
@@ -406,7 +405,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   }
 
   const REQUEST_STATUS = {
-    waiting: "waiting for review", reviewing: "being reviewed", added: "added", rejected: "rejected",
+    waiting: "waiting for review", added: "added", rejected: "rejected",
   };
 
   function describeRequest({ name, status, reason }) {
@@ -446,10 +445,12 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     }
     if (owner === null || owner !== requestsShownFor) return;  // signed out meanwhile
     if (mine) {
-      requestList.replaceChildren(...mine.map((item) => el("li", {}, describeRequest(item))));
+      // The bullet takes the status's colour, set with the text so both change together.
+      requestList.replaceChildren(...mine.map((item) => el("li", { class: `mt-ask-request-${item.status}` },
+        describeRequest(item))));
       requestList.hidden = mine.length === 0;
     }
-    if (!mine || mine.some((item) => OPEN_REQUEST.has(item.status))) checkRequestsLater();
+    if (!mine || mine.some((item) => item.status === "waiting")) checkRequestsLater();
   }
 
   document.addEventListener("visibilitychange", () => {

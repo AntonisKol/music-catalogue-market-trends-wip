@@ -106,8 +106,7 @@ def send_label_request(reviewer: str, request_id: int, name: str, accounts: int,
     else:
         found = ["Discogs found no match, or could not be reached. Find the label on discogs.com: "
                  "its id is the number in the address."]
-    commands = [f"sh scripts/label-requests review {request_id}",
-                f"sh scripts/label-requests approve {request_id} <discogs id or link>",
+    commands = [f"sh scripts/label-requests approve {request_id} <discogs id or link>",
                 f'sh scripts/label-requests reject {request_id} "the reason"']
     lead = f"A visitor asked Market Trends to track {name!r} (request {request_id}). {asked}"
     text = "\n".join([lead, "", "Labels on Discogs with that name:", *found, "", "To decide, from the project folder:",
@@ -119,10 +118,6 @@ def send_label_request(reviewer: str, request_id: int, name: str, accounts: int,
 
 def label_status_message(name: str, status: str, reason: str = None, label: str = None) -> tuple:
     """(subject, paragraphs) telling a visitor where their request for a label stands."""
-    if status == "reviewing":
-        return (f"Your request for {name} is being reviewed",
-                [f"Thanks for asking Market Trends to track {name}. We're looking for the right label on Discogs now.",
-                 "You'll get another email when it's decided, and the Market Trends page shows where it stands."])
     if status == "added":
         found = f" as {label} on Discogs" if label and label.casefold() != name.casefold() else ""
         return (f"{label or name} is now on Market Trends",

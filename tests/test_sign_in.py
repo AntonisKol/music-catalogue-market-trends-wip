@@ -284,7 +284,6 @@ def test_the_rejection_email_carries_the_reason_as_text_only(monkeypatch):
 
 
 @pytest.mark.parametrize("status, label, subject, says", [
-    ("reviewing", None, "Your request for Polegroup is being reviewed", "looking for the right label on Discogs"),
     ("added", "Pole Recordings", "Pole Recordings is now on Market Trends", "Polegroup is added as Pole Recordings"),
     ("added", "Polegroup", "Polegroup is now on Market Trends", "Good news: Polegroup is added."),
 ])

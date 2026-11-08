@@ -1,7 +1,6 @@
 #!/bin/sh
 # Review label requests from your Mac. Run from the project folder:
 #   sh scripts/label-requests list
-#   sh scripts/label-requests review 3                 # Discogs matches; the visitor sees "being reviewed"
 #   sh scripts/label-requests approve 3 21250          # or the label's discogs.com link; imports it at once
 #   sh scripts/label-requests reject 3 "Not a techno label."
 # Logs in to DEPLOY_SERVER (from the local .env) and runs ingestion.label_requests
@@ -10,7 +9,7 @@ set -eu
 cd "$(dirname "$0")/.."
 SERVER=$(sed -n "s/^DEPLOY_SERVER=//p" .env | tail -1)
 [ -n "$SERVER" ] || { echo "Set DEPLOY_SERVER in .env first." >&2; exit 1; }
-[ $# -ge 1 ] || { sed -n '2,6p' "$0" | sed 's/^# //'; exit 2; }
+[ $# -ge 1 ] || { sed -n '2,5p' "$0" | sed 's/^# //'; exit 2; }
 
 # The arguments travel as separate words, so a reason with spaces or quotes arrives intact.
 ssh "$SERVER" sh -s -- "$@" <<'REMOTE'

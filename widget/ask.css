@@ -13,6 +13,7 @@
   --mt-accent-deep: var(--trends, #392850);
   --mt-accent-line: var(--trends-line, #403553);
   --mt-warn: #f3c969;
+  --mt-ok: #7fd99a;
   --mt-error: #ff8f8f;
   --mt-sans: var(--sans, "Chakra Petch", system-ui, sans-serif);
   --mt-mono: var(--mono, "Share Tech Mono", ui-monospace, monospace);
@@ -166,6 +167,10 @@
 .mt-ask-request-line { margin: 0 0 8px; }
 .mt-ask-request-form { margin-bottom: 8px; }
 .mt-ask-requests { margin: 8px 0 0; padding-left: 18px; }
+/* Each request's bullet shows its status: yellow waiting, green added, red rejected. */
+.mt-ask-request-waiting::marker { color: var(--mt-warn); }
+.mt-ask-request-added::marker { color: var(--mt-ok); }
+.mt-ask-request-rejected::marker { color: var(--mt-error); }
 
 .mt-ask-privacy { margin: 12px 0 0; color: var(--mt-muted); font-size: 13px; line-height: 1.5; }
 
