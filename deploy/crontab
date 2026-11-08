@@ -1,4 +1,3 @@
 # Market Trends on the server, installed by deploy/setup-server.sh. The server's clock is UTC.
 0 3 * * * cd /srv/market-trends && sh deploy/nightly.sh >> logs/cron.log 2>&1
-# New label requests are emailed for review, and failed rejection emails retried.
-*/15 * * * * cd /srv/market-trends && docker compose --env-file .env -f deploy/compose.yml run --rm -T admin python -m ingestion.label_requests notify >> logs/label-requests.log 2>&1
+# Label requests are emailed by the label-requests container in deploy/compose.yml, the moment they arrive.
