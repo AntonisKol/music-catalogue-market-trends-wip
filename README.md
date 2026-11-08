@@ -211,7 +211,7 @@ python -m ingestion.label_requests approve 12 698526    # track Discogs label 69
 python -m ingestion.label_requests decline 12
 ```
 
-Approving tracks the label like `track_labels add`, so its data arrives with the next nightly run. Approving or declining answers every waiting request for the same name, and the visitor sees the result under the box. On the server, put `docker compose --env-file .env -f deploy/compose.yml run --rm -T api` in front, from `/srv/market-trends`.
+Approving tracks the label like `track_labels add`, so its data arrives with the next nightly run. Approving or declining answers every waiting request for the same name, and the visitor sees the result under the box. On the server, put `docker compose --env-file .env -f deploy/compose.yml run --rm -T admin` in front, from `/srv/market-trends`.
 
 One command updates every active label: its vinyl releases, that day's prices, and want, have and ratings once a week.
 
@@ -233,14 +233,7 @@ See how recent nights went:
 python -m ingestion.runs
 ```
 
-**Scheduling on a Mac.** launchd starts the run at 03:00 every night. If the Mac is asleep then, it runs when the Mac wakes. Install it once from the project folder:
-
-```bash
-sh ops/install-launchd.sh            # install; "remove" uninstalls
-launchctl kickstart gui/$(id -u)/com.adnsaudio.market-trends.nightly   # run once now, to test
-```
-
-The database has to be running at night, so start Docker's virtual machine at login: `brew services start colima`. Without it, the run fails and says so.
+**Scheduling.** On the server, cron starts the run at 03:00 UTC (see [Run it on a server](#run-it-on-a-server)).
 
 **Scheduling on a Linux server.** Add a cron line:
 
@@ -465,15 +458,13 @@ Cron starts the nightly update at 03:00 UTC and then the backup. The page is par
    scp deploy/server.env.example deploy@<server-ip>:/srv/market-trends/.env
    ssh deploy@<server-ip> 'chmod 600 /srv/market-trends/.env && nano /srv/market-trends/.env'
    ```
-8. **Move the data.** Dump the Mac's database to your home folder, copy it to the server, and load it there:
+8. **Load the data.** Copy a dump into `backups/` on the server and load it: the newest one from the Storage Box when rebuilding, or one made from a local database with `docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > ~/market-trends-$(date +%F).dump`:
    ```bash
-   docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom' > ~/market-trends-$(date +%F).dump
    scp ~/market-trends-<date>.dump deploy@<server-ip>:/srv/market-trends/backups/
    ssh -t deploy@<server-ip> 'cd /srv/market-trends && sh deploy/restore.sh backups/market-trends-<date>.dump'
    ```
    The restore asks you to type `yes`, loads everything in one transaction, then sets up the reader and web logins again (a dump does not carry logins) and starts the API.
-9. **Stop the Mac's nightly run** with `sh ops/install-launchd.sh remove`. From now on the server's database is the one that grows, and Discogs is asked once a night, not twice.
-10. **The page.** Add `DEPLOY_SERVER=deploy@<server-ip>` to your Mac's `.env`. It isn't secret, because the address is public through DNS. Then run the deploy command below, and merge the `adns-space` pull request that swaps the page's "Coming soon" box for the question box. That page holds the live API address and the public Turnstile site key.
+9. **The page.** Add `DEPLOY_SERVER=deploy@<server-ip>` to your Mac's `.env`. It isn't secret, because the address is public through DNS. Then run the deploy command below, and merge the `adns-space` pull request that swaps the page's "Coming soon" box for the question box. That page holds the live API address and the public Turnstile site key.
 
 ### After merging a pull request
 
@@ -487,7 +478,7 @@ The command logs in as `deploy` and pulls `main`, then rebuilds and restarts the
 
 ### Looking after it
 
-- **Nightly runs:** `ssh deploy@<server-ip> 'cd /srv/market-trends && docker compose --env-file .env -f deploy/compose.yml run --rm -T api python -m ingestion.runs'`. The logs are in `/srv/market-trends/logs/`: `nightly.log` for the update, `cron.log` for the backup.
+- **Nightly runs:** `ssh deploy@<server-ip> 'cd /srv/market-trends && docker compose --env-file .env -f deploy/compose.yml run --rm -T admin python -m ingestion.runs'`. The logs are in `/srv/market-trends/logs/`: `nightly.log` for the update, `cron.log` for the backup.
 - **Backups:** each night [`deploy/backup.sh`](deploy/backup.sh) writes `backups/market-trends-<date>.dump`. It checks the dump can be read, deletes dumps older than 14 days, and copies the folder to the Storage Box named by `BACKUP_TARGET`. If anything fails, it says so in `logs/cron.log`, and nothing is sent anywhere. Run it by hand with `sh deploy/backup.sh`.
 - **Spotting abuse:** the API's log has one line per request: the time, a keyed hash of the visitor's address (the same hash as the question limits), the method, the path, the status and the browser name. It never holds the address. Container logs are limited to three files of 10 MB each, and the oldest is deleted. From `/srv/market-trends`, the busiest visitors are:
   ```bash

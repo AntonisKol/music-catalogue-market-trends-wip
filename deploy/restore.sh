@@ -20,8 +20,8 @@ $COMPOSE up -d db
 until $COMPOSE exec -T db sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' > /dev/null 2>&1; do sleep 1; done
 $COMPOSE stop api
 $COMPOSE exec -T db sh -c 'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner --no-privileges --single-transaction' < "$1"
-$COMPOSE run --rm -T api python -m ingestion.apply_schema
-$COMPOSE run --rm -T api python -m ingestion.create_reader_role
-$COMPOSE run --rm -T api python -m ingestion.create_limits_role
+$COMPOSE run --rm -T admin python -m ingestion.apply_schema
+$COMPOSE run --rm -T admin python -m ingestion.create_reader_role
+$COMPOSE run --rm -T admin python -m ingestion.create_limits_role
 $COMPOSE up -d
 echo "Restored $1."
