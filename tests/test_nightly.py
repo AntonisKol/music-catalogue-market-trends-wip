@@ -93,7 +93,7 @@ def test_every_active_label_is_updated_and_recorded(db):
         add_label(db, label_id)
     set_active(db, 7, False)
 
-    ok, summary, problems = run_nightly(db, DAY, NOW)
+    ok, summary, problems, _ = run_nightly(db, DAY, NOW)
 
     assert ok and problems == []
     assert summary == "2 labels, 3 releases saved, 0 failed"
@@ -113,7 +113,7 @@ def test_a_failing_label_does_not_stop_the_others(db):
     add_label(db, 4)
     add_label(db, 538)
 
-    ok, summary, problems = run_nightly(db, DAY, NOW)
+    ok, summary, problems, _ = run_nightly(db, DAY, NOW)
 
     assert not ok
     assert "Axis (4): the label list could not be fetched" in problems[0]
@@ -130,19 +130,45 @@ def test_failed_releases_make_the_run_fail_with_examples(db):
     responses.replace(responses.GET, f"{BASE_URL}/releases/21", json={"message": "x"}, status=401)
     add_label(db, 538)
 
-    ok, _, problems = run_nightly(db, DAY, NOW)
+    ok, _, problems, _ = run_nightly(db, DAY, NOW)
 
     assert not ok and "Perlon (538): 1 releases failed, e.g. 21:" in problems[0]
 
 
-def test_a_missed_night_is_reported(db):
+def test_a_missed_night_is_a_warning_not_a_failure(db):
     db.execute("INSERT INTO ingestion_runs (snapshot_date, started_at, status) VALUES (%s, %s, 'succeeded')",
                (DAY - timedelta(days=3), NOW - timedelta(days=3)))
     db.commit()
 
-    ok, _, problems = run_nightly(db, DAY, NOW)
+    ok, _, problems, warning = run_nightly(db, DAY, NOW)
 
-    assert not ok and "nights were missed" in problems[0]
+    assert ok and problems == []
+    assert "nights were missed" in warning
+    assert query(db, "SELECT status, warning FROM ingestion_runs ORDER BY id DESC LIMIT 1") == [("succeeded", warning)]
+
+
+def test_a_good_night_after_a_failed_one_succeeds_without_a_warning(db):
+    """The server's first night: the night before had one failed release, tonight had none."""
+    db.execute("INSERT INTO ingestion_runs (snapshot_date, started_at, status) VALUES (%s, %s, 'succeeded'), (%s, %s, 'failed')",
+               (DAY - timedelta(days=3), NOW - timedelta(days=3), DAY - timedelta(days=1), NOW - timedelta(hours=24)))
+    db.commit()
+
+    ok, _, problems, warning = run_nightly(db, DAY, NOW)
+
+    assert ok and problems == [] and warning is None
+
+
+@responses.activate
+def test_a_missed_night_and_a_failure_are_both_reported(db):
+    discogs_label(538, "Perlon", list_status=500)
+    add_label(db, 538)
+    db.execute("INSERT INTO ingestion_runs (snapshot_date, started_at, status) VALUES (%s, %s, 'succeeded')",
+               (DAY - timedelta(days=3), NOW - timedelta(days=3)))
+    db.commit()
+
+    ok, _, problems, warning = run_nightly(db, DAY, NOW)
+
+    assert not ok and "Perlon (538)" in problems[0] and "nights were missed" in warning
 
 
 def test_last_nights_run_is_not_a_missed_night(db):
@@ -243,6 +269,19 @@ def test_runs_shows_recent_runs_with_failures(db, postgres_url, monkeypatch, cap
     assert "2026-11-02 02:00 UTC  failed" in out and "(12 min)" in out and "Perlon (538)" in out
 
 
+def test_runs_shows_a_warning_under_a_good_run(db, postgres_url, monkeypatch, capsys):
+    db.execute("INSERT INTO ingestion_runs (snapshot_date, started_at, finished_at, status, message, warning) VALUES "
+               "(%s, %s, %s, 'succeeded', '1 labels, 3 releases saved, 0 failed', 'nights were missed')",
+               (DAY, NOW, NOW + timedelta(minutes=5)))
+    db.commit()
+    monkeypatch.setattr(runs.database, "connect", lambda: psycopg.connect(postgres_url))
+
+    runs.main([])
+
+    out = capsys.readouterr().out
+    assert "succeeded" in out and "    warning: nights were missed" in out
+
+
 # --- Applying the schema to an existing database ----------------------------------------
 
 def test_applying_the_schema_again_keeps_data_and_adds_nothing_twice(db):
@@ -253,6 +292,16 @@ def test_applying_the_schema_again_keeps_data_and_adds_nothing_twice(db):
     apply_schema.apply_schema(db)
 
     assert query(db, "SELECT name FROM labels") == [("Planet E",)]
+
+
+def test_applying_the_schema_adds_the_warning_column_to_an_old_database(db):
+    db.execute("ALTER TABLE ingestion_runs DROP COLUMN warning")
+    db.commit()
+
+    apply_schema.apply_schema(db)
+
+    assert query(db, "SELECT count(*) FROM information_schema.columns WHERE table_name = 'ingestion_runs' "
+                     "AND column_name = 'warning'") == [(1,)]
 
 
 def test_applying_the_schema_adds_new_tables_to_an_old_database(db):

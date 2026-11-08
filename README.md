@@ -222,7 +222,7 @@ python -m ingestion.nightly
 - **It never overlaps.** It takes the same lock as `ingest_label`, so it never runs alongside another ingestion run.
 - **One label's problem doesn't stop the rest.** The others are still updated, and the command exits with status 1.
 - **Everything is recorded.** Each run, and each label within it, goes into `ingestion_runs` and `ingestion_run_labels`. Progress goes to `logs/nightly.log`, rotated at 5 MB with 10 kept.
-- **Missed nights are noticed.** If the last successful run started more than 36 hours earlier, the run reports it.
+- **A run's status is about that run.** It is `failed` only for its own problems: a label list that could not be fetched, releases that failed, or a lost database connection. If no run at all started in the 36 hours before, the run adds a separate warning that nights were missed; `python -m ingestion.runs` shows it under the run.
 - **Rerunning the same day is safe.** It updates the same rows, adding no duplicates.
 - **Prices every night, details once a week.** A release already stored costs one Discogs request a night (its price). Its details (want, have, ratings, and the catalogue fields) are fetched on one weekday of its own, taken from its id, so each night refreshes about a seventh of the catalogue. Details more than 7 days old are fetched whatever the weekday, so a missed night catches up the next. New releases always get their details. The log shows the date of older details, for example `saved: 22 for sale from 12.15 EUR; want 33, have 63; rated 4.89 by 9 (details from 2026-11-02)`, and each label's summary says how many releases had their details fetched. `ingest_label` follows the same rule; `save_snapshot` always fetches both.
 

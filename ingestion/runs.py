@@ -14,7 +14,7 @@ def recent_runs(conn: psycopg.Connection, limit: int) -> list:
     with conn.transaction():
         return conn.execute(
             """
-            SELECT r.id, r.snapshot_date, r.started_at, r.finished_at, r.status, r.message,
+            SELECT r.id, r.snapshot_date, r.started_at, r.finished_at, r.status, r.message, r.warning,
                    count(l.label_id), coalesce(sum(l.saved), 0), coalesce(sum(l.failed), 0),
                    count(l.error)
             FROM ingestion_runs r LEFT JOIN ingestion_run_labels l ON l.run_id = r.id
@@ -36,12 +36,14 @@ def main(argv: list) -> int:
         return 1
     if not rows:
         print("No nightly runs recorded yet.")
-    for run_id, day, started, finished, status, message, labels, saved, failed, label_errors in rows:
+    for run_id, day, started, finished, status, message, warning, labels, saved, failed, label_errors in rows:
         took = f"{(finished - started).total_seconds() / 60:.0f} min" if finished else "still running"
         print(f"{started:%Y-%m-%d %H:%M} UTC  {status:<9}  {labels} labels, {saved} saved, {failed} failed, "
               f"{label_errors} label errors  ({took})")
         if status == "failed" and message:
             print(f"    {message}")
+        if warning:
+            print(f"    warning: {warning}")
     return 0
 
 
