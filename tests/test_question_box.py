@@ -786,6 +786,10 @@ def test_end_to_end_with_the_real_api_and_database(browser, site, limits_db, rea
     from web.app import create_app
 
     db.execute("INSERT INTO tracked_labels (label_id, name) VALUES (1, 'Planet E'), (2, 'Wax (4)')")
+    for label_id in (1, 2):  # the page lists a label once its releases are in
+        db.execute("INSERT INTO labels (id, name) VALUES (%s, 'x')", (label_id,))
+        db.execute("INSERT INTO releases (id, title, label_id, is_physical) VALUES (%s, 'x', %s, true)",
+                   (label_id, label_id))
     db.commit()
     monkeypatch.setattr(config, "ALLOWED_ORIGINS", [site.origin])
     monkeypatch.setattr(config, "COOKIE_SECURE", False)

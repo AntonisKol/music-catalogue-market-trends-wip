@@ -11,8 +11,8 @@ question service, so nothing reaches the Anthropic API before every guard has
 passed. Errors come back as {"error": {"code", "message"}} with a fitting HTTP
 status and never contain secrets or internal details; those go to the log.
 
-GET /api/labels returns {"labels": [...]}, the labels the site follows, for the list
-on the page. Signed-in visitors can ask for more (see web/label_requests.py):
+GET /api/labels returns {"labels": [...]}, the labels the site follows whose releases
+are in the database, for the list on the page. Signed-in visitors can ask for more (see web/label_requests.py):
     POST /api/label-requests     {"name"}: stores a request for the owner to review
     GET  /api/label-requests     this account's requests and their status
 
@@ -44,7 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from queries.labels import tracked_label_names
+from queries.labels import listed_label_names, tracked_label_names
 from queries.questions import MAX_QUESTION_LENGTH, QuestionError, answer_question
 from web import accounts, captcha, config, label_requests, limits, mailer
 
@@ -208,7 +208,7 @@ def set_up_logging() -> None:
 
 def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_limits=limits.connect_limits,
                mail=mailer, now=lambda: datetime.now(timezone.utc),
-               list_labels=tracked_label_names) -> Flask:
+               list_labels=listed_label_names, known_labels=tracked_label_names) -> Flask:
     """The app. The arguments exist so tests can replace the outside services."""
     set_up_logging()
     app = Flask(__name__)
@@ -531,8 +531,8 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
             if not account:
                 return error("not_signed_in", "Sign in to request a label.", 401)
             # Read in full, or the request is refused: a failed read must not let a tracked
-            # label be requested again.
-            known = label_requests.tracked_match(name, list_labels())
+            # label be requested again. Labels still being imported count as tracked.
+            known = label_requests.tracked_match(name, known_labels())
             if known:
                 return jsonify({"status": "tracked", "message": f"{known} is already tracked. You can ask about it now."})
             new = label_requests.request_label(conn, account[0], name, now())

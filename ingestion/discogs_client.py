@@ -87,6 +87,18 @@ def search_labels(name: str, limit: int = 5) -> list[dict]:
     return [{"id": r["id"], "title": r["title"]} for r in data.get("results", [])[:limit]]
 
 
+def search_releases(page: int = 1, per_page: int = 100, **filters) -> dict:
+    """One page of Discogs' release search, e.g. style="Techno", format="Vinyl", sort="have".
+    Discogs serves at most the first 10,000 results of a search."""
+    return _get(f"{BASE_URL}/database/search",
+                params={"type": "release", "page": page, "per_page": per_page, **filters})
+
+
+def count_releases(**filters) -> int:
+    """How many releases Discogs' search finds, e.g. label="Tresor", format="Vinyl"."""
+    return search_releases(page=1, per_page=1, **filters)["pagination"]["items"]
+
+
 def label_size(label_id: int) -> int:
     """How many entries a label's list has on Discogs, from its first page."""
     data = _get(f"{BASE_URL}/labels/{label_id}/releases", params={"page": 1, "per_page": 1})

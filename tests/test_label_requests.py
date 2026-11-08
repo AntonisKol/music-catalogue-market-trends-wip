@@ -162,7 +162,7 @@ def test_a_request_is_refused_when_the_tracked_labels_cannot_be_read(fakes, cloc
 
     monkeypatch.setattr(config, "RESEND_API_KEY", "re_test")
     monkeypatch.setattr(config, "COOKIE_SECURE", False)
-    app = create_app(answer=fakes.answer, verify_captcha=fakes.verify, mail=fakes, now=clock, list_labels=broken)
+    app = create_app(answer=fakes.answer, verify_captcha=fakes.verify, mail=fakes, now=clock, known_labels=broken)
     client = app.test_client()
     signed_in(client, fakes)
 

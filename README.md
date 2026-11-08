@@ -17,6 +17,7 @@ Every night a Python pipeline records each tracked label's vinyl releases from D
 
 **For the owner**
 - A nightly update of every tracked label, with each run recorded and checkable from one command.
+- Up to ten more techno labels a night, the most collected first, only while the nightly run stays under 20 hours: fewer labels, every one updated every night.
 - An email for each label request the moment it arrives, with its Discogs matches, and a script to approve (the label is imported at once) or reject with a reason that reaches the visitor.
 - Nightly backups copied off the server, and one command to deploy.
 
@@ -202,7 +203,21 @@ See how recent nights went:
 python -m ingestion.runs
 ```
 
-**Scheduling.** On the server, cron starts the run at 03:00 UTC (see [Run it on a server](#run-it-on-a-server)).
+**More labels each night.** After the update, `python -m ingestion.grow_labels` adds up to ten techno labels, as long as the next night is projected to stay under 20 hours. Discogs allows 60 requests a minute, about one a second, and every tracked release costs one a night, so the run can't cover every techno label on Discogs. Fewer labels with every price fresh were chosen over more labels updated less often.
+
+- **Most collected first.** Discogs' search, sorted by how many people have each release, gives the 10,000 most-had techno vinyl releases. A label scores one point for each it released.
+- **Only techno labels, of a size the run can carry.** A label is added when Discogs has one with exactly that name, at least a third of its vinyl releases are tagged Techno (Warp, Mute and Virgin are not), and it has at most 2,000 vinyl releases. Discogs' name filter also counts similar names, so a label's count is capped at its exact size.
+- **Never against your decisions.** Labels already tracked, paused (`track_labels pause` keeps one out for good) or rejected in a visitor's request are skipped.
+- **Stops at the ceiling.** The time per release comes from the last finished run, and labels added but not yet imported count too. The first label that would take the next night past 20 hours stops the additions for that night.
+- **Everything it looked at is recorded** in `label_candidates`, with the reason. Left-out labels are looked at again after 90 days.
+
+```bash
+python -m ingestion.grow_labels list   # every label looked at, and why it was added or left out
+```
+
+Added labels have `added_by = 'nightly'` in `track_labels list`. The next nightly run imports them, and the page lists a label once its releases are in the database.
+
+**Scheduling.** On the server, cron starts the run at 03:00 UTC, then adds labels, then backs up (see [Run it on a server](#run-it-on-a-server)).
 
 **Scheduling on a Linux server.** Add a cron line:
 

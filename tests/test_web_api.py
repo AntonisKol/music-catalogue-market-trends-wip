@@ -299,9 +299,17 @@ def test_turnstile_trouble_is_reported_not_passed(reply):
         captcha.verify("token", "our-secret")
 
 
+def with_releases(db, *label_ids):
+    for label_id in label_ids:
+        db.execute("INSERT INTO labels (id, name) VALUES (%s, 'x')", (label_id,))
+        db.execute("INSERT INTO releases (id, title, label_id, is_physical) VALUES (%s, 'x', %s, true)",
+                   (label_id, label_id))
+
+
 def test_the_labels_are_the_active_tracked_ones_in_alphabetical_order(client, db, reader):
     db.execute("INSERT INTO tracked_labels (label_id, name, active) VALUES "
                "(1, 'Tresor', true), (2, 'axis', true), (3, 'Paused Records', false)")
+    with_releases(db, 1, 2, 3)
     db.commit()
 
     response = client.get("/api/labels", headers={"Origin": "https://adnsaudio.test"})
@@ -314,9 +322,18 @@ def test_the_labels_are_the_active_tracked_ones_in_alphabetical_order(client, db
 def test_the_labels_leave_out_the_numbers_discogs_adds(client, db, reader):
     db.execute("INSERT INTO tracked_labels (label_id, name) VALUES "
                "(1, 'Afterlife (6)'), (2, 'Wax (4)'), (3, 'Wax (9)'), (4, 'Studio (54) Records')")
+    with_releases(db, 1, 2, 3, 4)
     db.commit()
 
     assert client.get("/api/labels").get_json() == {"labels": ["Afterlife", "Studio (54) Records", "Wax"]}
+
+
+def test_a_label_is_listed_once_its_releases_are_in_the_database(client, db, reader):
+    db.execute("INSERT INTO tracked_labels (label_id, name) VALUES (1, 'Tresor'), (2, 'Added Tonight')")
+    with_releases(db, 1)
+    db.commit()
+
+    assert client.get("/api/labels").get_json() == {"labels": ["Tresor"]}
 
 
 def test_other_answers_are_still_never_cached(client):

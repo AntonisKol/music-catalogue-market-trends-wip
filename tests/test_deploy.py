@@ -53,6 +53,12 @@ def test_the_image_does_not_run_as_root():
     assert "\nUSER app\n" in dockerfile
 
 
+def test_each_night_adds_labels_after_the_update_and_before_the_backup():
+    nightly = (ROOT / "deploy" / "nightly.sh").read_text()
+    assert nightly.index("ingestion.nightly") < nightly.index("ingestion.grow_labels") < nightly.index("backup.sh")
+    assert "set -e" not in nightly  # a failed step never stops the backup
+
+
 def test_cron_runs_the_nightly_update_with_the_backup():
     crontab = (ROOT / "deploy" / "crontab").read_text()
     assert "sh deploy/nightly.sh" in crontab
