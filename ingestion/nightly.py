@@ -31,7 +31,7 @@ from ingestion.track_labels import tracked_labels
 log = logging.getLogger("ingestion.nightly")
 
 DEFAULT_LOG_FILE = Path(__file__).resolve().parent.parent / "logs" / "nightly.log"
-# A run is "missed" if the previous successful one started longer ago than this.
+# Nights were missed if the previous run, whatever its outcome, started longer ago than this.
 MISSED_AFTER = timedelta(hours=36)
 
 
@@ -47,11 +47,10 @@ def start_run(conn: psycopg.Connection, snapshot_date: date) -> int:
         ).fetchone()[0]
 
 
-def last_success(conn: psycopg.Connection):
+def last_run(conn: psycopg.Connection):
+    """When the previous run started, whatever its outcome."""
     with conn.transaction():
-        row = conn.execute(
-            "SELECT max(started_at) FROM ingestion_runs WHERE status = 'succeeded'"
-        ).fetchone()
+        row = conn.execute("SELECT max(started_at) FROM ingestion_runs").fetchone()
     return row[0]
 
 
@@ -71,20 +70,24 @@ def record_label(conn, run_id: int, label_id: int, result=None, error: str = Non
         )
 
 
-def finish_run(conn, run_id: int, ok: bool, message: str) -> None:
+def finish_run(conn, run_id: int, ok: bool, message: str, warning: str = None) -> None:
     with conn.transaction():
         conn.execute(
-            "UPDATE ingestion_runs SET status = %s, finished_at = now(), message = %s WHERE id = %s",
-            ("succeeded" if ok else "failed", message, run_id),
+            "UPDATE ingestion_runs SET status = %s, finished_at = now(), message = %s, warning = %s WHERE id = %s",
+            ("succeeded" if ok else "failed", message, warning, run_id),
         )
 
 
 def run_nightly(conn: psycopg.Connection, snapshot_date: date, now: datetime) -> tuple:
-    """Update every active tracked label. Returns (ok, summary, problems)."""
+    """Update every active tracked label. Returns (ok, summary, problems, warning).
+
+    ok and problems are about this run only. Missed nights are a warning: they say
+    nothing about whether tonight's update worked."""
     problems = []
-    previous = last_success(conn)
+    warning = None
+    previous = last_run(conn)
     if previous is not None and now - previous > MISSED_AFTER:
-        problems.append(f"The previous successful run started on {previous:%Y-%m-%d %H:%M} UTC; nights were missed.")
+        warning = f"No run started between {previous:%Y-%m-%d %H:%M} UTC and this one; nights were missed."
     run_id = start_run(conn, snapshot_date)
     labels = tracked_labels(conn, active_only=True)
     if not labels:
@@ -115,8 +118,8 @@ def run_nightly(conn: psycopg.Connection, snapshot_date: date, now: datetime) ->
                             + "; ".join(f"{rid}: {err}" for rid, err in list(result.failed.items())[:3]))
     summary = f"{len(labels)} labels, {totals['saved']} releases saved, {totals['failed']} failed"
     ok = not problems
-    finish_run(conn, run_id, ok, summary if ok else summary + ". " + " ".join(problems))
-    return ok, summary, problems
+    finish_run(conn, run_id, ok, summary if ok else summary + ". " + " ".join(problems), warning)
+    return ok, summary, problems, warning
 
 
 def configure_logging() -> None:
@@ -141,13 +144,15 @@ def main(argv: list) -> int:
             if not take_run_lock(conn):
                 log.error("Another ingestion run is in progress; not starting the nightly run")
                 return 1
-            ok, summary, problems = run_nightly(conn, snapshot_date, now)
+            ok, summary, problems, warning = run_nightly(conn, snapshot_date, now)
     except DatabaseConnectionLost as error:
         log.error("Stopped: the database connection was lost: %s", error)
         return 1
     except psycopg.Error as error:
         log.error("Could not use PostgreSQL: %s", error)
         return 1
+    if warning:
+        log.warning(warning)
     if ok:
         log.info("Nightly run done: %s", summary)
         return 0

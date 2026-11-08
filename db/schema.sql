@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
     status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
     message TEXT
 );
+-- Something to know that isn't this run's own failure, such as missed nights.
+ALTER TABLE ingestion_runs ADD COLUMN IF NOT EXISTS warning TEXT;
 CREATE TABLE IF NOT EXISTS ingestion_run_labels (
     run_id BIGINT NOT NULL REFERENCES ingestion_runs(id) ON DELETE CASCADE,
     label_id INT NOT NULL,
