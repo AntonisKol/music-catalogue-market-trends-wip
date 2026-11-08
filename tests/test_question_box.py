@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 WIDGET = ROOT / "widget"
@@ -286,6 +286,69 @@ def test_nothing_in_an_answer_runs_as_code(box):
     assert box.page.locator(".mt-ask-answer img, .mt-ask-answer b").count() == 0
     assert "<img src=x" in box.page.locator(".mt-ask-answer").inner_text()
     assert box.page.evaluate("window.__ran") is None
+
+
+def clipboard(box):
+    """Grants the page the clipboard; returns copy(button name) -> the text that button put there."""
+    box.page.context.grant_permissions(["clipboard-read", "clipboard-write"], origin=box.page.url)
+
+    def copy(name, exact=False):
+        box.page.evaluate("navigator.clipboard.writeText('')")
+        button = box.page.get_by_role("button", name=name, exact=exact)
+        button.click()
+        expect(button.locator("xpath=..").locator(".mt-ask-copy-note")).to_have_text("Copied")
+        return box.page.evaluate("navigator.clipboard.readText()")
+
+    return copy
+
+
+def test_a_table_in_the_answer_can_be_copied(box):
+    copy = clipboard(box)
+    box.ask()
+
+    assert copy("Copy table", exact=True) == "Title\tPrice\nThrow\t8.90"
+    html = box.page.evaluate("""async () => {
+      const [item] = await navigator.clipboard.read();
+      return (await item.getType("text/html")).text();
+    }""")
+    assert "<th>Title</th>" in html and "<td>Throw</td>" in html and "class=" not in html
+
+
+def test_tables_written_back_to_back_are_split_and_copied_one_at_a_time(box):
+    copy = clipboard(box)
+    box.api.reply("/api/questions", 200, {**ANSWER, "answer": (
+        "Two labels:\n\n| Label | Records |\n| --- | --- |\n| Ostgut Ton | 12 |\n"
+        "| Label | Want |\n| --- | --- |\n| Tresor | 900 |\n| Planet E | 450 |")})
+    box.ask()
+
+    answer = box.page.locator(".mt-ask-answer")
+    answer.locator("table").first.wait_for()
+    assert answer.locator("table").count() == 2
+    assert answer.locator("table").nth(0).locator("td").all_inner_texts() == ["Ostgut Ton", "12"]
+    assert copy("Copy table 2 of 2") == "Label\tWant\nTresor\t900\nPlanet E\t450"
+    assert copy("Copy table 1 of 2") == "Label\tRecords\nOstgut Ton\t12"
+
+
+def test_each_data_table_has_its_own_copy_button(box):
+    copy = clipboard(box)
+    box.api.reply("/api/questions", 200, {**ANSWER, "sources": ANSWER["sources"] + [{"tool": "compare_labels", "result": {
+        "rows": [{"label": "Tresor", "vinyl_releases": 40}], "total": 1}}]})
+    box.ask()
+    box.page.get_by_text("Show the data").click()
+
+    assert copy("Copy the Label comparison table") == "Label\tVinyl releases\nTresor\t40"
+    assert copy("Copy the Ranking table") == "Title\tArtists\tLowest price (EUR)\nThrow\tPaperclip People\t8.90"
+
+
+def test_a_failed_copy_says_so(box):
+    box.page.evaluate("""() => {
+      const refuse = () => Promise.reject(new Error("denied"));
+      Object.defineProperty(navigator, "clipboard", { value: { write: refuse, writeText: refuse } });
+    }""")
+    box.ask()
+
+    box.page.get_by_role("button", name="Copy table", exact=True).click()
+    expect(box.page.locator(".mt-ask-answer .mt-ask-copy-note")).to_have_text("Could not copy")
 
 
 # --- Loading and validation ----------------------------------------------------------------

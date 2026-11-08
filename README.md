@@ -17,7 +17,7 @@ Every night a Python pipeline records each tracked label's vinyl releases from D
 
 **For the owner**
 - A nightly update of every tracked label, with each run recorded and checkable from one command.
-- An email for each label request with its Discogs matches, and a script to approve (the label is imported at once) or reject with a reason that reaches the visitor.
+- An email for each label request the moment it arrives, with its Discogs matches, and a script to approve (the label is imported at once) or reject with a reason that reaches the visitor.
 - Nightly backups copied off the server, and one command to deploy.
 
 ## How it works
@@ -34,7 +34,7 @@ flowchart LR
     QS <-->|"question, tool calls, rows"| AN["Claude, Anthropic API"]
     QS -->|"five fixed tools, read-only login"| PG
     API -->|"confirmation emails"| RS["Resend"]
-    PG -->|"new label requests"| AD["Admin commands"]
+    PG -->|"each new label request, at once"| AD["Label request watcher"]
     AD -->|"email to the owner"| RS
 ```
 
@@ -168,7 +168,7 @@ python -m ingestion.track_labels resume 538
 
 **Labels visitors ask for.** Signed-in visitors can ask for a label from the question box, by name. A request alone tracks nothing: you review it and decide.
 
-1. **You get an email.** Every 15 minutes, cron checks for new requests in the admin container and emails each one to `LABEL_REQUEST_EMAIL`, with the labels Discogs finds under that name, their size and links, and the commands to decide. Equivalent names ("Polegroup", "polegroup records") are one request.
+1. **You get an email at once.** When a request is stored, the database wakes the `label-requests` container, which always runs on the server, and it emails the request to `LABEL_REQUEST_EMAIL` within seconds, with the labels Discogs finds under that name, their size and links, and the commands to decide. Requests that arrive while it is down (during a deploy, say) are emailed as soon as it is back. Equivalent names ("Polegroup", "polegroup records") are one request.
 2. **You decide from your Mac,** in the project folder. The script logs in to `DEPLOY_SERVER` (from your `.env`) and runs the command in the admin container there:
 
    ```bash
@@ -180,7 +180,7 @@ python -m ingestion.track_labels resume 538
 3. **Approving** tracks the label and starts importing it on the server at once (progress in `logs/import-<label>.log`). After that the nightly run keeps it up to date.
 4. **Rejecting** sends your reason to everyone who asked.
 
-Everyone who asked is emailed your decision: added, or rejected with your reason. If an email fails, the next 15-minute check sends it again. The box shows signed-in visitors where their requests stand, under "Missing a label?", each with a coloured bullet (yellow waiting, green added, red rejected), and checks again every 30 seconds while one is waiting. Discogs' search can miss a label; then find it on discogs.com and approve with the number in its address.
+Everyone who asked is emailed your decision: added, or rejected with your reason. If an email fails, the watcher sends it again within 15 minutes. The box shows signed-in visitors where their requests stand, under "Missing a label?", each with a coloured bullet (yellow waiting, green added, red rejected), and checks again every 30 seconds while one is waiting. Discogs' search can miss a label; then find it on discogs.com and approve with the number in its address.
 
 One command updates every active label: its vinyl releases, that day's prices, and want, have and ratings once a week.
 
@@ -376,6 +376,7 @@ What the box does:
 - shows example questions and a character count up to 500. The human check is invisible: Cloudflare shows its box only if it is unsure about a visitor;
 - disables the button while a question is answered, so a double click sends one question;
 - shows the answer, any warning, and "Show the data" with the rows behind it, opened automatically when there is a warning;
+- gives every table its own copy button. A copied table pastes into a spreadsheet as cells and into a document as a table. When an answer holds several tables, each is copied on its own;
 - names the model that answered;
 - shows how many questions are left, offers sign-up when the anonymous allowance runs out, and shows the signed-in address with a **Verified** badge, **Sign out** and **Delete my account**;
 - turns errors and limits into plain messages ("You can ask again in about 30 minutes").
@@ -448,6 +449,7 @@ The command logs in as `deploy` and pulls `main`, then rebuilds and restarts the
 ### Looking after it
 
 - **Nightly runs:** `ssh deploy@<server-ip> 'cd /srv/market-trends && docker compose --env-file .env -f deploy/compose.yml run --rm -T admin python -m ingestion.runs'`. The logs are in `/srv/market-trends/logs/`: `nightly.log` for the update, `cron.log` for the backup.
+- **Label request emails:** `docker compose --env-file .env -f deploy/compose.yml logs --tail 50 label-requests`, from `/srv/market-trends`. Each email to you and any that failed are listed there.
 - **Backups:** each night [`deploy/backup.sh`](deploy/backup.sh) writes `backups/market-trends-<date>.dump`. It checks the dump can be read, deletes dumps older than 14 days, and copies the folder to the Storage Box named by `BACKUP_TARGET`. If anything fails, it says so in `logs/cron.log`, and nothing is sent anywhere. Run it by hand with `sh deploy/backup.sh`.
 - **Spotting abuse:** the API's log has one line per request: the time, a keyed hash of the visitor's address (the same hash as the question limits), the method, the path, the status and the browser name. It never holds the address. Container logs are limited to three files of 10 MB each, and the oldest is deleted. From `/srv/market-trends`, the busiest visitors are:
   ```bash
@@ -481,6 +483,7 @@ The tests need no `.env` and never use your token or your database: `tests/conft
 
 `tests/test_question_box.py` runs the question box in Chromium. Most tests use a faked API and check:
 - asking a question, the answer, the data behind it and any warning;
+- copying each table on its own, also two tables the model wrote without a gap;
 - loading, validation and error messages;
 - the label list;
 - signing up, signing in and a new password;
