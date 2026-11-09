@@ -283,19 +283,40 @@ def market_changes(conn: psycopg.Connection, args: MarketChanges) -> dict:
         "up": (sql.SQL("ends.end_value > ends.start_value"), sql.SQL("change_pct DESC NULLS LAST, change DESC")),
         "down": (sql.SQL("ends.end_value < ends.start_value"), sql.SQL("change_pct ASC NULLS LAST, change ASC")),
     }[args.direction]
+    # Want and have come from the weekly demand snapshots, counted on days that also
+    # have a price snapshot; prices need only the price snapshots.
+    source = sql.SQL(
+        "demand_snapshots d JOIN price_snapshots p USING (release_id, snapshot_date)"
+        if args.metric in ("want", "have") else "price_snapshots p"
+    )
+    metric = METRICS[args.metric]
+    # Each matching release's first and last known value in the period are two
+    # lookups in the (release_id, snapshot_date) index, so the cost grows with the
+    # number of matching releases, not with the days of history. The latest day is
+    # found the same way, one lookup per release.
+    edge = sql.SQL("""
+        SELECT p.snapshot_date, {metric} AS value FROM {source}
+        WHERE p.release_id = r.id AND p.snapshot_date >= period.start AND {metric} IS NOT NULL
+        ORDER BY p.snapshot_date {sort} LIMIT 1
+    """)
     query = sql.SQL("""
-        WITH series AS (
-            SELECT p.release_id, p.snapshot_date, {metric} AS value
-            FROM price_snapshots p
-            LEFT JOIN demand_snapshots d USING (release_id, snapshot_date)
-            WHERE p.snapshot_date >= (SELECT max(snapshot_date) FROM price_snapshots) - %(days)s
+        WITH period AS (
+            SELECT max(latest.snapshot_date) - %(days)s AS start
+            FROM releases rel
+            CROSS JOIN LATERAL (
+                SELECT snapshot_date FROM price_snapshots
+                WHERE release_id = rel.id ORDER BY snapshot_date DESC LIMIT 1
+            ) latest
         ), ends AS (
-            SELECT release_id,
-                   (array_agg(snapshot_date ORDER BY snapshot_date) FILTER (WHERE value IS NOT NULL))[1] AS start_date,
-                   (array_agg(value ORDER BY snapshot_date) FILTER (WHERE value IS NOT NULL))[1] AS start_value,
-                   (array_agg(snapshot_date ORDER BY snapshot_date DESC) FILTER (WHERE value IS NOT NULL))[1] AS end_date,
-                   (array_agg(value ORDER BY snapshot_date DESC) FILTER (WHERE value IS NOT NULL))[1] AS end_value
-            FROM series GROUP BY release_id
+            SELECT r.id AS release_id,
+                   first.snapshot_date AS start_date, first.value AS start_value,
+                   last.snapshot_date AS end_date, last.value AS end_value
+            FROM period
+            CROSS JOIN releases r
+            LEFT JOIN labels l ON l.id = r.label_id
+            CROSS JOIN LATERAL ({first}) first
+            CROSS JOIN LATERAL ({last}) last
+            WHERE {where}
         )
         SELECT r.id AS release_id, r.title, {artists}, l.name AS label, r.year,
                ends.start_date, ends.start_value, ends.end_date, ends.end_value,
@@ -306,10 +327,14 @@ def market_changes(conn: psycopg.Connection, args: MarketChanges) -> dict:
         FROM ends
         JOIN releases r ON r.id = ends.release_id
         LEFT JOIN labels l ON l.id = r.label_id
-        WHERE ends.end_date > ends.start_date AND {direction} AND {where}
+        WHERE ends.end_date > ends.start_date AND {direction}
         ORDER BY {order}, r.id
         LIMIT %(limit)s
-    """).format(metric=METRICS[args.metric], artists=ARTISTS, direction=direction, where=where, order=order)
+    """).format(
+        first=edge.format(metric=metric, source=source, sort=sql.SQL("ASC")),
+        last=edge.format(metric=metric, source=source, sort=sql.SQL("DESC")),
+        where=where, artists=ARTISTS, direction=direction, order=order,
+    )
     params.update(days=args.days, limit=args.limit)
     return result(fetch(conn, query, params), metric=args.metric, direction=args.direction)
 

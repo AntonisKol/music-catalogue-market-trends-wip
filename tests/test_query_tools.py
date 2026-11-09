@@ -189,6 +189,36 @@ def test_a_period_with_a_single_day_has_no_changes(data, reader):
     assert run_tool(reader, "market_changes", {"metric": "lowest_price", "days": 10})["rows"] == []
 
 
+@pytest.mark.parametrize("filters, matching", [
+    ({"label": "planet e"}, {101, 102, 103, 104}),
+    ({"style": "techno"}, {101, 103, 105}),
+    ({"artist": "rhythim"}, {102}),
+    ({"year_to": 1990}, {102}),
+])
+@pytest.mark.parametrize("metric, direction", [("lowest_price", "up"), ("lowest_price", "down"), ("want", "up")])
+def test_a_filter_gives_the_unfiltered_changes_of_the_matching_releases(data, reader, filters, matching, metric, direction):
+    # The filters narrow the releases before their history is read; the changes themselves stay the same.
+    args = {"metric": metric, "direction": direction, "days": 31}
+    unfiltered = run_tool(reader, "market_changes", args)["rows"]
+
+    filtered = run_tool(reader, "market_changes", {**args, **filters})
+
+    expected = [row for row in unfiltered if row["release_id"] in matching]
+    assert filtered["rows"] == expected
+    assert filtered["total"] == len(expected)
+
+
+def test_the_period_counts_back_from_the_latest_snapshot_of_any_release(data, db, reader):
+    # Throw's latest price is from 1 Nov, but another release has one from 20 Nov, so 31 days
+    # start on 20 Oct, after Throw's earlier prices: Throw has a single day and no change.
+    save_price_snapshot(db, 105, {"num_for_sale": 2, "lowest_price": {"value": 9.0, "currency": "EUR"}}, date(2026, 11, 20))
+    db.commit()
+
+    rows = run_tool(reader, "market_changes", {"metric": "lowest_price", "days": 31, "title": "throw"})["rows"]
+    assert rows == []
+    assert ids(run_tool(reader, "market_changes", {"metric": "lowest_price", "days": 50, "title": "throw"})) == [101]
+
+
 # --- compare_labels ------------------------------------------------------------
 
 def test_compare_labels(data, reader):
