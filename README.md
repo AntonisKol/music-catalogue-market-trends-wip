@@ -267,7 +267,7 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 
 `GET /api/health` answers `{"status": "ok"}` for uptime checks.
 
-`GET /api/labels` answers `{"labels": [...]}`, the names of the active tracked labels in alphabetical order, without the numbers Discogs adds to tell labels apart. Browsers may reuse the answer for 5 minutes.
+`GET /api/labels` answers `{"labels": [...]}`, the names of the active tracked labels in alphabetical order, without the numbers Discogs adds to tell labels apart, unless two listed labels share a name. Browsers may reuse the answer for 5 minutes.
 
 ### Signing up
 
