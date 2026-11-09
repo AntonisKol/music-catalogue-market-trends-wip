@@ -304,6 +304,7 @@ def with_releases(db, *label_ids):
         db.execute("INSERT INTO labels (id, name) VALUES (%s, 'x')", (label_id,))
         db.execute("INSERT INTO releases (id, title, label_id, is_physical) VALUES (%s, 'x', %s, true)",
                    (label_id, label_id))
+        db.execute("INSERT INTO release_labels (release_id, label_id) VALUES (%s, %s)", (label_id, label_id))
 
 
 def test_the_labels_are_the_active_tracked_ones_in_alphabetical_order(client, db, reader):
@@ -351,6 +352,17 @@ def test_a_label_is_listed_once_its_releases_are_in_the_database(client, db, rea
     db.commit()
 
     assert client.get("/api/labels").get_json() == {"labels": ["Tresor"]}
+
+
+def test_a_label_is_listed_when_its_releases_name_another_label_first(client, db, reader):
+    """Issue 94: a co-release lists the tracked label second, so releases.label_id is the other label."""
+    db.execute("INSERT INTO tracked_labels (label_id, name) VALUES (2, 'Second Label')")
+    db.execute("INSERT INTO labels (id, name) VALUES (1, 'First Label'), (2, 'Second Label')")
+    db.execute("INSERT INTO releases (id, title, label_id, is_physical) VALUES (10, 'x', 1, true)")
+    db.execute("INSERT INTO release_labels (release_id, label_id) VALUES (10, 1), (10, 2)")
+    db.commit()
+
+    assert client.get("/api/labels").get_json() == {"labels": ["Second Label"]}
 
 
 def test_other_answers_are_still_never_cached(client):
