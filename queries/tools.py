@@ -221,14 +221,8 @@ def fetch(conn: psycopg.Connection, query: sql.Composable, params: dict) -> list
 # asked about can begin before there is any data (issue 95). The tools that cover a
 # period say where the data starts, so an answer can say so instead of searching again.
 # Each date is one lookup per release in the (release_id, snapshot_date) index, like LATEST.
-FIRST_AND_LATEST = sql.SQL("""
-    SELECT min(f.snapshot_date) AS first, max(z.snapshot_date) AS latest
-    FROM releases rel
-    CROSS JOIN LATERAL (SELECT snapshot_date FROM price_snapshots
-                        WHERE release_id = rel.id ORDER BY snapshot_date LIMIT 1) f
-    CROSS JOIN LATERAL (SELECT snapshot_date FROM price_snapshots
-                        WHERE release_id = rel.id ORDER BY snapshot_date DESC LIMIT 1) z
-""")
+# Two lookups in the index on snapshot_date, however long the history grows.
+FIRST_AND_LATEST = sql.SQL("SELECT min(snapshot_date) AS first, max(snapshot_date) AS latest FROM price_snapshots")
 RELEASE_FIRST = sql.SQL("""
     SELECT wanted.release_id,
            (SELECT min(p.snapshot_date) FROM price_snapshots p WHERE p.release_id = wanted.release_id)

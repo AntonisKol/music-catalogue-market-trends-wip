@@ -4,6 +4,7 @@ import json
 from datetime import date
 
 import pytest
+from psycopg import sql
 
 from ingestion.repository import save_price_snapshot, save_release, save_snapshots
 from queries.tools import MAX_LIMIT, TOOLS, ToolError, run_tool
@@ -227,6 +228,15 @@ def test_release_history_says_when_the_release_data_starts(data, reader):
 
     added_later = run_tool(reader, "release_history", {"release_id": 105, "days": 30})
     assert added_later["data_starts"] == "2026-11-01" and "2026-11-01" in added_later["note"]
+
+
+def test_the_data_start_is_found_in_the_date_index_not_by_reading_the_table(db, reader):
+    from queries.tools import FIRST_AND_LATEST
+    db.execute("SET enable_seqscan = off")
+    plan = "\n".join(row[0] for row in db.execute(sql.SQL("EXPLAIN ") + FIRST_AND_LATEST).fetchall())
+    db.rollback()
+
+    assert "price_snapshots_snapshot_date" in plan and "Seq Scan" not in plan, plan
 
 
 def test_an_empty_catalogue_has_no_data_start(db, reader):
