@@ -12,7 +12,11 @@ passed. Errors come back as {"error": {"code", "message"}} with a fitting HTTP
 status and never contain secrets or internal details; those go to the log.
 
 GET /api/labels returns {"labels": [...]}, the labels the site follows whose releases
-are in the database, for the list on the page. Signed-in visitors can ask for more (see web/label_requests.py):
+are in the database, for the list on the page. GET /api/data-dates returns
+{"tracked_since", "updated"}, the first and latest day prices were saved, for
+"About the data" on the page; browsers may reuse both for five minutes.
+
+Signed-in visitors can ask for more labels (see web/label_requests.py):
     POST /api/label-requests     {"name"}: stores a request for the owner to review
     GET  /api/label-requests     this account's requests and their status
 
@@ -44,14 +48,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from queries.labels import listed_label_names, tracked_label_names
+from queries.labels import data_dates, listed_label_names, tracked_label_names
 from queries.questions import MAX_QUESTION_LENGTH, QuestionError, answer_question
 from web import accounts, captcha, config, label_requests, limits, mailer
 
 log = logging.getLogger(__name__)
 access_log = logging.getLogger("web.access")
 
-# How long browsers may reuse the list of labels, which changes rarely.
+# How long browsers may reuse the list of labels and the data dates, which change rarely.
 LABELS_CACHE_SECONDS = 300
 LOGGED_TEXT_LENGTH = 200
 
@@ -208,7 +212,7 @@ def set_up_logging() -> None:
 
 def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_limits=limits.connect_limits,
                mail=mailer, now=lambda: datetime.now(timezone.utc),
-               list_labels=listed_label_names, known_labels=tracked_label_names) -> Flask:
+               list_labels=listed_label_names, known_labels=tracked_label_names, dates=data_dates) -> Flask:
     """The app. The arguments exist so tests can replace the outside services."""
     set_up_logging()
     app = Flask(__name__)
@@ -555,6 +559,12 @@ def create_app(answer=answer_question, verify_captcha=captcha.verify, connect_li
     def labels():
         names = list_labels()
         response = jsonify({"labels": names})
+        response.headers["Cache-Control"] = f"public, max-age={LABELS_CACHE_SECONDS}"
+        return response
+
+    @app.get("/api/data-dates")
+    def data_dates_of_the_page():
+        response = jsonify(dates())
         response.headers["Cache-Control"] = f"public, max-age={LABELS_CACHE_SECONDS}"
         return response
 

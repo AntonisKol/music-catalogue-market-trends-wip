@@ -90,6 +90,7 @@ class FakeApi:
         self.requests = []
         self.account = dict(ANONYMOUS)
         self.labels = ["Planet E", "Tresor"]
+        self.dates = {"tracked_since": "2026-11-02", "updated": "2026-11-09"}
         self.label_requests = []
         self.replies = {}
         self.hold = False
@@ -119,6 +120,8 @@ class FakeApi:
             reply = (200, {"requests": self.label_requests}, {}, False)
         elif path == "/api/labels":
             reply = self.replies.get(path, (200, {"labels": self.labels}, {}, False))
+        elif path == "/api/data-dates":
+            reply = self.replies.get(path, (200, self.dates, {}, False))
         elif path == "/api/questions":
             reply = self.replies.get(path, (200, ANSWER, {}, False))
         else:
@@ -453,6 +456,58 @@ def test_the_box_works_when_the_label_list_cannot_load(browser, site):
         context.close()
 
 
+# --- About the data (issue 96) ---------------------------------------------------------------
+
+def about_facts(page) -> list:
+    return page.locator(".mt-ask-about-facts li").all_inner_texts()
+
+
+def test_about_the_data_is_closed_until_opened_and_says_what_a_price_is(box):
+    about = box.page.locator("details.mt-ask-about")
+    expect(about.locator("summary")).to_have_text("About the data")
+    assert about.get_attribute("open") is None
+    assert about.locator("p").first.is_hidden()
+
+    about.locator("summary").click()
+
+    expect(about).to_have_attribute("open", "")
+    assert about.locator("p").all_inner_texts() == [
+        "A price is the cheapest copy for sale on Discogs, in any condition, without shipping, "
+        "converted to euros by Discogs. It is an asking price, not what a record sold for.",
+        "Prices are updated every day. Wants, haves and ratings are updated once a week.",
+    ]
+    expect(about.locator(".mt-ask-about-facts li")).to_have_count(4)
+    assert about_facts(box.page) == ["Source: Discogs", "Tracked since: 2 November 2026",
+                                     "Last updated: 9 November 2026", "Labels: 2"]
+
+
+def test_about_the_data_opens_with_the_keyboard(box):
+    box.page.locator(".mt-ask-about summary").focus()
+    box.page.keyboard.press("Enter")
+
+    expect(box.page.locator(".mt-ask-about")).to_have_attribute("open", "")
+    assert box.focused() == "About the data"
+
+
+def test_about_the_data_still_explains_the_price_when_the_dates_cannot_load(make_box):
+    box = make_box()
+    box.api.reply("/api/data-dates", 503, {"error": {"code": "database"}})
+    box.page.reload()
+    box.page.locator(".mt-ask-labels:not([hidden])").wait_for()
+    box.page.locator(".mt-ask-about summary").click()
+
+    expect(box.page.locator(".mt-ask-about-facts li")).to_have_count(2)
+    assert about_facts(box.page) == ["Source: Discogs", "Labels: 2"]
+    assert "asking price" in box.page.locator(".mt-ask-about").inner_text()
+
+
+def test_the_examples_only_suggest_periods_the_data_covers(box):
+    examples = " ".join(box.page.locator(".mt-ask-example").all_inner_texts())
+    hints = examples + " " + box.textarea.get_attribute("placeholder")
+
+    assert not re.search(r"month|year", hints, re.IGNORECASE), hints
+
+
 # --- The account form ----------------------------------------------------------------------
 
 def test_signing_up_sends_the_address_and_password_and_keeps_neither_on_the_page(box):
@@ -741,7 +796,7 @@ def test_changes_are_announced_politely(box):
         assert status.get_attribute("aria-live") == "polite"
 
 
-@pytest.mark.parametrize("state", ["start", "answer", "account form", "error", "label request"])
+@pytest.mark.parametrize("state", ["start", "answer", "account form", "error", "label request", "about the data"])
 def test_no_serious_accessibility_problems(make_box, state):
     from axe_playwright_python.sync_playwright import Axe
 
@@ -752,6 +807,9 @@ def test_no_serious_accessibility_problems(make_box, state):
         box.page.get_by_text("Show the data").click()
     elif state == "account form":
         box.page.get_by_role("button", name="Sign up or sign in", exact=True).click()
+    elif state == "about the data":
+        box.page.locator(".mt-ask-about summary").click()
+        box.page.locator(".mt-ask-about-facts li", has_text="Last updated").wait_for()
     elif state == "label request":
         box = make_box(account=SIGNED_IN, label_requests=[{"name": "Arts", "status": "waiting"}])
         box.page.get_by_role("button", name="Request it").click()
@@ -790,6 +848,7 @@ def test_end_to_end_with_the_real_api_and_database(browser, site, limits_db, rea
         db.execute("INSERT INTO labels (id, name) VALUES (%s, 'x')", (label_id,))
         db.execute("INSERT INTO releases (id, title, label_id, is_physical) VALUES (%s, 'x', %s, true)",
                    (label_id, label_id))
+    db.execute("INSERT INTO price_snapshots (release_id, snapshot_date) VALUES (1, '2026-11-02'), (2, '2026-11-09')")
     db.commit()
     monkeypatch.setattr(config, "ALLOWED_ORIGINS", [site.origin])
     monkeypatch.setattr(config, "COOKIE_SECURE", False)
@@ -803,6 +862,10 @@ def test_end_to_end_with_the_real_api_and_database(browser, site, limits_db, rea
         box = Box(page, None)
         page.locator(".mt-ask-labels:not([hidden])").wait_for()
         assert page.locator(".mt-ask-labels").inner_text() == "Labels we track (2): Planet E, Wax"
+        page.locator(".mt-ask-about summary").click()
+        expect(page.locator(".mt-ask-about-facts li")).to_have_count(4)
+        assert about_facts(page) == ["Source: Discogs", "Tracked since: 2 November 2026",
+                                     "Last updated: 9 November 2026", "Labels: 2"]
         assert box.account.inner_text().startswith(f"{config.QUESTIONS_PER_VISITOR_DAY} questions left today")
 
         box.ask("Cheapest Planet E record?")
