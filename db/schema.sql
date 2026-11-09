@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS price_snapshots (
     currency TEXT,
     UNIQUE (release_id, snapshot_date)
 );
+-- The first and latest day on the page's "About the data" (issue 96), without reading the whole table.
+CREATE INDEX IF NOT EXISTS price_snapshots_snapshot_date ON price_snapshots (snapshot_date);
 CREATE TABLE IF NOT EXISTS demand_snapshots (
     id BIGSERIAL PRIMARY KEY,
     release_id INT NOT NULL REFERENCES releases(id),

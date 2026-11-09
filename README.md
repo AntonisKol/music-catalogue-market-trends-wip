@@ -270,6 +270,8 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 
 `GET /api/labels` answers `{"labels": [...]}`, the names of the active tracked labels in alphabetical order, without the numbers Discogs adds to tell labels apart, unless two listed labels share a name. Browsers may reuse the answer for 5 minutes.
 
+`GET /api/data-dates` answers `{"tracked_since": "2026-11-02", "updated": "2026-11-09"}`, the first and latest day prices were saved (`null` before the first night), for the page's "About the data". Browsers may reuse it for 5 minutes too.
+
 ### Signing up
 
 Visitors who want more than the anonymous allowance sign up with an email address and a password. The account can't be used until they press the button behind a link sent to that address.
@@ -322,6 +324,7 @@ The page's address must be in the API's `ALLOWED_ORIGINS`. The Turnstile *site* 
 
 What the box does:
 - lists the labels the site tracks, read live from the API, and leaves the list out if it can't be loaded;
+- has a collapsed "About the data" section: a price is the cheapest copy for sale in any condition, without shipping, in euros, and not a sale price; how often prices and want/have are updated; since when, when last, and how many labels, from the API;
 - shows example questions and a character count up to 500. The human check is invisible: Cloudflare shows its box only if it is unsure about a visitor;
 - disables the button while a question is answered, so a double click sends one question;
 - shows the answer, any warning, and "Show the data" with the rows behind it, opened automatically when there is a warning;
@@ -405,7 +408,7 @@ The tests (`python -m pytest`) use no real credentials and no real database: `te
 - asking a question, the answer, the data behind it and any warning;
 - copying each table on its own, also two tables the model wrote without a gap;
 - loading, validation and error messages;
-- the label list;
+- the label list and "About the data";
 - signing up, signing in and a new password;
 - keyboard use, names for every control, focus and announcements for screen readers;
 - an [axe](https://github.com/dequelabs/axe-core) accessibility audit.
