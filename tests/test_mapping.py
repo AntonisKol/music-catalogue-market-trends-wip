@@ -62,9 +62,21 @@ def test_uses_first_label():
     }
 
 
+def test_keeps_every_label_once_in_order():
+    mapped = map_release(discogs_release(labels=[
+        {"id": 7, "name": "Seven", "catno": "S1"},
+        {"name": "No id", "catno": "X"},
+        {"id": 8, "name": "Eight", "catno": "E1"},
+        {"id": 7, "name": "Seven", "catno": "S2"},
+    ]))
+    assert [(label["id"], label["catno"]) for label in mapped["labels"]] == [(7, "S1"), (8, "E1")]
+    assert (mapped["release"]["label_id"], mapped["release"]["catno"]) == (7, "S1")
+
+
 def test_release_without_label():
     mapped = map_release(discogs_release(labels=[]))
     assert mapped["label"] is None
+    assert mapped["labels"] == []
     assert mapped["release"]["label_id"] is None
     assert mapped["release"]["catno"] is None
 

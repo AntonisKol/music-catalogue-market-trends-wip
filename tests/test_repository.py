@@ -40,7 +40,7 @@ def committed(postgres_url):
 def counts(committed):
     return {
         table: committed(f"SELECT count(*) FROM {table}")[0][0]
-        for table in ("labels", "artists", "releases", "release_artists")
+        for table in ("labels", "artists", "releases", "release_artists", "release_labels")
     }
 
 
@@ -62,6 +62,35 @@ def test_saves_release_with_label_and_artists(db, committed):
     assert committed("SELECT release_id, artist_id FROM release_artists") == [(249504, 72872)]
 
 
+CO_RELEASE = [
+    {"id": 1, "name": "First Label", "catno": "FIRST 1"},
+    {"id": 2, "name": "Second Label", "catno": "SECOND 1"},
+    {"id": 2, "name": "Second Label", "catno": "SECOND 1B"},  # listed twice: the first catno is kept
+]
+
+
+def test_every_label_on_a_release_is_saved_and_the_first_is_shown(db, committed):
+    """Issue 94: a co-release must be stored under each of its labels."""
+    save_release(db, discogs_release(labels=CO_RELEASE))
+
+    assert committed("SELECT label_id, catno FROM releases") == [(1, "FIRST 1")]
+    assert committed("SELECT id, name FROM labels ORDER BY id") == [(1, "First Label"), (2, "Second Label")]
+    assert committed("SELECT release_id, label_id, catno FROM release_labels ORDER BY label_id") == [
+        (249504, 1, "FIRST 1"), (249504, 2, "SECOND 1"),
+    ]
+
+
+def test_labels_no_longer_on_a_release_are_unlinked(db, committed):
+    save_release(db, discogs_release(labels=CO_RELEASE))
+    save_release(db, discogs_release(labels=[{"id": 2, "name": "Second Label", "catno": "SECOND 2"},
+                                             {"id": 3, "name": "Third Label", "catno": "THIRD 1"}]))
+
+    assert committed("SELECT label_id, catno FROM releases") == [(2, "SECOND 2")]
+    assert committed("SELECT label_id, catno FROM release_labels ORDER BY label_id") == [
+        (2, "SECOND 2"), (3, "THIRD 1"),
+    ]
+
+
 def test_get_saved_release(db):
     save_release(db, discogs_release())
 
@@ -81,7 +110,7 @@ def test_saving_again_updates_instead_of_duplicating(db, committed):
         artists=[{"id": 72872, "name": "Rick Astley (2)"}],
     ))
 
-    assert counts(committed) == {"labels": 1, "artists": 1, "releases": 1, "release_artists": 1}
+    assert counts(committed) == {"labels": 1, "artists": 1, "releases": 1, "release_artists": 1, "release_labels": 1}
     title, fetched_at = committed("SELECT title, fetched_at FROM releases")[0]
     assert title == "Never Gonna Give You Up (Remastered)"
     assert fetched_at > first_fetch
@@ -112,7 +141,7 @@ def test_release_with_no_label_or_artists(db, committed):
     save_release(db, discogs_release(labels=[], artists=[]))
 
     assert committed("SELECT label_id, catno FROM releases") == [(None, None)]
-    assert counts(committed) == {"labels": 0, "artists": 0, "releases": 1, "release_artists": 0}
+    assert counts(committed) == {"labels": 0, "artists": 0, "releases": 1, "release_artists": 0, "release_labels": 0}
 
 
 def test_failed_save_keeps_nothing(db, committed):
@@ -120,7 +149,7 @@ def test_failed_save_keeps_nothing(db, committed):
     with pytest.raises(psycopg.errors.NumericValueOutOfRange):
         save_release(db, discogs_release(year=10**10))
 
-    assert counts(committed) == {"labels": 0, "artists": 0, "releases": 0, "release_artists": 0}
+    assert counts(committed) == {"labels": 0, "artists": 0, "releases": 0, "release_artists": 0, "release_labels": 0}
 
 
 def test_failed_resave_keeps_the_earlier_version(db, committed):
