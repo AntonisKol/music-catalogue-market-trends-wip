@@ -5,13 +5,13 @@
 #   sh deploy/deploy.sh page     only the question box on adnsaudio.com/market-trends/
 # Reads DEPLOY_SERVER (for example deploy@203.0.113.10) from the local .env; it is
 # not secret, since the server's address is public through DNS. The page goes to
-# the website's repository (adns-space), which GitHub Pages serves as adnsaudio.com.
+# the website's repository (adns-audio), which GitHub Pages serves as adnsaudio.com.
 set -eu
 cd "$(dirname "$0")/.."
 setting() { sed -n "s/^$1=//p" .env | tail -1; }
 SERVER=$(setting DEPLOY_SERVER)
 API_URL=https://api.adnsaudio.com
-SITE_REPO=AntonisKol/adns-space
+SITE_REPO=AntonisKol/adns-audio
 SITE_DIR=${SITE_DIR:-$HOME/.cache/market-trends-site}
 # The question box's files: ask.js loads the ask-*.js modules from the same folder.
 # A new module must be added here, or the live page fails to load it.
