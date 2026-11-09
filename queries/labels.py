@@ -23,4 +23,4 @@ def tracked_label_names() -> list:
 def listed_label_names() -> list:
     """The tracked labels the page lists: only those whose releases are in the database,
     so a label appears once questions about it can be answered."""
-    return _names(" AND EXISTS (SELECT 1 FROM releases r WHERE r.label_id = t.label_id)")
+    return _names(" AND EXISTS (SELECT 1 FROM release_labels rl WHERE rl.label_id = t.label_id)")

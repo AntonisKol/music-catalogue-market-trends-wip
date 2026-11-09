@@ -30,6 +30,21 @@ CREATE TABLE IF NOT EXISTS release_artists (
     artist_id INT REFERENCES artists(id),
     PRIMARY KEY (release_id, artist_id)
 );
+-- Every label a release was issued on, in any order; releases.label_id is only the
+-- first one, which answers show. Co-releases often list a tracked label second (issue 94).
+CREATE TABLE IF NOT EXISTS release_labels (
+    release_id INT NOT NULL REFERENCES releases(id),
+    label_id INT NOT NULL REFERENCES labels(id),
+    catno TEXT,
+    PRIMARY KEY (release_id, label_id)
+);
+CREATE INDEX IF NOT EXISTS release_labels_label_id ON release_labels (label_id);
+-- Releases saved before the table existed: their first label is known, so it is
+-- added here. Their other labels arrive with the weekly details refresh. Safe to run
+-- again: a release whose first label is already listed is left as it is.
+INSERT INTO release_labels (release_id, label_id, catno)
+SELECT id, label_id, catno FROM releases WHERE label_id IS NOT NULL
+ON CONFLICT (release_id, label_id) DO NOTHING;
 CREATE TABLE IF NOT EXISTS price_snapshots (
     id BIGSERIAL PRIMARY KEY,
     release_id INT NOT NULL REFERENCES releases(id),

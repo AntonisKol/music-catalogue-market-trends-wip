@@ -48,7 +48,7 @@ flowchart TB
     end
 
     subgraph DB["PostgreSQL 16"]
-        CAT[("Catalogue<br/>labels, artists, releases<br/>Code: db/schema.sql")]
+        CAT[("Catalogue<br/>labels, artists, releases,<br/>release_labels: every label of a release, issue 94<br/>Code: db/schema.sql")]
         TRK[("Tracked labels and run records<br/>tracked_labels, ingestion_runs<br/>Achieved: what to update, and how each night went")]
         SNAP[("Snapshots<br/>price per release per day,<br/>want, have and ratings per week<br/>Achieved: history that grows with every run")]
         LIM[("Limit counts and accounts<br/>limit_counts, accounts, email_tokens,<br/>sessions, label_requests<br/>Code: create_limits_role.py<br/>Achieved: limits that survive restarts; passwords, links<br/>and sessions stored only as hashes")]
@@ -119,6 +119,7 @@ flowchart TD
     S4["Step 4, issue 6: Ingest a whole label<br/>Code: pipeline.py, ingest_label.py<br/>How: dedupe, vinyl filter, pacing,<br/>retries, commit per release, logging<br/>Achieved: a whole label in one command,<br/>failures listed, never silently lost"]
     S5["Step 5, issue 10: Nightly update<br/>Code: nightly.py, track_labels.py, runs.py<br/>How: tracked_labels table, cron on the server,<br/>run lock, run records, rotating log<br/>Achieved: data refreshed every night, missed<br/>nights flagged, safe reruns"]
     F41["Issue 41: Prices nightly, details weekly<br/>Code: pipeline.py, repository.py, tools.py<br/>How: one weekday per release from its id,<br/>details over 7 days old fetched anyway<br/>Achieved: about half the requests a night,<br/>all tracked labels in one night"]
+    F94["Issue 94: Every label of a release<br/>Code: schema.sql, repository.py, tools.py, labels.py<br/>How: a release_labels table filled on every save,<br/>first labels of stored releases copied in by the schema<br/>Achieved: a co-release is found and counted under each<br/>of its labels, and gets its details weekly, not nightly"]
     S6["Step 6, issue 11: Read-only query tools<br/>Code: queries/, create_reader_role.py<br/>How: SELECT-only role, 5 fixed tools,<br/>Pydantic checks, capped results<br/>Achieved: safe reads for the AI"]
     S7["Step 7, issue 7: AI question service<br/>Code: queries/questions.py<br/>How: Claude Haiku 5.5, SDK tool runner over<br/>the 5 tools, prompt caching, no round cap<br/>Achieved: questions answered from the<br/>stored data with their sources,<br/>the AI never writes SQL"]
     S8["Step 8, issue 9: Test the AI service<br/>Code: tests/test_questions.py, test_verify.py,<br/>test_live_answers.py<br/>How: faked AI for guardrails, a free figure check<br/>on every answer, a live test with an AI judge<br/>Achieved: wrong figures flagged to visitors,<br/>tool choice, limits, errors and read-only<br/>access proven, real answers checked before releases"]
@@ -141,6 +142,8 @@ flowchart TD
     S3 --> S4
     S4 --> S5
     S5 --> F41
+    F41 --> F94
+    S6 --> F94
     S4 --> S6
     S6 --> S7
     S7 --> S8
@@ -164,7 +167,7 @@ flowchart TD
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
-    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,F27,F19,F41,F38,F44,F48,F55,F37 built
+    class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,F27,F19,F41,F94,F38,F44,F48,F55,F37 built
     class F18 support
 ```
 
@@ -185,6 +188,7 @@ flowchart TD
 | – | [27](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/27) Review fixes | Built | Malformed data, deleted and credit-only releases handled; one run at a time; vinyl-only answers | Python, PostgreSQL advisory lock |
 | – | [38](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/38), [49](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/49) Sign-up | Built | Anyone can sign up with an email and a password, confirm by email and return to the page with a Verified badge; quotas per account; account deletion | Flask, PostgreSQL, Resend |
 | – | [41](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/41) Weekly details | Built | Prices every night, want/have/ratings once a week per release, spread over the week; about half the requests a night | Python, PostgreSQL |
+| – | [94](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/94) Every label of a release | Built | A co-release is stored under each of its labels, so questions about the label listed second find it, `compare_labels` counts it, the label list shows the label, and its details are fetched weekly instead of every night | PostgreSQL |
 | – | [44](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/44) Hosting | Built, live since 7 November 2026 | The API, database and nightly update on a server, HTTPS by Caddy, nightly backups off the server, one deploy command, the page on adnsaudio.com | Docker Compose, Caddy, cron, rsync, GitHub Pages |
 | – | [19](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/19) CI | Built | Every pull request runs all tests, including the database ones, and must pass to merge | GitHub Actions, Dependabot |
 | – | [48](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/48) Label list and private logs | Built | Visitors see which labels are covered, live from the database; abuse can be spotted from logs that hold no addresses | Flask, PostgreSQL, logging |
@@ -415,7 +419,7 @@ Later visits use `POST /api/sign-in` with the password. A forgotten password tak
 
 | Part | Code | Tech | What it does | Safeguards |
 | --- | --- | --- | --- | --- |
-| Schema | [`db/schema.sql`](../db/schema.sql) | PostgreSQL 16 | Tables: labels, artists, releases, release_artists, price_snapshots, demand_snapshots | One snapshot per release per day (unique key) |
+| Schema | [`db/schema.sql`](../db/schema.sql) | PostgreSQL 16 | Tables: labels, artists, releases, release_artists, release_labels (every label of a release; `releases.label_id` is the first, which answers show), price_snapshots, demand_snapshots | One snapshot per release per day (unique key) |
 | Local database | [`docker-compose.yml`](../docker-compose.yml) | Docker Compose | Runs PostgreSQL on port 5432 and loads the schema on first start | Data kept in a named volume |
 | Settings | [`ingestion/config.py`](../ingestion/config.py), [`queries/config.py`](../queries/config.py) | python-dotenv | Read `.env`; stop at once if a setting is missing | The web side never sees the Discogs token or the writer's password |
 | Discogs client | [`ingestion/discogs_client.py`](../ingestion/discogs_client.py) | requests | Fetches releases, label pages and marketplace stats | 1.1 s between requests; retries 429, 5xx and dropped connections after 5, 15, 60 s; 30 s timeout |
@@ -432,7 +436,7 @@ Later visits use `POST /api/sign-in` with the password. A forgotten password tak
 | Question box | [`widget/ask.js`](../widget/ask.js), [`ask.css`](../widget/ask.css), [`index.html`](../widget/index.html) | HTML, CSS, JavaScript, Cloudflare Turnstile | The list of tracked labels, the form, example questions, states, answer, warning, model and data table; a copy button on every table, giving tab-separated text and a plain HTML table; the visitor's requests with yellow, green or red bullets | Answers drawn from text nodes only; the copied HTML is rebuilt from the cells' text, without the page's classes; no double submits; token reset after each question; no secrets in the page; 90-second request timeout; the box still works if the label list can't load |
 | Label requests | [`web/label_requests.py`](../web/label_requests.py), [`ingestion/label_requests.py`](../ingestion/label_requests.py) | PostgreSQL, Discogs search | Stores labels signed-in visitors ask for; emails each to the owner with its Discogs matches the moment it is stored (a trigger notifies the always-running `watch` command); the owner's script approves (importing at once, or after a running import finishes) or rejects with a reason; the visitor is emailed the decision once, failed emails retried every 15 minutes | Signed-in only; 3 a day per account, 50 for the site; equivalent names are one request; the duplicate check and the limit are one transaction; refused if the tracked labels can't be read; the web side never calls Discogs; the script only imports after an approval went through; deleted with the account |
 | Nightly update | [`ingestion/nightly.py`](../ingestion/nightly.py), [`track_labels.py`](../ingestion/track_labels.py), [`grow_labels.py`](../ingestion/grow_labels.py), [`runs.py`](../ingestion/runs.py), [`deploy/crontab`](../deploy/crontab) | cron, Discogs search | Updates every active tracked label each night (prices nightly, details weekly per release) and records each run and label; then adds up to ten techno labels, most collected first, while the next night is projected under 20 hours | Shares the ingestion lock; interrupted runs marked failed; missed nights flagged; one label's failure doesn't stop the rest; rotating log; added labels never include paused ones or rejected requests, and every label looked at is kept with its reason in `label_candidates` |
-| Schema command | [`ingestion/apply_schema.py`](../ingestion/apply_schema.py) | PostgreSQL | Adds tables introduced since a database was created | Every statement is `CREATE TABLE IF NOT EXISTS`; existing data untouched |
+| Schema command | [`ingestion/apply_schema.py`](../ingestion/apply_schema.py) | PostgreSQL | Adds tables introduced since a database was created, and lists the first label of releases saved before `release_labels` existed | Every statement is `IF NOT EXISTS` or skips rows already there; existing data untouched |
 | Server setup | [`Dockerfile`](../Dockerfile), [`deploy/compose.yml`](../deploy/compose.yml), [`Caddyfile`](../deploy/Caddyfile), [`setup-server.sh`](../deploy/setup-server.sh), [`crontab`](../deploy/crontab), [`nightly.sh`](../deploy/nightly.sh) | Docker Compose, Caddy, cron, Ubuntu 24.04 | Runs the database, the API under gunicorn, Caddy and the label request watcher; cron starts the nightly update at 03:00 UTC, then the backup | Only Caddy publishes ports; the database container gets only its own settings; `.env` never in the image; containers run as an ordinary user; firewall open for SSH, 80 and 443 only; SSH by key only, no root login; automatic security updates; tests check these |
 | Backups | [`deploy/backup.sh`](../deploy/backup.sh), [`restore.sh`](../deploy/restore.sh) | pg_dump, rsync over SSH | A dump after every nightly update, kept 14 days on the server and on a Storage Box; restoring also sets up the logins again | A dump is checked before it is kept; a half-written dump is never kept; a failed backup is reported in `logs/cron.log`, and nothing is copied; half-written dumps left by a failed run are deleted by the next one; restoring asks for "yes" and runs in one transaction |
 | Deploy | [`deploy/deploy.sh`](../deploy/deploy.sh) | SSH, git, GitHub Pages | Updates the server from `main`, adds new tables, checks the API answers, then opens a pull request with the question box on the website repo | Pulls only fast-forward; only `ask.js` and `ask.css` are copied, so no secret can reach the website; the website changes only when its pull request passes its checks and is merged |
@@ -473,7 +477,8 @@ The same routine has been used on every task:
 | 6 | Risk of hitting Discogs' rate limit | About 2 requests per release, 60 a minute allowed | Every request paced 1.1 s apart, temporary errors retried |
 | 11 | A read-only session alone can be switched off | PostgreSQL session settings belong to the session | A separate SELECT-only login, with read-only sessions as a second lock |
 | 11 | `%` and `_` typed by a user act as wildcards | SQL LIKE syntax | Escaped before matching; tests check they match literally |
-| 11 | The live check showed releases filed under other labels | Discogs' label list includes releases where the label is only credited ("Recorded At"), and only the first label is stored | Credit-only releases skipped since issue 27; a co-release is still stored under its first label only |
+| 11 | The live check showed releases filed under other labels | Discogs' label list includes releases where the label is only credited ("Recorded At"), and only the first label is stored | Credit-only releases skipped since issue 27; since issue 94 a co-release is stored under every one of its labels |
+| 94 | A co-release that listed a tracked label second was missing from that label's answers, had its details fetched every night, and could keep the label off the page's list | Only the release's first label was stored (`releases.label_id`), and every label lookup used it | A `release_labels` table holds every label of a release and is used by the label filter, `compare_labels`, the weekly-details check and the label list. Stored releases get their first label copied in when the schema is applied; their other labels arrive with the weekly details refresh, so within 7 days. Tests with a co-release fail without the fix |
 | 27 | An artist without a name stopped a whole label run with no summary | The pipeline only expected Discogs, mapping and database errors | Malformed data is now recorded as a failed release; a test with a wrong data type found one more error type to add |
 | 27 | A CD saved with `save_release` appeared in "vinyl" answers | Only the label pipeline checks for vinyl | Every query tool applies one shared vinyl condition |
 | 27 | One deleted release would have failed every nightly run | Discogs keeps some deleted releases on label lists | A 404 is listed as gone, not as a failure |

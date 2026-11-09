@@ -61,12 +61,26 @@ INSERT_RELEASE_ARTIST = """
     ON CONFLICT DO NOTHING
 """
 
+# Every label the release was issued on (issue 94). Labels no longer on the release
+# are removed; a label still on it gets its current catalogue number.
+DELETE_STALE_RELEASE_LABELS = """
+    DELETE FROM release_labels
+    WHERE release_id = %(release_id)s AND NOT (label_id = ANY(%(label_ids)s))
+"""
+
+UPSERT_RELEASE_LABEL = """
+    INSERT INTO release_labels (release_id, label_id, catno)
+    VALUES (%(release_id)s, %(label_id)s, %(catno)s)
+    ON CONFLICT (release_id, label_id) DO UPDATE SET catno = EXCLUDED.catno
+"""
+
 
 def save_release(conn: psycopg.Connection, discogs_release: dict) -> int:
-    """Save one Discogs release with its label and artists in a single transaction.
+    """Save one Discogs release with its labels and artists in a single transaction.
 
-    Parents are written before the rows that reference them (label and artists,
-    then the release, then the links). If any write fails, nothing is kept.
+    Parents are written before the rows that reference them (labels and artists,
+    then the release, then the links). releases.label_id is the first label;
+    release_labels holds every label. If any write fails, nothing is kept.
     Returns the release id.
     """
     mapped = map_release(discogs_release)
@@ -74,8 +88,8 @@ def save_release(conn: psycopg.Connection, discogs_release: dict) -> int:
     release_id = release["id"]
 
     with conn.transaction(), conn.cursor() as cur:
-        if mapped["label"]:
-            cur.execute(UPSERT_LABEL, mapped["label"])
+        for label in mapped["labels"]:
+            cur.execute(UPSERT_LABEL, label)
         for artist in mapped["artists"]:
             cur.execute(UPSERT_ARTIST, artist)
         cur.execute(UPSERT_RELEASE, release)
@@ -86,6 +100,15 @@ def save_release(conn: psycopg.Connection, discogs_release: dict) -> int:
         for artist_id in mapped["artist_ids"]:
             cur.execute(
                 INSERT_RELEASE_ARTIST, {"release_id": release_id, "artist_id": artist_id}
+            )
+        cur.execute(
+            DELETE_STALE_RELEASE_LABELS,
+            {"release_id": release_id, "label_ids": [label["id"] for label in mapped["labels"]]},
+        )
+        for label in mapped["labels"]:
+            cur.execute(
+                UPSERT_RELEASE_LABEL,
+                {"release_id": release_id, "label_id": label["id"], "catno": label["catno"]},
             )
     return release_id
 
@@ -187,14 +210,16 @@ def get_saved_snapshot(conn: psycopg.Connection, release_id: int, snapshot_date:
 def details_fetched_on(conn: psycopg.Connection, release_id: int, label_id: int):
     """The UTC date a vinyl release of this label last had its details fetched, or None.
 
+    The label may be any of the release's labels, not only the first (issue 94).
     None also when the release is stored but not as a vinyl release of this label,
     so the caller fetches its details and checks them again.
     """
     with conn.transaction():
         row = conn.execute(
             """
-            SELECT (fetched_at AT TIME ZONE 'UTC')::date FROM releases
-            WHERE id = %s AND label_id = %s AND formats @> '[{"name": "Vinyl"}]'::jsonb
+            SELECT (r.fetched_at AT TIME ZONE 'UTC')::date FROM releases r
+            JOIN release_labels rl ON rl.release_id = r.id
+            WHERE r.id = %s AND rl.label_id = %s AND r.formats @> '[{"name": "Vinyl"}]'::jsonb
             """,
             (release_id, label_id),
         ).fetchone()
