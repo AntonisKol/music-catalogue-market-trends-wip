@@ -64,6 +64,7 @@ def tracked(db, limits_role):
     db.execute("INSERT INTO tracked_labels (label_id, name) VALUES (1, 'Tresor')")
     for release_id in range(1, 101):
         db.execute("INSERT INTO releases (id, title, label_id, is_physical) VALUES (%s, 'x', 1, true)", (release_id,))
+        db.execute("INSERT INTO release_labels (release_id, label_id) VALUES (%s, 1)", (release_id,))
     db.execute("INSERT INTO ingestion_runs (snapshot_date, started_at, finished_at, status)"
                " VALUES ('2026-11-08', %s, %s, 'succeeded')", (NOW - timedelta(hours=2), NOW - timedelta(hours=1)))
     db.commit()
@@ -163,6 +164,24 @@ def test_a_skipped_night_does_not_count_as_the_last_runs_speed(tracked, discogs)
 
     assert grow_labels.grow(tracked, NOW) == []
     assert discogs.calls == []
+
+
+def test_co_releases_count_once_for_each_tracked_label_they_are_on(tracked):
+    """Each label's update goes through its own releases: one that names Tresor second
+    still costs a request, and one on two tracked labels costs two."""
+    tracked.execute("INSERT INTO labels (id, name) VALUES (2, 'NovaMute'), (3, 'Untracked')")
+    tracked.execute("INSERT INTO tracked_labels (label_id, name) VALUES (2, 'NovaMute')")
+    for release_id in range(101, 111):  # first label untracked, Tresor second
+        tracked.execute("INSERT INTO releases (id, title, label_id, is_physical) VALUES (%s, 'x', 3, true)", (release_id,))
+        tracked.execute("INSERT INTO release_labels (release_id, label_id) VALUES (%s, 3), (%s, 1)", (release_id, release_id))
+    for release_id in range(1, 6):  # Tresor releases that NovaMute also issued
+        tracked.execute("INSERT INTO release_labels (release_id, label_id) VALUES (%s, 2)", (release_id,))
+    tracked.commit()
+
+    seconds, releases = grow_labels.run_speed(tracked)
+
+    assert releases == 100 + 10 + 5
+    assert seconds == pytest.approx(3600 / 115)
 
 
 def test_without_a_finished_run_nothing_is_added(db, limits_role, discogs):

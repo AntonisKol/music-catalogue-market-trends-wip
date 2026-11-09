@@ -60,18 +60,21 @@ REASONS = {
 
 def run_speed(conn: psycopg.Connection):
     """(seconds per tracked release, releases the next night will update) from the last
-    finished nightly run, or None. Labels added here whose releases aren't in the database
-    yet (not imported, or the import failed) count with their vinyl releases from Discogs."""
+    finished nightly run, or None. Each tracked label's releases count, including releases
+    that name it second (co-releases), and a release on two tracked labels counts twice,
+    because each label's update goes through it. Labels added here whose releases aren't in
+    the database yet (not imported, or the import failed) count with their vinyl releases
+    from Discogs."""
     with conn.transaction():
         last = conn.execute("SELECT extract(epoch FROM finished_at - started_at) FROM ingestion_runs"
                             " WHERE finished_at IS NOT NULL AND status <> 'skipped'"
                             " ORDER BY id DESC LIMIT 1").fetchone()
-        tracked = conn.execute("SELECT count(*) FROM releases r JOIN tracked_labels t ON t.label_id = r.label_id"
-                               " WHERE t.active").fetchone()[0]
+        tracked = conn.execute("SELECT count(*) FROM release_labels rl"
+                               " JOIN tracked_labels t ON t.label_id = rl.label_id WHERE t.active").fetchone()[0]
         pending = conn.execute(
             "SELECT coalesce(sum(c.vinyl), 0) FROM label_candidates c"
             " JOIN tracked_labels t ON t.label_id = c.label_id AND t.active"
-            " WHERE c.verdict = 'added' AND NOT EXISTS (SELECT 1 FROM releases r WHERE r.label_id = c.label_id)"
+            " WHERE c.verdict = 'added' AND NOT EXISTS (SELECT 1 FROM release_labels rl WHERE rl.label_id = c.label_id)"
         ).fetchone()[0]
     if last is None or not tracked:
         return None
