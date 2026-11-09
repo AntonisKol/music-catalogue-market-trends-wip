@@ -4,6 +4,7 @@ import json
 from datetime import date
 
 import pytest
+from psycopg import sql
 
 from ingestion.repository import save_price_snapshot, save_release, save_snapshots
 from queries.tools import MAX_LIMIT, TOOLS, ToolError, run_tool
@@ -187,6 +188,61 @@ def test_demand_rises_with_a_filter(data, reader):
 
 def test_a_period_with_a_single_day_has_no_changes(data, reader):
     assert run_tool(reader, "market_changes", {"metric": "lowest_price", "days": 10})["rows"] == []
+
+
+# --- When the data starts (issue 95) -------------------------------------------
+
+def test_market_changes_says_when_the_data_starts(data, reader):
+    result = run_tool(reader, "market_changes", {"metric": "lowest_price", "days": 31})
+
+    assert result["data_starts"] == "2026-10-01" and result["period_starts"] == "2026-10-01"
+    assert "note" not in result
+    assert all("data_starts" not in row for row in result["rows"])
+
+
+def test_market_changes_over_a_period_before_the_data_says_so(data, reader):
+    result = run_tool(reader, "market_changes", {"metric": "lowest_price", "days": 90})
+
+    assert result["data_starts"] == "2026-10-01" and result["period_starts"] == "2026-08-03"
+    assert "2026-10-01" in result["note"] and "only part" in result["note"]
+
+
+def test_a_release_added_later_says_when_its_data_starts(data, db, reader):
+    # Riot was only added on 15 Oct (a label added later), two weeks after the rest.
+    save_price_snapshot(db, 105, {"num_for_sale": 3, "lowest_price": {"value": 6.0, "currency": "EUR"}}, OCT_15)
+
+    rows = run_tool(reader, "market_changes", {"metric": "lowest_price", "days": 31})["rows"]
+
+    by_id = {row["release_id"]: row for row in rows}
+    assert by_id[105]["data_starts"] == "2026-10-15"
+    assert "data_starts" not in by_id[101]
+
+
+def test_release_history_says_when_the_release_data_starts(data, reader):
+    full = run_tool(reader, "release_history", {"release_id": 101, "days": 90})
+    assert full["data_starts"] == "2026-10-01" and full["period_starts"] == "2026-08-04"
+    assert "2026-10-01" in full["note"]
+
+    short = run_tool(reader, "release_history", {"release_id": 101, "days": 20})
+    assert short["data_starts"] == "2026-10-01" and "note" not in short
+
+    added_later = run_tool(reader, "release_history", {"release_id": 105, "days": 30})
+    assert added_later["data_starts"] == "2026-11-01" and "2026-11-01" in added_later["note"]
+
+
+def test_the_data_start_is_found_in_the_date_index_not_by_reading_the_table(db, reader):
+    from queries.tools import FIRST_AND_LATEST
+    db.execute("SET enable_seqscan = off")
+    plan = "\n".join(row[0] for row in db.execute(sql.SQL("EXPLAIN ") + FIRST_AND_LATEST).fetchall())
+    db.rollback()
+
+    assert "price_snapshots_snapshot_date" in plan and "Seq Scan" not in plan, plan
+
+
+def test_an_empty_catalogue_has_no_data_start(db, reader):
+    result = run_tool(reader, "market_changes", {"metric": "want", "days": 31})
+
+    assert result["rows"] == [] and result["data_starts"] is None and "note" not in result
 
 
 @pytest.mark.parametrize("filters, matching", [

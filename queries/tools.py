@@ -8,7 +8,7 @@ lists, never pasted from input. Every result is capped and says how many rows
 matched in total, and only vinyl releases are ever returned.
 """
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Callable, Literal, Optional
 
@@ -215,6 +215,51 @@ def fetch(conn: psycopg.Connection, query: sql.Composable, params: dict) -> list
         return cur.execute(query, params).fetchall()
 
 
+# --- When the data starts ------------------------------------------------------
+
+# Tracking started in November 2026 and labels are added every night, so a period
+# asked about can begin before there is any data (issue 95). The tools that cover a
+# period say where the data starts, so an answer can say so instead of searching again.
+# Each date is one lookup per release in the (release_id, snapshot_date) index, like LATEST.
+# Two lookups in the index on snapshot_date, however long the history grows.
+FIRST_AND_LATEST = sql.SQL("SELECT min(snapshot_date) AS first, max(snapshot_date) AS latest FROM price_snapshots")
+RELEASE_FIRST = sql.SQL("""
+    SELECT wanted.release_id,
+           (SELECT min(p.snapshot_date) FROM price_snapshots p WHERE p.release_id = wanted.release_id)
+    FROM unnest(%(ids)s::int[]) AS wanted(release_id)
+""")
+
+
+def first_snapshots(conn: psycopg.Connection, release_ids: list) -> dict:
+    """Each release's first snapshot date."""
+    if not release_ids:
+        return {}
+    return dict(conn.execute(RELEASE_FIRST, {"ids": list(release_ids)}).fetchall())
+
+
+def coverage(data_starts: Optional[date], period_starts: Optional[date]) -> dict:
+    """Where the data and the period start, with a note when the data starts later."""
+    extra = {"data_starts": json_safe(data_starts), "period_starts": json_safe(period_starts)}
+    if data_starts and period_starts and data_starts > period_starts:
+        extra["note"] = (
+            f"The data starts on {data_starts.isoformat()}, after the start of the period asked for"
+            f" ({period_starts.isoformat()}), so it covers only part of that period."
+        )
+    return extra
+
+
+def with_data_starts(conn: psycopg.Connection, found: dict, days: int) -> dict:
+    """A market_changes result, with where the data starts overall and, per row, where it starts later."""
+    first, latest = conn.execute(FIRST_AND_LATEST).fetchone()
+    later = first_snapshots(conn, [row["release_id"] for row in found["rows"]])
+    for row in found["rows"]:
+        start = later.get(row["release_id"])
+        if start and first and start > first:
+            row["data_starts"] = start.isoformat()
+    found.update(coverage(first, latest - timedelta(days=days) if latest else None))
+    return found
+
+
 # --- The tools -----------------------------------------------------------------
 
 RELEASE_COLUMNS = sql.SQL("""
@@ -278,7 +323,9 @@ def release_history(conn: psycopg.Connection, args: ReleaseHistory) -> dict:
     """)
     rows = fetch(conn, query, {"release_id": args.release_id, "days": args.days})
     header = {key: json_safe(value) for key, value in release[0].items()}
-    return result(rows, release=header)
+    period_starts = rows[-1]["snapshot_date"] - timedelta(days=args.days - 1) if rows else None
+    starts = coverage(first_snapshots(conn, [args.release_id]).get(args.release_id), period_starts)
+    return result(rows, release=header, **starts)
 
 
 def market_changes(conn: psycopg.Connection, args: MarketChanges) -> dict:
@@ -340,7 +387,8 @@ def market_changes(conn: psycopg.Connection, args: MarketChanges) -> dict:
         where=where, artists=ARTISTS, direction=direction, order=order,
     )
     params.update(days=args.days, limit=args.limit)
-    return result(fetch(conn, query, params), metric=args.metric, direction=args.direction)
+    found = result(fetch(conn, query, params), metric=args.metric, direction=args.direction)
+    return with_data_starts(conn, found, args.days)
 
 
 def compare_labels(conn: psycopg.Connection, args: CompareLabels) -> dict:
@@ -409,13 +457,16 @@ TOOLS = {tool.name: tool for tool in [
     Tool(
         "release_history",
         "Day-by-day price, supply and demand of one vinyl release, for up to 90 days back from its latest "
-        "snapshot." + PRICE_NOTE,
+        "snapshot. data_starts is the release's first snapshot; a note says when that is after the period's start."
+        + PRICE_NOTE,
         ReleaseHistory, release_history,
     ),
     Tool(
         "market_changes",
         "Vinyl releases whose lowest price, copies for sale, want or have changed most over a period "
-        "(up to 365 days back from the latest snapshot), rising or falling." + PRICE_NOTE +
+        "(up to 365 days back from the latest snapshot), rising or falling. data_starts is the catalogue's "
+        "first snapshot, also given on a row whose release starts later; a note says when the data starts "
+        "after the period's start." + PRICE_NOTE +
         " A change in the lowest price can mean the cheapest copy sold, or a change in exchange rates.",
         MarketChanges, market_changes,
     ),
