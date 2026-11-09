@@ -62,8 +62,9 @@ class Site:
 
     def __init__(self, directory: Path):
         self.directory = directory
-        for name in ("ask.js", "ask.css"):
-            shutil.copy(WIDGET / name, directory / name)
+        # ask.js loads the other ask-*.js modules from its own folder, as on the website.
+        for path in [*WIDGET.glob("*.js"), *WIDGET.glob("*.css")]:
+            shutil.copy(path, directory / path.name)
         handler = functools.partial(_QuietHandler, directory=str(directory))
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"

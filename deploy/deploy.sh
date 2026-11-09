@@ -13,6 +13,9 @@ SERVER=$(setting DEPLOY_SERVER)
 API_URL=https://api.adnsaudio.com
 SITE_REPO=AntonisKol/adns-space
 SITE_DIR=${SITE_DIR:-$HOME/.cache/market-trends-site}
+# The question box's files: ask.js loads the ask-*.js modules from the same folder.
+# A new module must be added here, or the live page fails to load it.
+WIDGET_FILES="ask.js ask-dom.js ask-render.js ask-account.js ask-requests.js ask-about.js ask.css"
 what=${1:-all}
 
 deploy_server() {
@@ -45,10 +48,14 @@ deploy_page() {
   git -C "$SITE_DIR" fetch --quiet origin
   git -C "$SITE_DIR" checkout --quiet -B main origin/main
   # The page itself (market-trends/index.html, with the live API address and the
-  # site key) belongs to the website; only the question box's two files come from here.
-  cp widget/ask.js widget/ask.css "$SITE_DIR/market-trends/"
+  # site key) belongs to the website; only the question box's files come from here.
+  for file in $WIDGET_FILES; do
+    cp "widget/$file" "$SITE_DIR/market-trends/"
+  done
   cd "$SITE_DIR"
-  git add market-trends/ask.js market-trends/ask.css
+  for file in $WIDGET_FILES; do
+    git add "market-trends/$file"
+  done
   if git diff --cached --quiet; then
     echo "The website already has this question box."
   else
@@ -60,7 +67,7 @@ deploy_page() {
     git checkout --quiet -B main origin/main
     gh pr create --repo "$SITE_REPO" --base main --head "$branch" \
       --title "Market Trends: publish the question box from $rev" \
-      --body "Publishes market-trends/ask.js and ask.css from AntonisKol/music-catalogue-market-trends-wip@$rev. Merging this publishes the page." \
+      --body "Publishes the question box in market-trends/ (ask.js, its ask-*.js modules and ask.css) from AntonisKol/music-catalogue-market-trends-wip@$rev. Merging this publishes the page." \
       || echo "A pull request for $branch may already be open."
     echo "Merge that pull request to publish https://adnsaudio.com/market-trends/; GitHub Pages then needs a few minutes."
   fi
