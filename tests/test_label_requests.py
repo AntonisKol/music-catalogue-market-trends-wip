@@ -93,6 +93,17 @@ def test_a_tracked_label_is_not_requested(client, fakes, db, reader):
     assert db.execute("SELECT count(*) FROM label_requests").fetchone() == (0,)
 
 
+def test_a_name_shared_by_two_tracked_labels_is_still_found(client, fakes, db, reader):
+    db.execute("INSERT INTO tracked_labels (label_id, name) VALUES (4, 'Wax (4)'), (9, 'Wax (9)')")
+    db.commit()
+    sign_in(client, fakes)
+
+    response = request_label(client, "wax")
+
+    assert response.get_json() == {"status": "tracked", "message": "Wax (4) is already tracked. You can ask about it now."}
+    assert db.execute("SELECT count(*) FROM label_requests").fetchone() == (0,)
+
+
 @pytest.mark.parametrize("body, code", [({"name": "x"}, "invalid_label_name"), ({"name": "Arts", "extra": 1}, "invalid_request"),
                                         ({}, "invalid_request")])
 def test_bad_requests_store_nothing(client, fakes, db, body, code):
