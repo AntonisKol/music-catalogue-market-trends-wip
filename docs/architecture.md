@@ -132,6 +132,7 @@ flowchart TD
     F44["Issue 44: Hosting<br/>Code: Dockerfile, deploy/<br/>How: a Hetzner server with Docker Compose,<br/>Caddy for HTTPS, cron for the nightly update,<br/>backups to a Storage Box, one deploy command,<br/>the box on the site's own page<br/>Achieved: live since 7 November 2026, the<br/>Mac's data moved, backups copied off the server"]
     F48["Issue 48: Label list and private logs<br/>Code: queries/labels.py, web/app.py<br/>How: active tracked labels through the reader,<br/>a keyed hash in the log, logs limited in size<br/>Achieved: visitors see what is covered;<br/>no addresses kept"]
     F55["Issue 55: Throwaway addresses<br/>Code: web/accounts.py, web/assets/<br/>How: a public list of about 10,000<br/>throwaway services, kept in the repo<br/>Achieved: one person can't as easily<br/>make many accounts"]
+    F95["Issue 95: When the data starts<br/>Code: queries/tools.py, queries/questions.py<br/>How: period tools return data_starts, overall<br/>and per release, with a note when the period<br/>asked about starts earlier; one index lookup<br/>per release<br/>Achieved: answers say prices only go back<br/>to a date instead of searching again"]
     F18["Issues 18 and 25: Documentation<br/>Code: README, this page<br/>Achieved: architecture and problems<br/>written down, updated with every step"]
 
     S0 --> S1
@@ -160,11 +161,13 @@ flowchart TD
     S5 --> F37
     S4 --> F27
     S6 --> F27
+    S7 --> F95
 
     classDef built fill:#d4edda,stroke:#2e7d32,color:#1b3d1f
     classDef planned fill:#eeeeee,stroke:#9e9e9e,color:#555555,stroke-dasharray: 4 3
     classDef support fill:#fff3e0,stroke:#ef6c00,color:#5d3200
     class S0,S1,S2,S3,S4,S5,S6,S7,S8,S9,S10,S11,F27,F19,F41,F38,F44,F48,F55,F37 built
+    class F95 built
     class F18 support
 ```
 
@@ -197,6 +200,7 @@ flowchart TD
 | – | [81](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/81) More labels each night | Built | Up to ten techno labels a night, most collected first, mostly-techno and at most 2,000 vinyl releases each, until the nightly run would pass 20 hours; the owner chose fewer labels with every price fresh; the page lists a label once its releases are in | Python, Discogs search, PostgreSQL |
 | – | [63](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/63) Remembered skips | Built | Releases that are not vinyl or only credited are skipped on later nights without a request, and checked again monthly; about 40 minutes saved a night | PostgreSQL |
 | – | [92](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/92) Approval waits its turn | Built | An approved label is imported even when another import is running: it waits for that one to finish instead of giving up; the script says if the import couldn't start | Python, PostgreSQL advisory lock |
+| – | [95](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/95) When the data starts | Built | `market_changes` and `release_history` say where the data starts, overall and for releases added later, with a note when the period asked about starts earlier; Claude says so instead of searching with a longer period | PostgreSQL, Anthropic tool use |
 | – | [37](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/37) Label requests | Built | Signed-in visitors ask for labels by name; the owner looks each up on Discogs and approves or declines; visitors see the result | Flask, PostgreSQL, Discogs search |
 | – | [18](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/18), [25](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/25) Documentation | Ongoing | README and this page kept current | Markdown, Mermaid |
 
@@ -337,6 +341,7 @@ sequenceDiagram
         Note over T,Pg: Achieved in step 6: read-only login,<br/>fixed queries, capped results
         Pg-->>T: rows and total matched
         T-->>QS: JSON result
+        Note over T,QS: Achieved in issue 95: market_changes and release_history<br/>say where the data starts, with a note if the period starts earlier
         QS->>AI: tool result
         AI-->>QS: answer grounded in the rows
         Note over QS,AI: Achieved in step 7: answers based only on the<br/>stored data, returned with the rows as sources
@@ -424,7 +429,7 @@ Later visits use `POST /api/sign-in` with the password. A forgotten password tak
 | Single-release commands | [`save_release.py`](../ingestion/save_release.py), [`save_snapshot.py`](../ingestion/save_snapshot.py) | Python CLI | Save one release, or one release plus today's snapshot | Clear messages and exit codes |
 | Label pipeline | [`ingestion/pipeline.py`](../ingestion/pipeline.py), [`ingest_label.py`](../ingestion/ingest_label.py) | Python CLI, logging | Ingests every vinyl release of a label | One run at a time (advisory lock); duplicates dropped; credit-only releases skipped; releases that are not vinyl or only credited remembered and checked again after 28 to 34 days; deleted releases listed as gone; failures, malformed data included, listed and exit 1; commit per release; stops if the label list cannot be fetched or the database connection is lost |
 | Reader login | [`ingestion/create_reader_role.py`](../ingestion/create_reader_role.py) | PostgreSQL roles | Creates the SELECT-only login | Read-only sessions and a 5 s limit set on the role; future tables readable, never writable; no temporary tables |
-| Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped; vinyl only; timeouts reported as a readable reason |
+| Query tools | [`queries/tools.py`](../queries/tools.py), [`queries/database.py`](../queries/database.py) | Pydantic, psycopg | search_releases, rank_releases, release_history, market_changes, compare_labels | Validated arguments; fixed SQL; capped results with the total; wildcards escaped; vinyl only; timeouts reported as a readable reason; tools over a period say where the data starts |
 | Tests | [`tests/`](../tests) | pytest, responses, Testcontainers, Playwright, axe | 599 tests: fake Discogs, a fake Anthropic API, a throwaway PostgreSQL, a fake clock, the question box in Chromium; a `--live` before-release test with the real Claude and an AI judge | Database and browser tests skip on a laptop without Docker or Chromium, fail in CI; live tests never run without `--live` |
 | Question service | [`queries/questions.py`](../queries/questions.py) | Anthropic SDK tool runner, Claude Haiku 5.5 | Sends the question and tool descriptions to Claude, runs the tools it asks for, returns the answer with its sources | Claude never sees SQL or the database; refused arguments go back as errors; a database failure stops the run; every error becomes a visitor-safe `QuestionError`; instructions and tools cached |
 | Web API | [`web/app.py`](../web/app.py), [`limits.py`](../web/limits.py), [`captcha.py`](../web/captcha.py), [`create_limits_role.py`](../ingestion/create_limits_role.py) | Flask, gunicorn, Cloudflare Turnstile | `POST /api/questions`: checks the request, the human check and the limits, then asks the question service | Fails closed; limits counted in one transaction by a login that can only touch its four tables; visitors stored as a keyed hash, deleted after two days; forwarded addresses trusted only behind a configured proxy; a question that can't be answered is given back; usage never sent; 8 KB body limit; CORS only for listed origins; the access log holds a keyed hash, never the address, and visitors can't fake a line in it; logs limited in size |
@@ -527,6 +532,7 @@ The same routine has been used on every task:
 | 86 | Two tables the model wrote one after the other, without a blank line, showed as one table, with the second header as a row | The table reader took every following line that started with a column bar as a row | A header line followed by its rule now starts a new table, so each table can be copied on its own; a test with two such tables proves it, and fails without the fix |
 | 71 | Four README sections disappeared in #74: querying, asking, the web API and signing up | An edit replaced the text between two markers that were 170 lines apart, not one paragraph; the pull request showed 172 deletions and nobody looked | Restored as they were; README changes are now checked section by section before committing |
 | 92 | Mutual Rytm was approved and the script said "Importing … now", but nothing was imported; Pole Recordings, approved earlier, wasn't either | The approval's import found the nightly import holding the run lock and exited, as every second run does, and nothing tried again; Pole Recordings was approved before approvals imported at all | `ingest_label --wait` checks the lock every minute and starts when it is free, and the script uses it and says if the import couldn't start. Both labels were imported by hand. A test holds the lock, lets it go during the wait, and checks the import then runs |
+| 95 | With about a week of data, a question about "this month" cost extra rounds, and the answer couldn't say the data was shorter | The instructions told Claude to look again with a longer period whenever a result didn't reach back far enough, and no result said when tracking started | `market_changes` and `release_history` return `data_starts` (overall, and per release that starts later) and a note when the period starts earlier; the instructions say to tell the visitor instead of looking again. The rule's example has no date in it, so it can't let a made-up date pass the figure check |
 | 84 | The owner heard of a new label request up to 15 minutes after it was made | cron checked for new requests every 15 minutes, and the web API may not look labels up on Discogs itself, because it never gets the token | A database trigger announces each new request (NOTIFY); a watcher container with the token listens and emails it at once, and still retries failed emails every 15 minutes. Tests plant a trigger that stays silent: the two new tests fail |
 
 ---
