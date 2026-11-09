@@ -50,17 +50,30 @@ def is_clearly_not_vinyl(summary_format: Optional[str]) -> bool:
     return re.sub(r"^\d+x", "", first) in NON_VINYL_SUMMARY_FORMATS
 
 
-def map_label(release: dict) -> Optional[dict]:
-    """The first label on the release, which the schema stores as releases.label_id."""
+def map_labels(release: dict) -> list:
+    """Every label the release was issued on, in Discogs' order, each once.
+
+    A label listed twice (with two catalogue numbers) keeps its first catalogue
+    number. Labels without a Discogs id are skipped. All of them go into
+    release_labels, so a co-release is found under each of its labels (issue 94).
+    """
+    labels = {}
     for label in release.get("labels") or []:
-        if label.get("id"):
-            return {
+        if label.get("id") and label["id"] not in labels:
+            labels[label["id"]] = {
                 "id": label["id"],
                 "name": label["name"],
                 "resource_url": label.get("resource_url"),
                 "catno": label.get("catno"),
             }
-    return None
+    return list(labels.values())
+
+
+def map_label(release: dict) -> Optional[dict]:
+    """The first label on the release, which the schema stores as releases.label_id
+    and the answers show as the release's label."""
+    labels = map_labels(release)
+    return labels[0] if labels else None
 
 
 def map_artists(release: dict) -> list:
@@ -81,11 +94,13 @@ def map_release(release: dict) -> dict:
     if not release.get("id") or not release.get("title"):
         raise MappingError("Discogs release has no id or title")
 
-    label = map_label(release)
+    labels = map_labels(release)
+    label = labels[0] if labels else None
     artists = map_artists(release)
     formats = release.get("formats") or []
     return {
         "label": label,
+        "labels": labels,
         "artists": artists,
         "release": {
             "id": release["id"],

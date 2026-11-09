@@ -405,6 +405,28 @@ def test_details_date_is_only_trusted_for_vinyl_of_the_same_label(db):
     assert details_fetched_on(db, 4, 1) is None  # stored under another label
     assert details_fetched_on(db, 5, 1) is None  # not stored
 
+    assert details_fetched_on(db, 4, 9) is not None
+
+
+CO_RELEASE = [{"id": 9, "name": "Label 9", "catno": "L9"}, {"id": 1, "name": "Label 1", "catno": "L1"}]
+
+
+@responses.activate
+def test_a_release_listing_the_label_second_gets_its_details_only_weekly(db, committed, postgres_url):
+    """Issue 94: a co-release whose first label is another one was refetched every night."""
+    label_list(summary(2, '12"'))
+    details(2, labels=CO_RELEASE)
+    stats(2)
+    ingest_label(db, 1, SUNDAY)
+    details_fetched(postgres_url, 2, SUNDAY)
+    responses.calls.reset()
+
+    result = ingest_label(db, 1, TUESDAY)
+
+    assert requested("/releases/2") == 0
+    assert (result.saved, result.with_details) == ([2], [])
+    assert committed("SELECT label_id FROM releases") == [(9,)]
+
 
 # --- Releases that are never needed are remembered (issue 63) -----------------------------------
 
