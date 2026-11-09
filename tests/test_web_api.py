@@ -304,6 +304,7 @@ def with_releases(db, *label_ids):
         db.execute("INSERT INTO labels (id, name) VALUES (%s, 'x')", (label_id,))
         db.execute("INSERT INTO releases (id, title, label_id, is_physical) VALUES (%s, 'x', %s, true)",
                    (label_id, label_id))
+        db.execute("INSERT INTO release_labels (release_id, label_id) VALUES (%s, %s)", (label_id, label_id))
 
 
 def test_the_labels_are_the_active_tracked_ones_in_alphabetical_order(client, db, reader):
@@ -321,11 +322,28 @@ def test_the_labels_are_the_active_tracked_ones_in_alphabetical_order(client, db
 
 def test_the_labels_leave_out_the_numbers_discogs_adds(client, db, reader):
     db.execute("INSERT INTO tracked_labels (label_id, name) VALUES "
-               "(1, 'Afterlife (6)'), (2, 'Wax (4)'), (3, 'Wax (9)'), (4, 'Studio (54) Records')")
+               "(1, 'Afterlife (6)'), (2, 'Emerald (4)'), (3, 'Studio (54) Records')")
+    with_releases(db, 1, 2, 3)
+    db.commit()
+
+    assert client.get("/api/labels").get_json() == {"labels": ["Afterlife", "Emerald", "Studio (54) Records"]}
+
+
+def test_two_labels_with_the_same_name_keep_their_numbers(client, db, reader):
+    db.execute("INSERT INTO tracked_labels (label_id, name) VALUES "
+               "(1, 'Wax (4)'), (2, 'Wax (9)'), (3, 'Tresor'), (4, 'Tresor (2)')")
     with_releases(db, 1, 2, 3, 4)
     db.commit()
 
-    assert client.get("/api/labels").get_json() == {"labels": ["Afterlife", "Studio (54) Records", "Wax"]}
+    assert client.get("/api/labels").get_json() == {"labels": ["Tresor", "Tresor (2)", "Wax (4)", "Wax (9)"]}
+
+
+def test_a_number_is_dropped_when_the_other_same_name_label_is_not_listed(client, db, reader):
+    db.execute("INSERT INTO tracked_labels (label_id, name) VALUES (1, 'Wax (4)'), (2, 'Wax (9)')")
+    with_releases(db, 1)
+    db.commit()
+
+    assert client.get("/api/labels").get_json() == {"labels": ["Wax"]}
 
 
 def test_a_label_is_listed_once_its_releases_are_in_the_database(client, db, reader):
@@ -334,6 +352,17 @@ def test_a_label_is_listed_once_its_releases_are_in_the_database(client, db, rea
     db.commit()
 
     assert client.get("/api/labels").get_json() == {"labels": ["Tresor"]}
+
+
+def test_a_label_is_listed_when_its_releases_name_another_label_first(client, db, reader):
+    """Issue 94: a co-release lists the tracked label second, so releases.label_id is the other label."""
+    db.execute("INSERT INTO tracked_labels (label_id, name) VALUES (2, 'Second Label')")
+    db.execute("INSERT INTO labels (id, name) VALUES (1, 'First Label'), (2, 'Second Label')")
+    db.execute("INSERT INTO releases (id, title, label_id, is_physical) VALUES (10, 'x', 1, true)")
+    db.execute("INSERT INTO release_labels (release_id, label_id) VALUES (10, 1), (10, 2)")
+    db.commit()
+
+    assert client.get("/api/labels").get_json() == {"labels": ["Second Label"]}
 
 
 def test_other_answers_are_still_never_cached(client):

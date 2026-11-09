@@ -134,7 +134,11 @@ ARTISTS = sql.SQL("""
 
 FILTERS = {
     "title": sql.SQL("r.title ILIKE %(title)s"),
-    "label": sql.SQL("l.name ILIKE %(label)s"),
+    # Any label the release was issued on, not only the first one shown (issue 94).
+    "label": sql.SQL(
+        "EXISTS (SELECT 1 FROM release_labels rl JOIN labels rl_l ON rl_l.id = rl.label_id"
+        " WHERE rl.release_id = r.id AND rl_l.name ILIKE %(label)s)"
+    ),
     "artist": sql.SQL(
         "EXISTS (SELECT 1 FROM release_artists ra JOIN artists a ON a.id = ra.artist_id"
         " WHERE ra.release_id = r.id AND a.name ILIKE %(artist)s)"
@@ -358,7 +362,8 @@ def compare_labels(conn: psycopg.Connection, args: CompareLabels) -> dict:
                max(latest.details_date) AS demand_as_of,
                count(*) OVER () AS total
         FROM labels l
-        JOIN releases r ON r.label_id = l.id AND {vinyl}
+        JOIN release_labels rl ON rl.label_id = l.id
+        JOIN releases r ON r.id = rl.release_id AND {vinyl}
         LEFT JOIN latest ON latest.release_id = r.id
         WHERE l.name ILIKE ANY (%(patterns)s)
         GROUP BY l.id, l.name

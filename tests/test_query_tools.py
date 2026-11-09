@@ -325,6 +325,36 @@ def test_non_vinyl_releases_have_no_history_and_do_not_count_for_a_label(a_cd, r
     assert planet_e["copies_for_sale"] == 16
 
 
+@pytest.fixture
+def a_co_release(data, db):
+    """Issue 94: a vinyl co-release that lists Underground Resistance first and Planet E second."""
+    co_release = release(107, "Co-release", (14, "Mad Mike"), UR, 1995, ["Techno"])
+    co_release["labels"].append({"id": PLANET_E[0], "name": PLANET_E[1], "catno": "PE107"})
+    save_release(db, co_release)
+    stats = {"num_for_sale": 4, "lowest_price": {"value": 50.0, "currency": "EUR"}}
+    community = {"want": 5, "have": 5, "rating": {"count": 0, "average": 0.0}}
+    save_snapshots(db, 107, stats, dict(co_release, community=community), NOV_1)
+
+
+@pytest.mark.parametrize("name, arguments", [
+    ("search_releases", {"label": "planet e"}),
+    ("search_releases", {"label": "underground"}),
+    ("rank_releases", {"sort_by": "highest_price", "label": "planet e"}),
+])
+def test_a_co_release_is_found_under_each_of_its_labels(a_co_release, reader, name, arguments):
+    result = run_tool(reader, name, arguments)
+    assert 107 in ids(result)
+    # It is shown with its first label.
+    assert [row["label"] for row in result["rows"] if row["release_id"] == 107] == ["Underground Resistance"]
+
+
+def test_a_co_release_counts_for_each_of_its_labels(a_co_release, reader):
+    rows = run_tool(reader, "compare_labels", {"labels": ["planet e", "underground"]})["rows"]
+    counts = {row["label"]: (row["vinyl_releases"], row["copies_for_sale"]) for row in rows}
+    assert counts["Planet E"] == (4, 20)
+    assert counts["Underground Resistance"] == (2, 7)
+
+
 def test_a_query_stopped_by_the_time_limit_gives_a_clear_reason(reader, monkeypatch):
     def slow(conn, args):
         return conn.execute("SELECT pg_sleep(1)").fetchall()
