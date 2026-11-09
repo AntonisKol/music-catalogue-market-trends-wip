@@ -123,7 +123,32 @@ def test_the_page_goes_to_the_website_through_a_pull_request():
     script = (ROOT / "deploy" / "deploy.sh").read_text()
     page = script[script.index("deploy_page() {"):script.index("\n}\n", script.index("deploy_page() {"))]
     assert "HEAD:main" not in page and "gh pr create" in page
-    assert "cp widget/ask.js widget/ask.css" in page
+    assert 'cp "widget/$file" "$SITE_DIR/market-trends/"' in page
+    assert 'git add "market-trends/$file"' in page
+    assert page.count("for file in $WIDGET_FILES; do") == 2
+
+
+def widget_files_deployed():
+    script = (ROOT / "deploy" / "deploy.sh").read_text()
+    return re.search(r'^WIDGET_FILES="([^"]*)"$', script, re.MULTILINE).group(1).split()
+
+
+def test_the_page_deploy_copies_every_file_of_the_question_box():
+    # ask.js loads its modules from the folder it is in, so a module left out of
+    # deploy.sh would be missing on the website and the box would not load (issue 100).
+    widget = ROOT / "widget"
+    files = widget_files_deployed()
+    assert len(files) == len(set(files))
+    assert set(files) == {path.name for path in [*widget.glob("*.js"), *widget.glob("*.css")]}
+
+
+def test_every_module_the_question_box_imports_is_deployed():
+    widget = ROOT / "widget"
+    imported = {name for path in widget.glob("*.js")
+                for name in re.findall(r'^(?:import|export)\b[^;]*?from "\./([^"]+)";', path.read_text(), re.MULTILINE | re.DOTALL)}
+    assert "ask-render.js" in imported
+    assert imported <= set(widget_files_deployed())
+    assert all((widget / name).is_file() for name in imported)
 
 
 # --- What each container is given (issue 68) ---------------------------------------------

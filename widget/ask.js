@@ -16,18 +16,29 @@
 // email address and a password, and confirm the address with an emailed link. The
 // API then keeps them signed in with a cookie the page cannot read, sent along
 // because every request uses credentials: "include".
+//
+// This file builds the box and asks the questions. The other parts are modules
+// next to it, loaded by the browser from the same folder:
+//   ask-dom.js       building elements, and error messages
+//   ask-render.js    the answer's Markdown, and the tables of data behind it
+//   ask-account.js   the account line and form: sign up, sign in, reset, delete
+//   ask-requests.js  asking for a label the site doesn't track yet
+//   ask-about.js     the labels tracked, and "About the data"
+
+import { UNREACHABLE, el, errorMessage } from "./ask-dom.js";
+import { renderAnswer, renderSources } from "./ask-render.js";
+import { createAccount, rememberAccount } from "./ask-account.js";
+import { createLabelRequests } from "./ask-requests.js";
+import { createAbout } from "./ask-about.js";
+
+export { renderAnswer, renderSources, tableText } from "./ask-render.js";
+export { remainingText } from "./ask-account.js";
+export { longDate } from "./ask-about.js";
 
 const MAX_QUESTION_LENGTH = 500;
-const MIN_PASSWORD_LENGTH = 12;
-const UNREACHABLE = "Could not reach the question service. Please check your connection and try again.";
-// Remembered in this browser only, so a returning visitor sees the sign-in form first.
-const HAS_ACCOUNT_KEY = "mt-ask-has-account";
 const REQUEST_TIMEOUT_MS = 90_000;
 // The human check runs invisibly; a question asked before it has finished waits this long.
 const CHECK_WAIT_MS = 8_000;
-
-// While a label request is open, its status is checked this often, so a decision shows without a reload.
-const REQUEST_CHECK_MS = 30_000;
 
 const EXAMPLES = [
   "Which Ostgut Ton records are the most wanted?",
@@ -35,75 +46,6 @@ const EXAMPLES = [
   "How has the price of Throw changed recently?",
   "Compare Ostgut Ton and Underground Resistance.",
 ];
-
-// Readable names for the columns the query tools return; others are not shown.
-const COLUMNS = {
-  title: "Title",
-  artists: "Artists",
-  label: "Label",
-  catno: "Cat. no.",
-  year: "Year",
-  snapshot_date: "Date",
-  as_of: "Prices as of",
-  demand_as_of: "Want/have as of",
-  lowest_price: "Lowest price",
-  num_for_sale: "For sale",
-  want: "Want",
-  have: "Have",
-  rating_average: "Rating",
-  start_value: "From",
-  end_value: "To",
-  change_pct: "Change %",
-  vinyl_releases: "Vinyl releases",
-  releases_on_sale: "On sale",
-  copies_for_sale: "Copies for sale",
-  average_lowest_price: "Average lowest price",
-  median_lowest_price: "Median lowest price",
-  total_want: "Total want",
-  total_have: "Total have",
-  average_rating: "Average rating",
-};
-
-const TOOL_NAMES = {
-  search_releases: "Search",
-  rank_releases: "Ranking",
-  release_history: "Price history",
-  market_changes: "Market changes",
-  compare_labels: "Label comparison",
-};
-
-// The three things the account form can do.
-const ACCOUNT_MODES = {
-  signUp: {
-    title: "Sign up for more questions", button: "Sign up", path: "/api/sign-up", autocomplete: "new-password",
-    placeholder: `Password, at least ${MIN_PASSWORD_LENGTH} characters`,
-    hint: "We email you a link to confirm your address. Then you return here, verified.",
-  },
-  signIn: {
-    title: "Sign in", button: "Sign in", path: "/api/sign-in", autocomplete: "current-password",
-    placeholder: "Password", hint: "With the email and password you signed up with.",
-  },
-  reset: {
-    title: "Forgot your password?", button: "Email me a link", path: "/api/password-reset",
-    hint: "We email you a link to choose a new one.",
-  },
-};
-
-// --- Small helpers ------------------------------------------------------------------
-
-function el(tag, attributes = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [name, value] of Object.entries(attributes)) {
-    if (name === "class") node.className = value;
-    else if (name.startsWith("on")) node.addEventListener(name.slice(2), value);
-    else node.setAttribute(name, value);
-  }
-  for (const child of children) {
-    if (child == null) continue;
-    node.append(typeof child === "string" ? document.createTextNode(child) : child);
-  }
-  return node;
-}
 
 // "claude-haiku-5-5" -> "Claude Haiku 5.5"
 export function modelName(id) {
@@ -118,222 +60,24 @@ export function modelName(id) {
   return [...words, version.join(".")].filter(Boolean).join(" ");
 }
 
-const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
-  "October", "November", "December"];
-
-// "2026-11-02" -> "2 November 2026", the same in every browser language.
-export function longDate(day) {
-  const [year, month, date] = String(day).split("-").map(Number);
-  return MONTHS[month - 1] && date ? `${date} ${MONTHS[month - 1]} ${year}` : String(day);
-}
-
-// --- Copying a table -------------------------------------------------------------------
-
-const SVG = "http://www.w3.org/2000/svg";
-const COPIED_MS = 2_000;
-
-// Two overlapping sheets: the usual "copy" sign. Drawn here, so the box needs no image files.
-function copyIcon() {
-  const icon = document.createElementNS(SVG, "svg");
-  for (const [name, value] of Object.entries({ viewBox: "0 0 24 24", width: "16", height: "16", fill: "none",
-    stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round",
-    "aria-hidden": "true", focusable: "false" })) icon.setAttribute(name, value);
-  const sheet = document.createElementNS(SVG, "rect");
-  for (const [name, value] of Object.entries({ x: "9", y: "9", width: "12", height: "12", rx: "2" })) sheet.setAttribute(name, value);
-  const back = document.createElementNS(SVG, "path");
-  back.setAttribute("d", "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1");
-  icon.append(sheet, back);
-  return icon;
-}
-
-function cellText(cell) {
-  return cell.textContent.replace(/\s+/g, " ").trim();
-}
-
-// Tab-separated rows paste into spreadsheets as cells, and read fine as plain text.
-export function tableText(table) {
-  return [...table.rows].map((row) => [...row.cells].map(cellText).join("\t")).join("\n");
-}
-
-// A bare copy of the table, without the page's classes, for editors that take formatted text.
-function tableHtml(table) {
-  const head = [...table.tHead.rows[0].cells].map((cell) => el("th", {}, cellText(cell)));
-  const body = [...table.tBodies[0].rows].map((row) => el("tr", {}, ...[...row.cells].map((cell) => el("td", {}, cellText(cell)))));
-  return el("table", {}, el("thead", {}, el("tr", {}, ...head)), el("tbody", {}, ...body)).outerHTML;
-}
-
-async function copyTable(table) {
-  const text = tableText(table);
-  if (window.ClipboardItem && navigator.clipboard?.write) {
-    try {
-      await navigator.clipboard.write([new window.ClipboardItem({
-        "text/plain": new Blob([text], { type: "text/plain" }),
-        "text/html": new Blob([tableHtml(table)], { type: "text/html" }),
-      })]);
-      return;
-    } catch {
-      // Some browsers refuse formatted text; plain text below still works.
-    }
-  }
-  await navigator.clipboard.writeText(text);
-}
-
-// A table with its own copy button, and a heading beside the button if there is one.
-function tableBlock(table, label, heading = null) {
-  const note = el("span", { class: "mt-ask-copy-note", role: "status", "aria-live": "polite" });
-  let timer = null;
-  const button = el("button", { type: "button", class: "mt-ask-copy", "aria-label": label, title: label, onclick: async () => {
-    clearTimeout(timer);
-    try {
-      await copyTable(table);
-      note.textContent = "Copied";
-    } catch {
-      note.textContent = "Could not copy";
-    }
-    timer = setTimeout(() => { note.textContent = ""; }, COPIED_MS);
-  } }, copyIcon());
-  return el("div", { class: "mt-ask-table-block" },
-    el("div", { class: "mt-ask-table-bar" }, heading, note, button),
-    el("div", { class: "mt-ask-table" }, table));
-}
-
-// --- Safe Markdown subset: paragraphs, bold, italic, inline code, lists, tables ----------
-
-function inline(text) {
-  const fragment = document.createDocumentFragment();
-  // Bold, italic (a lone * as in "2 * 3" stays as it is), and inline code.
-  const pattern = /\*\*(.+?)\*\*|(?<![\w*])\*(?![\s*])([^*\n]*?[^\s*])\*(?![\w*])|`([^`]+)`/g;
-  let last = 0;
-  for (const match of text.matchAll(pattern)) {
-    if (match.index > last) fragment.append(document.createTextNode(text.slice(last, match.index)));
-    if (match[1] !== undefined) fragment.append(el("strong", {}, match[1]));
-    else if (match[2] !== undefined) fragment.append(el("em", {}, match[2]));
-    else fragment.append(el("code", {}, match[3]));
-    last = match.index + match[0].length;
-  }
-  if (last < text.length) fragment.append(document.createTextNode(text.slice(last)));
-  return fragment;
-}
-
-function tableCells(line) {
-  return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
-}
-
-const TABLE_RULE = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
-const BULLET = /^\s*[-*•]\s+/;
-const NUMBERED = /^\s*\d+[.)]\s+/;
-
-export function renderAnswer(text) {
-  const fragment = document.createDocumentFragment();
-  const tables = [];
-  const lines = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    if (!line.trim()) {
-      i += 1;
-    } else if (line.trim().startsWith("|") && i + 1 < lines.length && TABLE_RULE.test(lines[i + 1])) {
-      const head = tableCells(line);
-      const body = [];
-      i += 2;
-      // A header row followed by its rule starts the next table, even without a blank line between.
-      while (i < lines.length && lines[i].trim().startsWith("|")
-             && !(i + 1 < lines.length && TABLE_RULE.test(lines[i + 1]))) body.push(tableCells(lines[i++]));
-      const table = el("table", {},
-        el("thead", {}, el("tr", {}, ...head.map((cell) => el("th", { scope: "col" }, inline(cell))))),
-        el("tbody", {}, ...body.map((row) => el("tr", {}, ...row.map((cell) => el("td", {}, inline(cell)))))),
-      );
-      tables.push(table);
-      fragment.append(tableBlock(table, "Copy table"));
-    } else if (BULLET.test(line) || NUMBERED.test(line)) {
-      const numbered = NUMBERED.test(line);
-      const marker = numbered ? NUMBERED : BULLET;
-      const list = el(numbered ? "ol" : "ul");
-      while (i < lines.length && marker.test(lines[i])) list.append(el("li", {}, inline(lines[i++].replace(marker, ""))));
-      fragment.append(list);
-    } else if (/^\s*#{1,6}\s+/.test(line)) {
-      fragment.append(el("p", { class: "mt-ask-heading" }, inline(line.replace(/^\s*#{1,6}\s+/, ""))));
-      i += 1;
-    } else {
-      const paragraph = [];
-      while (i < lines.length && lines[i].trim() && !lines[i].trim().startsWith("|")
-             && !BULLET.test(lines[i]) && !NUMBERED.test(lines[i]) && !/^\s*#{1,6}\s+/.test(lines[i])) {
-        paragraph.push(lines[i++].trim());
-      }
-      fragment.append(el("p", {}, inline(paragraph.join(" "))));
-    }
-  }
-  // With more than one table, each copy button says which table it copies.
-  if (tables.length > 1) {
-    tables.forEach((table, index) => {
-      const copy = table.closest(".mt-ask-table-block").querySelector(".mt-ask-copy");
-      copy.setAttribute("aria-label", `Copy table ${index + 1} of ${tables.length}`);
-      copy.title = copy.getAttribute("aria-label");
-    });
-  }
-  return fragment;
-}
-
-// --- The data behind an answer --------------------------------------------------------
-
-function display(value, key) {
-  if (value == null) return "–";
-  if (Array.isArray(value)) return value.join(", ");
-  if (typeof value === "number" && /price|_value$/.test(key)) return value.toFixed(2);
-  return String(value);
-}
-
-export function renderSources(sources) {
-  const fragment = document.createDocumentFragment();
-  for (const source of sources ?? []) {
-    const result = source.result;
-    if (!result) continue;
-    const rows = result.rows ?? [];
-    const title = TOOL_NAMES[source.tool] ?? source.tool;
-    const summary = rows.length === result.total
-      ? `${rows.length} ${rows.length === 1 ? "row" : "rows"}`
-      : `${rows.length} of ${result.total} rows`;
-    const heading = el("p", { class: "mt-ask-source-title" }, `${title} · ${summary}`);
-    if (!rows.length) {
-      fragment.append(heading);
-      continue;
-    }
-    const columns = Object.keys(COLUMNS).filter((key) => rows.some((row) => key in row));
-    const priced = rows.some((row) => row.currency);
-    const table = el("table", {},
-      el("thead", {}, el("tr", {}, ...columns.map((key) => el("th", { scope: "col" },
-        COLUMNS[key] + (priced && /price/.test(key) ? " (EUR)" : ""))))),
-      el("tbody", {}, ...rows.map((row) => el("tr", {}, ...columns.map((key) => el("td", {}, display(row[key], key)))))),
-    );
-    fragment.append(tableBlock(table, `Copy the ${title} table`, heading));
-  }
-  return fragment;
-}
-
-// --- The question box ------------------------------------------------------------------
-
-// {hour: 2, day: 2} -> "2 questions left today"
-export function remainingText(remaining) {
-  if (!remaining) return "";
-  const left = Math.min(remaining.hour, remaining.day);
-  const when = remaining.hour < remaining.day ? "this hour" : "today";
-  return `${left} ${left === 1 ? "question" : "questions"} left ${when}`;
-}
-
-function errorMessage(status, body, retryAfter) {
-  const message = body?.error?.message;
-  if (status === 429 && retryAfter) {
-    const minutes = Math.ceil(Number(retryAfter) / 60);
-    const wait = minutes >= 60 ? `${Math.ceil(minutes / 60)} hours` : `${minutes} minute${minutes === 1 ? "" : "s"}`;
-    return `${message ?? "Too many questions."} You can ask again in about ${wait}.`;
-  }
-  return message ?? "Something went wrong. Please try again later.";
-}
-
 export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turnstile = () => window.turnstile } = {}) {
   const api = (root.dataset.api ?? "").replace(/\/$/, "");
   const sitekey = root.dataset.turnstileSitekey ?? "";
   const id = `mt-ask-${Math.random().toString(36).slice(2, 8)}`;
+
+  let token = "";
+  let widgetId = null;
+  const lock = { busy: false };  // one request at a time, shared with the account form
+
+  function request(path, options = {}) {
+    return fetchImpl(`${api}${path}`, { credentials: "include", ...options });
+  }
+
+  function postJson(path, body, signal) {
+    return request(path, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+    });
+  }
 
   const textarea = el("textarea", {
     id: `${id}-question`, name: "question", rows: "3", maxlength: String(MAX_QUESTION_LENGTH),
@@ -356,32 +100,6 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
         textarea.focus();
       } }, example)))),
   );
-  // What the numbers mean. The dates and the label count are added from the API when they load.
-  const aboutFacts = el("ul", { class: "mt-ask-about-facts" }, el("li", {}, "Source: Discogs"));
-  const about = el("details", { class: "mt-ask-about" },
-    el("summary", {}, "About the data"),
-    el("p", {}, "A price is the cheapest copy for sale on Discogs, in any condition, without shipping, "
-      + "converted to euros by Discogs. It is an asking price, not what a record sold for."),
-    el("p", {}, "Prices are updated every day. Wants, haves and ratings are updated once a week."),
-    aboutFacts,
-  );
-  // Filled in from the API, and stays hidden if the list can't be loaded.
-  const labels = el("aside", { class: "mt-ask-labels", "aria-label": "Labels this site tracks", hidden: "" });
-  // Asking for a label the site doesn't track yet: signed-in visitors only, and the
-  // site's owner decides. Shown once it is known whether the visitor is signed in.
-  const requestName = el("input", {
-    id: `${id}-label-request`, type: "text", name: "label", maxlength: "100", autocomplete: "off",
-    placeholder: "Label name, as on Discogs", "aria-label": "Label name",
-  });
-  const requestButton = el("button", { type: "submit", class: "mt-ask-submit" }, "Request");
-  const requestStatus = el("p", { class: "mt-ask-status", role: "status", "aria-live": "polite" });
-  const requestList = el("ul", { class: "mt-ask-requests", "aria-label": "Your label requests", hidden: "" });
-  const requestForm = el("form", { class: "mt-ask-request-form", novalidate: "", hidden: "" },
-    el("div", { class: "mt-ask-sign-in-row" }, requestName, requestButton),
-    requestStatus,
-  );
-  const requestLine = el("p", { class: "mt-ask-request-line" });
-  const requestArea = el("div", { class: "mt-ask-request", hidden: "" }, requestLine, requestForm, requestList);
   const form = el("form", { class: "mt-ask-form", novalidate: "" },
     el("label", { for: textarea.id, class: "mt-ask-label" }, "Ask about the vinyl market"),
     textarea,
@@ -390,316 +108,22 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     el("div", { class: "mt-ask-actions" }, button),
   );
 
-  // The account line: questions left, and sign in or the signed-in address.
-  const account = el("div", { class: "mt-ask-account", hidden: "" });
-  const email = el("input", {
-    id: `${id}-email`, type: "email", name: "email", autocomplete: "username", required: "",
-    placeholder: "you@example.com", "aria-label": "Email address", maxlength: "254",
+  const about = createAbout({ request });
+  const account = createAccount({
+    id, request, postJson, showStatus, lock,
+    check: { token: () => token, waitForToken, resetCheck },
+    // The label requests follow the account: who is signed in, if anyone.
+    onRender: (state) => requests.render(state),
   });
-  const password = el("input", {
-    id: `${id}-password`, type: "password", name: "password", required: "",
-    placeholder: "Password", "aria-label": "Password", maxlength: "256",
-  });
-  const signInTitle = el("p", { class: "mt-ask-label" });
-  const signInHint = el("p", { class: "mt-ask-hint" });
-  const signInButton = el("button", { type: "submit", class: "mt-ask-submit" });
-  const signInStatus = el("p", { class: "mt-ask-status", role: "status", "aria-live": "polite" });
-  const signInLinks = el("p", { class: "mt-ask-switch" });
-  const signInForm = el("form", { class: "mt-ask-sign-in", novalidate: "", hidden: "" },
-    signInTitle,
-    signInHint,
-    el("div", { class: "mt-ask-sign-in-row" }, email, password, signInButton),
-    signInStatus,
-    signInLinks,
-    el("p", { class: "mt-ask-privacy" },
-      "We store your email address, a scrambled copy of your password that can't be turned back into it, "
-      + "when you confirmed and last signed in, and how many questions you asked in the last two days. "
-      + "Resend sends our emails. You can delete your account at any time."),
-  );
+  const requests = createLabelRequests({ id, request, postJson, showSignIn: account.showSignIn });
+
   const notice = el("p", { class: "mt-ask-privacy" },
     "Your questions are sent to Anthropic's Claude to write the answer. We don't store them. "
     + "To spot abuse, our logs keep a scrambled version of your network address, never the address itself. "
     + "Cloudflare's human check also sees your address. ",
     el("a", { href: "/privacy/" }, "Privacy"), ".");
-  root.replaceChildren(labels, requestArea, form, account, signInForm, status, examples, about, notice, output);
-
-  let token = "";
-  let widgetId = null;
-  let busy = false;
-  let state = null;  // from GET /api/account
-  let mode = "signUp";
-
-  function request(path, options = {}) {
-    return fetchImpl(`${api}${path}`, { credentials: "include", ...options });
-  }
-
-  function postJson(path, body, signal) {
-    return request(path, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
-    });
-  }
-
-  function link(text, onclick) {
-    return el("button", { type: "button", class: "mt-ask-link", onclick }, text);
-  }
-
-  function setMode(name) {
-    mode = name;
-    const settings = ACCOUNT_MODES[name];
-    signInTitle.textContent = settings.title;
-    signInHint.textContent = settings.hint;
-    signInButton.textContent = settings.button;
-    password.hidden = !settings.autocomplete;
-    password.value = "";
-    if (settings.autocomplete) {
-      password.autocomplete = settings.autocomplete;
-      password.placeholder = settings.placeholder;
-    }
-    signInStatus.textContent = "";
-    const switches = {
-      signUp: [["Already have an account? Sign in", "signIn"], ["Forgot your password?", "reset"]],
-      signIn: [["New here? Sign up", "signUp"], ["Forgot your password?", "reset"]],
-      reset: [["Back to sign in", "signIn"]],
-    }[name];
-    const links = switches.flatMap(([text, target], index) => [
-      ...(index ? [" · "] : []),
-      link(text, () => { setMode(target); email.focus(); }),
-    ]);
-    signInLinks.replaceChildren(...links);
-    if (name === "signIn" && !signInForm.hidden) fillSavedPassword();
-  }
-
-  function remembersAccount() {
-    try {
-      return window.localStorage.getItem(HAS_ACCOUNT_KEY) === "yes";
-    } catch {
-      return false;
-    }
-  }
-
-  function rememberAccount() {
-    try {
-      window.localStorage.setItem(HAS_ACCOUNT_KEY, "yes");
-    } catch {
-      // Private windows may refuse; the form then opens on sign-up.
-    }
-  }
-
-  // The form appears after a click, so the browser doesn't fill it by itself. Asking
-  // for a saved password lets the browser offer it (Chrome and Edge).
-  function fillSavedPassword() {
-    try {
-      if (!window.PasswordCredential || !navigator.credentials?.get || email.value || password.value) return;
-      navigator.credentials.get({ password: true, mediation: "optional" }).then((credential) => {
-        if (credential?.type !== "password" || mode !== "signIn" || email.value || password.value) return;
-        email.value = credential.id;
-        password.value = credential.password;
-      }).catch(() => {});
-    } catch {
-      // Filling is a convenience; typing still works.
-    }
-  }
-
-  function showSignIn() {
-    setMode(remembersAccount() ? "signIn" : "signUp");
-    signInForm.hidden = false;
-    if (mode === "signIn") fillSavedPassword();
-    email.focus();
-  }
-
-  const REQUEST_STATUS = {
-    waiting: "waiting for review", added: "added", rejected: "rejected",
-  };
-
-  function describeRequest({ name, status, reason }) {
-    const text = `${name}: ${REQUEST_STATUS[status] ?? status}`;
-    return reason ? `${text} (${reason})` : text;
-  }
-
-  // A signed-in visitor's requests show under "Missing a label?". While one is open,
-  // they are checked again every REQUEST_CHECK_MS, and only while the page is visible.
-  let requestsShownFor = null;  // the signed-in address the list belongs to
-  let requestCheck = null;
-  let checkDue = false;  // the check came while the page was hidden
-
-  function stopCheckingRequests() {
-    clearTimeout(requestCheck);
-    requestCheck = null;
-    checkDue = false;
-  }
-
-  function checkRequestsLater() {
-    stopCheckingRequests();
-    requestCheck = setTimeout(() => {
-      requestCheck = null;
-      if (document.hidden) checkDue = true;
-      else loadMyRequests();
-    }, REQUEST_CHECK_MS);
-  }
-
-  async function loadMyRequests() {
-    const owner = requestsShownFor;
-    let mine = null;
-    try {
-      const response = await request("/api/label-requests");
-      if (response.ok) mine = (await response.json()).requests ?? [];
-    } catch {
-      // The list is a convenience; requesting still works. It is tried again later.
-    }
-    if (owner === null || owner !== requestsShownFor) return;  // signed out meanwhile
-    if (mine) {
-      // The bullet takes the status's colour, set with the text so both change together.
-      requestList.replaceChildren(...mine.map((item) => el("li", { class: `mt-ask-request-${item.status}` },
-        describeRequest(item))));
-      requestList.hidden = mine.length === 0;
-    }
-    if (!mine || mine.some((item) => item.status === "waiting")) checkRequestsLater();
-  }
-
-  document.addEventListener("visibilitychange", () => {
-    // Back on the page after the check was due: check now.
-    if (!document.hidden && checkDue && requestsShownFor !== null) {
-      checkDue = false;
-      loadMyRequests();
-    }
-  });
-
-  function toggleRequestForm() {
-    requestForm.hidden = !requestForm.hidden;
-    if (!requestForm.hidden) requestName.focus();
-  }
-
-  function renderRequestArea() {
-    if (!state) {
-      requestArea.hidden = true;
-      return;
-    }
-    requestLine.replaceChildren("Missing a label? ", state.signed_in
-      ? link("Request it", toggleRequestForm)
-      : link("Sign up or sign in to request it", showSignIn));
-    const signedInAs = state.signed_in ? state.email : null;
-    if (signedInAs !== requestsShownFor) {
-      requestsShownFor = signedInAs;
-      stopCheckingRequests();
-      requestList.replaceChildren();
-      requestList.hidden = true;
-      if (signedInAs !== null) loadMyRequests();
-    }
-    if (!state.signed_in) requestForm.hidden = true;
-    requestArea.hidden = false;
-  }
-
-  requestForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const name = requestName.value.trim();
-    if (name.length < 2) {
-      requestStatus.textContent = "Please type the label's name.";
-      requestStatus.className = "mt-ask-status mt-ask-status-error";
-      requestName.focus();
-      return;
-    }
-    requestButton.disabled = true;
-    requestStatus.className = "mt-ask-status";
-    requestStatus.textContent = "Sending…";
-    try {
-      const response = await postJson("/api/label-requests", { name });
-      const body = await response.json().catch(() => null);
-      if (response.ok) {
-        requestStatus.textContent = body?.message ?? "Thanks.";
-        requestName.value = "";
-        await loadMyRequests();
-      } else {
-        requestStatus.textContent = errorMessage(response.status, body, response.headers.get("Retry-After"));
-        requestStatus.className = "mt-ask-status mt-ask-status-error";
-      }
-    } catch {
-      requestStatus.textContent = UNREACHABLE;
-      requestStatus.className = "mt-ask-status mt-ask-status-error";
-    } finally {
-      requestButton.disabled = false;
-    }
-  });
-
-  function renderAccount() {
-    renderRequestArea();
-    if (!state) {
-      account.hidden = true;
-      return;
-    }
-    const left = el("span", {}, remainingText(state.remaining));
-    if (state.signed_in) {
-      signInForm.hidden = true;
-      account.replaceChildren(
-        el("span", {}, "Signed in as ", el("strong", {}, state.email)), " ",
-        el("span", { class: "mt-ask-badge" }, "✓ Verified"), " ", "· ", left, " · ",
-        link("Sign out", signOut), " · ", link("Delete my account", deleteAccount),
-      );
-    } else {
-      account.replaceChildren(left, " · ", link("Sign up or sign in", showSignIn));
-    }
-    account.hidden = false;
-  }
-
-  async function loadAccount() {
-    try {
-      const response = await request("/api/account");
-      state = response.ok ? await response.json() : null;
-    } catch {
-      state = null;
-    }
-    renderAccount();
-  }
-
-  async function loadLabels() {
-    try {
-      const response = await request("/api/labels");
-      const names = response.ok ? (await response.json()).labels : [];
-      if (!names?.length) return;
-      labels.replaceChildren(
-        el("strong", {}, `Labels we track (${names.length}): `),
-        names.join(", "),
-      );
-      labels.hidden = false;
-      aboutFacts.append(el("li", {}, `Labels: ${names.length}`));
-    } catch {
-      // The box works without the list.
-    }
-  }
-
-  async function loadDates() {
-    try {
-      const response = await request("/api/data-dates");
-      const dates = response.ok ? await response.json() : {};
-      const facts = [["Tracked since", dates.tracked_since], ["Last updated", dates.updated]]
-        .filter(([, day]) => day)
-        .map(([name, day]) => el("li", {}, `${name}: ${longDate(day)}`));
-      aboutFacts.firstChild.after(...facts);
-    } catch {
-      // The section still says what the data is.
-    }
-  }
-
-  async function signOut() {
-    try {
-      await postJson("/api/sign-out", {});
-      showStatus("You are signed out.");
-    } catch {
-      showStatus(UNREACHABLE, "error");
-    }
-    await loadAccount();
-  }
-
-  async function deleteAccount() {
-    if (!window.confirm("Delete your account? Your email address and question counts are removed. This cannot be undone.")) return;
-    try {
-      const response = await postJson("/api/account/delete", {});
-      const body = await response.json().catch(() => null);
-      showStatus(response.ok ? "Your account has been deleted." : errorMessage(response.status, body), response.ok ? "" : "error");
-    } catch {
-      showStatus(UNREACHABLE, "error");
-    }
-    await loadAccount();
-  }
+  root.replaceChildren(about.labels, requests.requestArea, form, account.account, account.signInForm, status,
+    examples, about.about, notice, output);
 
   function update() {
     counter.textContent = `${textarea.value.length} / ${MAX_QUESTION_LENGTH}`;
@@ -742,7 +166,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   }
 
   function setBusy(value) {
-    busy = value;
+    lock.busy = value;
     button.disabled = value;
     button.textContent = value ? "Looking it up…" : "Ask";
     form.setAttribute("aria-busy", String(value));
@@ -771,82 +195,9 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     heading.focus();
   }
 
-  // The page signs in without loading a new page, so browsers need to be asked
-  // to save the password. Browsers without this ask by themselves, or not at all.
-  function offerToSavePassword(address, typed) {
-    try {
-      if (!window.PasswordCredential || !navigator.credentials?.store) return;
-      navigator.credentials.store(new window.PasswordCredential({ id: address, password: typed })).catch(() => {});
-    } catch {
-      // Saving is a convenience; signing in has already worked.
-    }
-  }
-
-  function showAccountProblem(message, field) {
-    signInStatus.textContent = message;
-    signInStatus.className = "mt-ask-status mt-ask-status-error";
-    field?.focus();
-  }
-
-  signInForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (busy) return;
-    const settings = ACCOUNT_MODES[mode];
-    const address = email.value.trim();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) {
-      showAccountProblem("Please type a valid email address.", email);
-      return;
-    }
-    if (settings.autocomplete && !password.value) {
-      showAccountProblem("Please type your password.", password);
-      return;
-    }
-    if (mode === "signUp" && password.value.length < MIN_PASSWORD_LENGTH) {
-      showAccountProblem(`Please choose a password of at least ${MIN_PASSWORD_LENGTH} characters.`, password);
-      return;
-    }
-    busy = true;
-    signInButton.disabled = true;
-    signInStatus.className = "mt-ask-status";
-    signInStatus.textContent = "One moment…";
-    try {
-      if (!token && !(await waitForToken())) {
-        showAccountProblem("The human check hasn't finished. If a check appears above the Ask button, please complete it, then try again.");
-        return;
-      }
-      const typed = password.value;
-      const fields = settings.autocomplete ? { password: typed } : {};
-      const response = await postJson(settings.path, { email: address, ...fields, captcha_token: token });
-      const body = await response.json().catch(() => null);
-      if (!response.ok) {
-        showAccountProblem(errorMessage(response.status, body, response.headers.get("Retry-After")));
-        return;
-      }
-      if (settings.autocomplete) {
-        offerToSavePassword(address, typed);
-        rememberAccount();
-      }
-      if (mode === "signIn") {
-        signInStatus.textContent = "";
-        showStatus("You are signed in.");
-        await loadAccount();
-      } else {
-        signInStatus.textContent = body?.message ?? "Please check your inbox.";
-      }
-    } catch {
-      showAccountProblem(UNREACHABLE);
-    } finally {
-      // The password is never kept on the page, whether it worked or not.
-      password.value = "";
-      busy = false;
-      signInButton.disabled = false;
-      resetCheck();
-    }
-  });
-
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (busy) return;
+    if (lock.busy) return;
     const question = textarea.value.trim();
     if (!question) {
       showStatus("Please type a question.", "error");
@@ -855,7 +206,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     }
     setBusy(true);
     // Signed-in visitors skip the human check; the API knows them by their cookie.
-    if (!token && !state?.signed_in) {
+    if (!token && !account.state()?.signed_in) {
       showStatus("Checking you're not a bot…");
       if (!(await waitForToken())) {
         setBusy(false);
@@ -872,10 +223,11 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       const body = await response.json().catch(() => null);
       if (!response.ok || !body || typeof body.answer !== "string") {
         showStatus(errorMessage(response.status, body, response.headers.get("Retry-After")), "error");
-        if (body?.error?.code === "visitor_limit_reached") showSignIn();
+        if (body?.error?.code === "visitor_limit_reached") account.showSignIn();
+        const state = account.state();
         if (state && response.status === 429) {
           state.remaining = { hour: 0, day: 0 };
-          renderAccount();
+          account.render();
         }
         return;
       }
@@ -883,9 +235,10 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
       showAnswer(body, question);
       textarea.value = "";
       update();
+      const state = account.state();
       if (state && body.remaining) {
         state.remaining = body.remaining;
-        renderAccount();
+        account.render();
       }
     } catch (error) {
       showStatus(error?.name === "AbortError"
@@ -907,12 +260,15 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     window.history.replaceState(null, "", window.location.pathname);
   }
 
-  setMode("signUp");
-  loadAccount();
-  loadLabels();
-  loadDates();
+  account.setMode("signUp");
+  account.load();
+  about.loadLabels();
+  about.loadDates();
 
-  return { labels, requestForm, form, textarea, button, status, output, account, signInForm, email, password };
+  return {
+    labels: about.labels, requestForm: requests.requestForm, form, textarea, button, status, output,
+    account: account.account, signInForm: account.signInForm, email: account.email, password: account.password,
+  };
 }
 
 if (typeof document !== "undefined") {
