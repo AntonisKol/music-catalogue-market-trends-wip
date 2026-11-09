@@ -77,11 +77,16 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
     snapshot_date DATE NOT NULL,
     started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     finished_at TIMESTAMPTZ,
-    status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+    status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'skipped')),
     message TEXT
 );
 -- Something to know that isn't this run's own failure, such as missed nights.
 ALTER TABLE ingestion_runs ADD COLUMN IF NOT EXISTS warning TEXT;
+-- 'skipped': a nightly run that did not start because another run held the lock
+-- (issue 98). Replaced each time, so older databases get the new status too.
+ALTER TABLE ingestion_runs DROP CONSTRAINT IF EXISTS ingestion_runs_status_check;
+ALTER TABLE ingestion_runs ADD CONSTRAINT ingestion_runs_status_check
+    CHECK (status IN ('running', 'succeeded', 'failed', 'skipped'));
 CREATE TABLE IF NOT EXISTS ingestion_run_labels (
     run_id BIGINT NOT NULL REFERENCES ingestion_runs(id) ON DELETE CASCADE,
     label_id INT NOT NULL,

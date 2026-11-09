@@ -5,7 +5,8 @@
 Docker applies db/schema.sql only when the database is first created. Every
 statement in it is CREATE ... IF NOT EXISTS, so running it again adds tables
 introduced since then (for example tracked_labels) and leaves existing tables
-and their data untouched. It does not change columns of existing tables.
+and their data untouched. The few changes to existing tables, such as the
+warning column and the run status check, are written so they can run again too.
 """
 import sys
 from pathlib import Path

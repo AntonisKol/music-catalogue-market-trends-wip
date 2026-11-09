@@ -219,12 +219,46 @@ def test_a_bad_night_exits_1_and_logs_the_problems(db, use_test_database, caplog
     assert "finished with problems" in caplog.text and "Perlon (538)" in caplog.text
 
 
-def test_a_second_run_does_not_start_and_logs_it(db, postgres_url, use_test_database, caplog):
+def test_a_second_run_does_not_start_and_is_recorded_as_skipped(db, postgres_url, use_test_database, caplog):
+    """Issue 98: the refused run leaves a row, and the run still going is not marked interrupted."""
+    db.execute("INSERT INTO ingestion_runs (snapshot_date, started_at, status) VALUES (%s, '2026-11-01 03:00+00', 'running')",
+               (DAY - timedelta(days=1),))
+    db.commit()
     with psycopg.connect(postgres_url, autocommit=True) as other:
         other.execute("SELECT pg_advisory_lock(%s)", (RUN_LOCK_ID,))
         assert nightly.main([]) == 1
     assert "not starting the nightly run" in caplog.text
-    assert query(db, "SELECT count(*) FROM ingestion_runs") == [(0,)]
+    assert query(db, "SELECT status, finished_at IS NOT NULL, message FROM ingestion_runs ORDER BY id") == [
+        ("running", False, None),
+        ("skipped", True, "Not started: the nightly run started 2026-11-01 03:00 UTC was still going."),
+    ]
+
+
+def test_a_run_refused_by_a_label_import_says_so(db, postgres_url, use_test_database):
+    with psycopg.connect(postgres_url, autocommit=True) as other:
+        other.execute("SELECT pg_advisory_lock(%s)", (RUN_LOCK_ID,))
+        assert nightly.main([]) == 1
+    assert query(db, "SELECT status, message FROM ingestion_runs") == [
+        ("skipped", "Not started: another ingestion run (a label import or adding labels) was still going."),
+    ]
+
+
+def test_a_run_that_takes_the_lock_records_no_skipped_row(db, use_test_database):
+    assert nightly.main([]) == 0
+    assert query(db, "SELECT status FROM ingestion_runs") == [("succeeded",)]
+
+
+def test_a_skipped_night_is_still_a_missed_night(db):
+    db.execute("INSERT INTO ingestion_runs (snapshot_date, started_at, status) VALUES (%s, %s, 'succeeded')",
+               (DAY - timedelta(days=3), NOW - timedelta(days=3)))
+    db.execute("INSERT INTO ingestion_runs (snapshot_date, started_at, finished_at, status, message) "
+               "VALUES (%s, %s, %s, 'skipped', 'Not started')",
+               (DAY - timedelta(days=1), NOW - timedelta(hours=24), NOW - timedelta(hours=24)))
+    db.commit()
+
+    ok, _, _, warning = run_nightly(db, DAY, NOW)
+
+    assert ok and "nights were missed" in warning
 
 
 def test_an_unreachable_database_is_logged(monkeypatch, caplog):
@@ -282,6 +316,19 @@ def test_runs_shows_a_warning_under_a_good_run(db, postgres_url, monkeypatch, ca
     assert "succeeded" in out and "    warning: nights were missed" in out
 
 
+def test_runs_shows_a_skipped_night_with_its_reason(db, postgres_url, monkeypatch, capsys):
+    db.execute("INSERT INTO ingestion_runs (snapshot_date, started_at, finished_at, status, message) VALUES "
+               "(%s, %s, %s, 'skipped', 'Not started: the nightly run started 2026-11-01 03:00 UTC was still going.')",
+               (DAY, NOW, NOW))
+    db.commit()
+    monkeypatch.setattr(runs.database, "connect", lambda: psycopg.connect(postgres_url))
+
+    runs.main([])
+
+    assert capsys.readouterr().out == ("2026-11-02 02:00 UTC  skipped    Not started: the nightly run started "
+                                       "2026-11-01 03:00 UTC was still going.\n")
+
+
 # --- Applying the schema to an existing database ----------------------------------------
 
 def test_applying_the_schema_again_keeps_data_and_adds_nothing_twice(db):
@@ -302,6 +349,21 @@ def test_applying_the_schema_adds_the_warning_column_to_an_old_database(db):
 
     assert query(db, "SELECT count(*) FROM information_schema.columns WHERE table_name = 'ingestion_runs' "
                      "AND column_name = 'warning'") == [(1,)]
+
+
+def test_applying_the_schema_allows_skipped_runs_in_an_old_database(db):
+    db.execute("ALTER TABLE ingestion_runs DROP CONSTRAINT ingestion_runs_status_check")
+    db.execute("ALTER TABLE ingestion_runs ADD CONSTRAINT ingestion_runs_status_check "
+               "CHECK (status IN ('running', 'succeeded', 'failed'))")
+    db.commit()
+
+    apply_schema.apply_schema(db)
+    db.execute("INSERT INTO ingestion_runs (snapshot_date, status) VALUES (%s, 'skipped')", (DAY,))
+    db.commit()
+
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute("INSERT INTO ingestion_runs (snapshot_date, status) VALUES (%s, 'paused')", (DAY,))
+    db.rollback()
 
 
 def test_applying_the_schema_adds_new_tables_to_an_old_database(db):
