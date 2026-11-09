@@ -153,6 +153,18 @@ def test_at_the_ceiling_discogs_is_not_even_asked(tracked, discogs):
     assert discogs.calls == []
 
 
+def test_a_skipped_night_does_not_count_as_the_last_runs_speed(tracked, discogs):
+    """A skipped run (issue 98) took no time; the speed still comes from the hour-long run."""
+    tracked.execute("UPDATE ingestion_runs SET started_at = finished_at - interval '20 hours'")
+    tracked.execute("INSERT INTO ingestion_runs (snapshot_date, started_at, finished_at, status, message)"
+                    " VALUES ('2026-11-09', %s, %s, 'skipped', 'Not started')", (NOW, NOW))
+    tracked.commit()
+    discogs.ranking = ["Anything"]
+
+    assert grow_labels.grow(tracked, NOW) == []
+    assert discogs.calls == []
+
+
 def test_without_a_finished_run_nothing_is_added(db, limits_role, discogs):
     discogs.ranking = ["Anything"]
 
