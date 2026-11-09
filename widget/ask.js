@@ -32,7 +32,7 @@ const REQUEST_CHECK_MS = 30_000;
 const EXAMPLES = [
   "Which Ostgut Ton records are the most wanted?",
   "What is the cheapest record on Underground Resistance right now?",
-  "How did the price of Throw change over the last month?",
+  "How has the price of Throw changed recently?",
   "Compare Ostgut Ton and Underground Resistance.",
 ];
 
@@ -116,6 +116,15 @@ export function modelName(id) {
     else words.push(part.charAt(0).toUpperCase() + part.slice(1));
   }
   return [...words, version.join(".")].filter(Boolean).join(" ");
+}
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
+  "October", "November", "December"];
+
+// "2026-11-02" -> "2 November 2026", the same in every browser language.
+export function longDate(day) {
+  const [year, month, date] = String(day).split("-").map(Number);
+  return MONTHS[month - 1] && date ? `${date} ${MONTHS[month - 1]} ${year}` : String(day);
 }
 
 // --- Copying a table -------------------------------------------------------------------
@@ -328,7 +337,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
 
   const textarea = el("textarea", {
     id: `${id}-question`, name: "question", rows: "3", maxlength: String(MAX_QUESTION_LENGTH),
-    placeholder: "e.g. Which Ostgut Ton records got more expensive this month?",
+    placeholder: "e.g. Which Ostgut Ton records got more expensive recently?",
     "aria-describedby": `${id}-hint`,
   });
   const counter = el("span", { class: "mt-ask-counter", "aria-hidden": "true" }, `0 / ${MAX_QUESTION_LENGTH}`);
@@ -346,6 +355,15 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
         update();
         textarea.focus();
       } }, example)))),
+  );
+  // What the numbers mean. The dates and the label count are added from the API when they load.
+  const aboutFacts = el("ul", { class: "mt-ask-about-facts" }, el("li", {}, "Source: Discogs"));
+  const about = el("details", { class: "mt-ask-about" },
+    el("summary", {}, "About the data"),
+    el("p", {}, "A price is the cheapest copy for sale on Discogs, in any condition, without shipping, "
+      + "converted to euros by Discogs. It is an asking price, not what a record sold for."),
+    el("p", {}, "Prices are updated every day. Wants, haves and ratings are updated once a week."),
+    aboutFacts,
   );
   // Filled in from the API, and stays hidden if the list can't be loaded.
   const labels = el("aside", { class: "mt-ask-labels", "aria-label": "Labels this site tracks", hidden: "" });
@@ -403,7 +421,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
     + "To spot abuse, our logs keep a scrambled version of your network address, never the address itself. "
     + "Cloudflare's human check also sees your address. ",
     el("a", { href: "/privacy/" }, "Privacy"), ".");
-  root.replaceChildren(labels, requestArea, form, account, signInForm, status, examples, notice, output);
+  root.replaceChildren(labels, requestArea, form, account, signInForm, status, examples, about, notice, output);
 
   let token = "";
   let widgetId = null;
@@ -642,8 +660,22 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
         names.join(", "),
       );
       labels.hidden = false;
+      aboutFacts.append(el("li", {}, `Labels: ${names.length}`));
     } catch {
       // The box works without the list.
+    }
+  }
+
+  async function loadDates() {
+    try {
+      const response = await request("/api/data-dates");
+      const dates = response.ok ? await response.json() : {};
+      const facts = [["Tracked since", dates.tracked_since], ["Last updated", dates.updated]]
+        .filter(([, day]) => day)
+        .map(([name, day]) => el("li", {}, `${name}: ${longDate(day)}`));
+      aboutFacts.firstChild.after(...facts);
+    } catch {
+      // The section still says what the data is.
     }
   }
 
@@ -878,6 +910,7 @@ export function mount(root, { fetch: fetchImpl = window.fetch.bind(window), turn
   setMode("signUp");
   loadAccount();
   loadLabels();
+  loadDates();
 
   return { labels, requestForm, form, textarea, button, status, output, account, signInForm, email, password };
 }
