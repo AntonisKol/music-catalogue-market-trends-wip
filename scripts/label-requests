@@ -25,8 +25,13 @@ if [ "$1" = approve ]; then
   # approve <request> <label>: the label is the third word.
   label=$(printf '%s' "$3" | sed -E 's#.*label/([0-9]+).*#\1#')
   case "$label" in ''|*[!0-9]*) echo "Could not read a label id from $3." >&2; exit 1 ;; esac
-  # The import takes minutes; it runs on the server, and the nightly run would pick the label up anyway.
-  $COMPOSE run -d --rm -T admin sh -c "python -m ingestion.ingest_label $label >> logs/import-$label.log 2>&1" > /dev/null
-  echo "Importing $label on the server now; progress is in logs/import-$label.log there."
+  # The import takes minutes; it runs on the server. --wait: if another import
+  # holds the lock (the nightly run, say), it starts when that one finishes.
+  if ! $COMPOSE run -d --rm -T admin sh -c "python -m ingestion.ingest_label --wait $label >> logs/import-$label.log 2>&1" > /dev/null; then
+    echo "Could not start the import of $label. The nightly run imports it at 03:00 UTC." >&2
+    exit 1
+  fi
+  echo "Importing $label on the server; if another import is running, it starts when that one finishes."
+  echo "Progress is in logs/import-$label.log there."
 fi
 REMOTE

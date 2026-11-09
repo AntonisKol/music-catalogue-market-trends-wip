@@ -98,6 +98,44 @@ def test_a_second_run_does_not_start_while_one_is_in_progress(postgres_url, db, 
 
 
 @responses.activate
+def test_with_wait_a_second_run_starts_when_the_first_finishes(postgres_url, db, connect_to, logs, monkeypatch):
+    fake_label([1])
+    connect_to(lambda: psycopg.connect(postgres_url))
+    first_run = psycopg.connect(postgres_url, autocommit=True)
+    first_run.execute("SELECT pg_advisory_lock(%s)", (command.RUN_LOCK_ID,))
+    checks = []
+
+    def first_run_finishes(seconds):
+        # The waiting run sleeps between checks; the first run ends during the second sleep.
+        checks.append(seconds)
+        if len(checks) == 2:
+            first_run.close()
+
+    monkeypatch.setattr(command.time, "sleep", first_run_finishes)
+    try:
+        assert command.main(["--wait", "1"]) == 0
+    finally:
+        first_run.close()
+    assert checks == [command.WAIT_SECONDS, command.WAIT_SECONDS]
+    assert "waiting for it to finish" in logs.text
+    assert "Label 1 done: 1 listed, 1 saved" in logs.text
+
+
+@responses.activate
+def test_with_wait_a_free_lock_starts_at_once(postgres_url, db, connect_to, logs, monkeypatch):
+    fake_label([1])
+    connect_to(lambda: psycopg.connect(postgres_url))
+    monkeypatch.setattr(command.time, "sleep", lambda seconds: pytest.fail("should not wait"))
+    assert command.main(["--wait", "1"]) == 0
+    assert "waiting" not in logs.text
+
+
+@pytest.mark.parametrize("argv", [["--wait"], ["1", "--wait"], ["--wait", "x"]])
+def test_wrong_use_of_wait_exits_2(argv):
+    assert command.main(argv) == 2
+
+
+@responses.activate
 def test_the_run_lock_leaves_no_transaction_open(postgres_url, db):
     with psycopg.connect(postgres_url) as conn:
         assert command.take_run_lock(conn)
