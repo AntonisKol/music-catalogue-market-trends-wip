@@ -13,7 +13,7 @@ How the project fits together, what each part is made of, and how it was built s
 - **Will achieve:** the part is planned. Grey boxes with dashed borders.
 - Orange boxes are supporting work alongside the main steps that is still open: documentation. Supporting work that is finished, such as CI, is green.
 
-Steps are numbered as in the README roadmap (step 1 to step 11). Each step is one GitHub issue, whose number is given too.
+Steps are numbered in the order they were planned (step 1 to step 11). Each step is one GitHub issue, whose number is given too.
 
 ---
 
@@ -132,7 +132,7 @@ flowchart TD
     F44["Issue 44: Hosting<br/>Code: Dockerfile, deploy/<br/>How: a Hetzner server with Docker Compose,<br/>Caddy for HTTPS, cron for the nightly update,<br/>backups to a Storage Box, one deploy command,<br/>the box on the site's own page<br/>Achieved: live since 7 November 2026, the<br/>Mac's data moved, backups copied off the server"]
     F48["Issue 48: Label list and private logs<br/>Code: queries/labels.py, web/app.py<br/>How: active tracked labels through the reader,<br/>a keyed hash in the log, logs limited in size<br/>Achieved: visitors see what is covered;<br/>no addresses kept"]
     F55["Issue 55: Throwaway addresses<br/>Code: web/accounts.py, web/assets/<br/>How: a public list of about 10,000<br/>throwaway services, kept in the repo<br/>Achieved: one person can't as easily<br/>make many accounts"]
-    F18["Issues 18 and 25: Documentation<br/>Code: README, this page<br/>Achieved: architecture and problems<br/>written down, updated with every step"]
+    F18["Issues 18, 25 and 101: Documentation<br/>Code: README, this page<br/>Achieved: architecture and problems<br/>written down, updated with every step;<br/>the README describes the live product,<br/>not a local setup"]
 
     S0 --> S1
     S1 --> S2
@@ -198,6 +198,7 @@ flowchart TD
 | – | [63](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/63) Remembered skips | Built | Releases that are not vinyl or only credited are skipped on later nights without a request, and checked again monthly; about 40 minutes saved a night | PostgreSQL |
 | – | [92](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/92) Approval waits its turn | Built | An approved label is imported even when another import is running: it waits for that one to finish instead of giving up; the script says if the import couldn't start | Python, PostgreSQL advisory lock |
 | – | [37](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/37) Label requests | Built | Signed-in visitors ask for labels by name; the owner looks each up on Discogs and approves or declines; visitors see the result | Flask, PostgreSQL, Discogs search |
+| – | [101](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/101) README for readers | Built | The README shows what the live product does and how it is built, with its example commands and output; the local setup guide is gone, the server and review steps stay | Markdown |
 | – | [18](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/18), [25](https://github.com/AntonisKol/music-catalogue-market-trends-wip/issues/25) Documentation | Ongoing | README and this page kept current | Markdown, Mermaid |
 
 ---
