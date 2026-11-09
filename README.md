@@ -54,52 +54,11 @@ flowchart LR
 
 The [architecture page](docs/architecture.md) has diagrams of the whole system, every task from the first table to the live site, and the problems met on the way with how they were solved.
 
-## Requirements
+## Collect releases from Discogs
 
-- Docker with Compose
-- Python 3.10 or newer. The pinned libraries do not install on older versions, and macOS's built-in `python3` is 3.9: check with `python3 --version`, and if needed install a newer one (for example `brew install python@3.12`, then use `python3.12` below)
-- A [Discogs personal access token](https://www.discogs.com/settings/developers)
-- An [Anthropic API key](https://console.anthropic.com/) for the natural-language question feature
+The ingestion commands read from the Discogs API and write to PostgreSQL. Each one below is shown with the kind of output it gives. Every request identifies the app with its own `DISCOGS_USER_AGENT`, since Discogs rejects generic clients.
 
-## Set it up locally
-
-From the repository root, create a `.env` file. Compose and the Python client read these values:
-
-```dotenv
-DISCOGS_TOKEN=your_personal_access_token
-DISCOGS_USER_AGENT=MusicCatalogueMarketTrends/0.1 +https://github.com/AntonisKol/music-catalogue-market-trends-wip
-ANTHROPIC_API_KEY=your_anthropic_api_key
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_USER=catalogue
-POSTGRES_PASSWORD=catalogue
-POSTGRES_DB=catalogue
-POSTGRES_READER_USER=catalogue_reader
-POSTGRES_READER_PASSWORD=choose_a_different_password
-POSTGRES_LIMITS_USER=catalogue_limits
-POSTGRES_LIMITS_PASSWORD=choose_another_password
-TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA
-VISITOR_HASH_SECRET=a_long_random_string
-```
-
-`DISCOGS_USER_AGENT` must identify this app. Discogs rejects generic clients. Use your own token and password; these values are examples for local development, not production credentials. Do not commit `.env`.
-
-Start PostgreSQL. On the first start, Docker applies `db/schema.sql` automatically:
-
-```bash
-docker compose up -d
-docker compose exec db psql -U catalogue -d catalogue -c '\dt'
-```
-
-Create a Python environment and install dependencies:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Fetch one release using the current API client:
+Fetch one release with the API client:
 
 ```bash
 python - <<'PY'
@@ -110,7 +69,7 @@ print(release["title"], release.get("year"))
 PY
 ```
 
-To fetch a label's release summaries, replace `12345` with a Discogs label id:
+Fetch a label's release summaries, here for the Discogs label id `12345`:
 
 ```bash
 python - <<'PY'
@@ -156,13 +115,7 @@ Progress is logged with timestamps, one line per release, for example `[1/11] 18
 
 ## Update the data every night
 
-The labels to update live in the `tracked_labels` table. An existing database gets the new tables with one command, which is safe to run again and leaves existing data alone:
-
-```bash
-python -m ingestion.apply_schema
-```
-
-Choose the labels by their Discogs label id (the number in a label's Discogs address):
+The labels to update live in the `tracked_labels` table. Choose the labels by their Discogs label id (the number in a label's Discogs address):
 
 ```bash
 python -m ingestion.track_labels add 1 538     # Planet E, Perlon
@@ -223,23 +176,11 @@ Added labels have `added_by = 'nightly'` in `track_labels list`. The next nightl
 
 **Scheduling.** On the server, cron starts the run at 03:00 UTC, then adds labels, then backs up (see [Run it on a server](#run-it-on-a-server)).
 
-**Scheduling on a Linux server.** Add a cron line:
-
-```cron
-0 3 * * * cd /path/to/project && .venv/bin/python -m ingestion.nightly >> logs/cron.log 2>&1
-```
-
 **When something goes wrong.** Nothing is sent anywhere: problems go to the log and the run record, so check them now and then with `python -m ingestion.runs`. `python -m ingestion.nightly` reruns safely, and `python -m ingestion.ingest_label <id>` reruns a single label.
 
 ## Query the data read-only
 
-The question feature never uses the login above. It has its own PostgreSQL login that may only read. Create it once per database, with the reader settings from `.env`:
-
-```bash
-python -m ingestion.create_reader_role
-```
-
-Running it again updates the password. The database itself refuses every write from this login, also on tables added later, opens its sessions read-only, and stops any query after 5 seconds. It also takes the right to create temporary tables away from every login except the database's owner. The web side (`queries/`) only ever needs `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB` and the two reader settings, never the Discogs token or the writing login's password.
+The question feature never uses the writing login. It has its own PostgreSQL login that may only read, created by `python -m ingestion.create_reader_role` (the server's restore script runs it). The database itself refuses every write from this login, also on tables added later, opens its sessions read-only, and stops any query after 5 seconds. It also takes the right to create temporary tables away from every login except the database's owner. The web side (`queries/`) only ever needs `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB` and the two reader settings, never the Discogs token or the writing login's password.
 
 The five query tools are the only way the question feature reads data:
 
@@ -265,7 +206,7 @@ Arguments are checked before any query runs: wrong types, out-of-range numbers, 
 
 ## Ask a question
 
-The question service sends a question and the descriptions of the five query tools to Claude. Claude asks for tools, our code checks and runs them over the read-only login, and Claude answers from the rows. It needs `ANTHROPIC_API_KEY` in `.env` and the reader login from above:
+The question service sends a question and the descriptions of the five query tools to Claude. Claude asks for tools, our code checks and runs them over the read-only login, and Claude answers from the rows. Called from Python:
 
 ```bash
 python - <<'PY'
@@ -284,7 +225,7 @@ PY
 - **Errors.** Every failure becomes a `QuestionError` with a `code` (`invalid_question`, `busy`, `unavailable`, `configuration` or `database`) and a message that is safe to show a visitor. The details are only logged. A refused tool argument is not an error: it goes back to Claude with the reason, so it can correct the call.
 - **Usage.** Each answer reports its `rounds` (model requests) and token `usage`. The tool definitions and instructions are cached between questions. There is no cap on tool rounds per question; limits per visitor belong to the web API.
 
-## Run the web API
+## The web API
 
 The API is what the question page calls. Every question passes three guards before anything is sent to Claude:
 1. **A human check:** [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/). The page runs Turnstile invisibly, which gives the visitor a one-time token, and the API confirms it with Cloudflare. Signed-in visitors skip it.
@@ -293,24 +234,13 @@ The API is what the question page calls. Every question passes three guards befo
 
 Visitors are counted by a keyed hash of their IP address, never the address itself, and counts are deleted after two days.
 
-Create the web API's tables (question counts, accounts, sessions) and its login once per database. Run it again after updating, to add tables introduced since. Like the reader, this login is separate: it may only read and change those three tables.
+The web API's tables (question counts, accounts, sessions) and its login are created by `python -m ingestion.create_limits_role`, which every deploy runs to add tables introduced since. Like the reader, this login is separate: it may only read and change those tables. On the server the API runs under gunicorn.
+
+A question, as the page sends it (the human-check token comes from Turnstile in the visitor's browser):
 
 ```bash
-python -m ingestion.create_limits_role
-```
-
-Then start the API:
-
-```bash
-flask --app web.app run --port 5050                        # development (macOS uses port 5000 for AirPlay)
-gunicorn --workers 2 --timeout 120 'web.app:create_app()'  # production
-```
-
-Ask a question:
-
-```bash
-curl -s -X POST localhost:5050/api/questions -H 'Content-Type: application/json' \
-  -d '{"question": "Which is the cheapest Planet E record?", "captcha_token": "XXXX.DUMMY.TOKEN.XXXX"}'
+curl -s -X POST https://api.adnsaudio.com/api/questions -H 'Content-Type: application/json' \
+  -d '{"question": "Which is the cheapest Planet E record?", "captcha_token": "<Turnstile token>"}'
 ```
 
 The response is `{"answer", "sources", "warning", "model", "remaining"}`, where `remaining` is `{"hour", "day"}`: the questions left. Errors are `{"error": {"code", "message"}}`, and the message is safe to show a visitor:
@@ -327,7 +257,7 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 
 **Settings in `.env`:**
 - **Required:**
-  - `TURNSTILE_SECRET_KEY`: your Turnstile site's secret. For development, Cloudflare's [test keys](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) work: `1x0000000000000000000000000000000AA` always passes and `2x0000000000000000000000000000000AA` always fails.
+  - `TURNSTILE_SECRET_KEY`: your Turnstile site's secret.
   - `VISITOR_HASH_SECRET`: a long random string. Keep it secret and stable, or the visitor counts restart.
   - `POSTGRES_LIMITS_USER` and `POSTGRES_LIMITS_PASSWORD`: the web API's login.
 - **Optional:**
@@ -337,7 +267,7 @@ The response is `{"answer", "sources", "warning", "model", "remaining"}`, where 
 
 `GET /api/health` answers `{"status": "ok"}` for uptime checks.
 
-`GET /api/labels` answers `{"labels": [...]}`, the names of the active tracked labels in alphabetical order, without the numbers Discogs adds to tell labels apart. Browsers may reuse the answer for 5 minutes.
+`GET /api/labels` answers `{"labels": [...]}`, the names of the active tracked labels in alphabetical order, without the numbers Discogs adds to tell labels apart, unless two listed labels share a name. Browsers may reuse the answer for 5 minutes.
 
 ### Signing up
 
@@ -364,7 +294,6 @@ To refresh the list, replace the domains in that file with the project's `dispos
 - `SIGN_IN_EMAIL_FROM`: the sender, by default `Market Trends <sign-in@adnsaudio.com>`.
 - `PUBLIC_API_URL`: the API's public address used in the links, for example `https://api.adnsaudio.com`.
 - `SIGN_IN_RETURN_URL`: where the buttons go afterwards, by default `https://adnsaudio.com/market-trends/`.
-- For trying it on a laptop only: `EMAIL_LOG_LINKS=true` writes the links to the API's log instead of emailing them, and `COOKIE_SECURE=false` lets the cookie work over plain http.
 
 **Asking for a label.** Signed in, a visitor can request a label the site doesn't track: `POST /api/label-requests` with `{"name"}` stores it for you to review, and `GET /api/label-requests` lists the visitor's own requests with their status (`waiting`, `added` or `rejected`, with your `reason`). A label that is already tracked gets a `tracked` answer and no request; if the tracked labels can't be read, the request is refused rather than stored. Requests are limited to 3 a day per account and 50 a day for the site, and are deleted with the account. The web API never calls Discogs; your review command does.
 
@@ -403,22 +332,6 @@ What the box does:
 After signing up or in, it asks the browser to save the password where the browser allows that (Chrome and Edge), and remembers in that browser that the visitor has an account, so the form opens on **Sign in** next time and offers the saved password. It says where questions go, and links to the site's privacy page at `/privacy/`.
 
 Answers are rendered from a small Markdown subset (paragraphs, bold, italic, lists, tables) using text nodes only, so nothing in an answer can run as code.
-
-To try it locally, use two terminal windows. In the first, start the API on port 5050 with Cloudflare's test secret, which always passes, and allow the demo page to call it. The sign-in settings make sign-in links appear in this window instead of being emailed:
-
-```bash
-TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA ALLOWED_ORIGINS=http://127.0.0.1:8765 \
-  EMAIL_LOG_LINKS=true COOKIE_SECURE=false SIGN_IN_RETURN_URL=http://127.0.0.1:8765/ \
-  flask --app web.app run --host 127.0.0.1 --port 5050
-```
-
-In the second, serve the demo page, which uses the matching test site key and calls `http://127.0.0.1:5050`:
-
-```bash
-cd widget && python -m http.server 8765 --bind 127.0.0.1
-```
-
-Then open http://127.0.0.1:8765. Port 5000, Flask's default, is taken by AirPlay Receiver on macOS, so a page pointed at it gets "Could not reach the question service".
 
 ## Run it on a server
 
@@ -481,22 +394,9 @@ The command logs in as `deploy` and pulls `main`, then rebuilds and restarts the
 - **Restoring** a backup works like moving the data: copy the dump into `backups/` (from the Storage Box if the server was lost) and run `sh deploy/restore.sh <file>`.
 - **A lost server** can be rebuilt with the first-setup steps above. Restore the newest dump from the Storage Box instead of the Mac's.
 
-## Reset the local database
+## Tests
 
-Schema changes apply only when the data volume is created. To reapply `db/schema.sql` from scratch, this deletes the local database volume and its data:
-
-```bash
-docker compose down -v
-docker compose up -d
-```
-
-## Run the tests
-
-```bash
-python -m pytest
-```
-
-The tests need no `.env` and never use your token or your database: `tests/conftest.py` sets fake settings, and Discogs is faked with the [`responses`](https://github.com/getsentry/responses) library.
+The tests (`python -m pytest`) use no real credentials and no real database: `tests/conftest.py` sets fake settings, and Discogs is faked with the [`responses`](https://github.com/getsentry/responses) library.
 
 ### The question box in a browser
 
@@ -509,15 +409,7 @@ The tests need no `.env` and never use your token or your database: `tests/conft
 - keyboard use, names for every control, focus and announcements for screen readers;
 - an [axe](https://github.com/dequelabs/axe-core) accessibility audit.
 
-One test runs the box against the real web API and the throwaway test database.
-
-They need Playwright's Chromium once:
-
-```bash
-python -m playwright install chromium
-```
-
-Without it they are skipped with a reason, except in CI, where they fail.
+One test runs the box against the real web API and the throwaway test database. Without Playwright's Chromium these tests are skipped with a reason, except in CI, where they fail.
 
 ### Before-release test with the real Claude
 
@@ -535,7 +427,7 @@ python -m pytest tests/test_live_answers.py --live -s
 
 It reads the API key from `ANTHROPIC_API_KEY` in `.env` (or `ANTHROPIC_LIVE_API_KEY`), and `-s` prints every question and answer, so a person can read them too.
 
-The database tests start their own throwaway PostgreSQL 16 container with [Testcontainers](https://testcontainers-python.readthedocs.io/), load `db/schema.sql`, and remove the container when the run ends. Docker must be running for them. Without Docker they are skipped with a reason, except in CI (`CI=true`), where they fail so a run can't pass without them. Your local database on port 5432 is never touched.
+The database tests start their own throwaway PostgreSQL 16 container with [Testcontainers](https://testcontainers-python.readthedocs.io/), load `db/schema.sql`, and remove the container when the run ends. Docker must be running for them. Without Docker they are skipped with a reason, except in CI (`CI=true`), where they fail so a run can't pass without them.
 
 ### Continuous integration
 
