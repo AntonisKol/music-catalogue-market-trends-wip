@@ -5,7 +5,8 @@
 Started each night by cron on the server (deploy/crontab). It takes the same lock as ingest_label, so it never runs alongside
 another ingestion run. For each active label in tracked_labels it runs the label
 pipeline, and records the run and every label's result in ingestion_runs and
-ingestion_run_labels. A label that fails does not stop the others.
+ingestion_run_labels. A label that fails does not stop the others. If another run
+holds the lock, this run is recorded as skipped and does not start.
 
 Exit 0 when every label was updated without failures, 1 otherwise (the run is
 recorded as failed and the problems are logged). Rerunning on the
@@ -46,10 +47,31 @@ def start_run(conn: psycopg.Connection, snapshot_date: date) -> int:
         ).fetchone()[0]
 
 
-def last_run(conn: psycopg.Connection):
-    """When the previous run started, whatever its outcome."""
+def record_skipped(conn: psycopg.Connection, snapshot_date: date) -> str:
+    """Record a run that did not start because another ingestion run held the lock.
+
+    Unlike start_run it leaves any running row alone: that run really is still going."""
     with conn.transaction():
-        row = conn.execute("SELECT max(started_at) FROM ingestion_runs").fetchone()
+        running = conn.execute(
+            "SELECT started_at FROM ingestion_runs WHERE status = 'running' ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        if running:
+            reason = f"the nightly run started {running[0].astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC was still going"
+        else:
+            reason = "another ingestion run (a label import or adding labels) was still going"
+        conn.execute(
+            "INSERT INTO ingestion_runs (snapshot_date, status, finished_at, message) "
+            "VALUES (%s, 'skipped', now(), %s)",
+            (snapshot_date, f"Not started: {reason}."),
+        )
+    return reason
+
+
+def last_run(conn: psycopg.Connection):
+    """When the previous run started, whatever its outcome. Skipped runs updated
+    nothing, so they don't count: a skipped night is still a missed night."""
+    with conn.transaction():
+        row = conn.execute("SELECT max(started_at) FROM ingestion_runs WHERE status <> 'skipped'").fetchone()
     return row[0]
 
 
@@ -86,7 +108,7 @@ def run_nightly(conn: psycopg.Connection, snapshot_date: date, now: datetime) ->
     warning = None
     previous = last_run(conn)
     if previous is not None and now - previous > MISSED_AFTER:
-        warning = f"No run started between {previous:%Y-%m-%d %H:%M} UTC and this one; nights were missed."
+        warning = f"No nightly update started between {previous:%Y-%m-%d %H:%M} UTC and this one; nights were missed."
     run_id = start_run(conn, snapshot_date)
     labels = tracked_labels(conn, active_only=True)
     if not labels:
@@ -141,7 +163,8 @@ def main(argv: list) -> int:
     try:
         with database.connect() as conn:
             if not take_run_lock(conn):
-                log.error("Another ingestion run is in progress; not starting the nightly run")
+                reason = record_skipped(conn, snapshot_date)
+                log.error("Another ingestion run is in progress; not starting the nightly run (%s)", reason)
                 return 1
             ok, summary, problems, warning = run_nightly(conn, snapshot_date, now)
     except DatabaseConnectionLost as error:

@@ -37,6 +37,9 @@ def main(argv: list) -> int:
     if not rows:
         print("No nightly runs recorded yet.")
     for run_id, day, started, finished, status, message, warning, labels, saved, failed, label_errors in rows:
+        if status == "skipped":
+            print(f"{started:%Y-%m-%d %H:%M} UTC  {status:<9}  {message}")
+            continue
         took = f"{(finished - started).total_seconds() / 60:.0f} min" if finished else "still running"
         print(f"{started:%Y-%m-%d %H:%M} UTC  {status:<9}  {labels} labels, {saved} saved, {failed} failed, "
               f"{label_errors} label errors  ({took})")

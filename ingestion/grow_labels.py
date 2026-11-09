@@ -64,7 +64,8 @@ def run_speed(conn: psycopg.Connection):
     yet (not imported, or the import failed) count with their vinyl releases from Discogs."""
     with conn.transaction():
         last = conn.execute("SELECT extract(epoch FROM finished_at - started_at) FROM ingestion_runs"
-                            " WHERE finished_at IS NOT NULL ORDER BY id DESC LIMIT 1").fetchone()
+                            " WHERE finished_at IS NOT NULL AND status <> 'skipped'"
+                            " ORDER BY id DESC LIMIT 1").fetchone()
         tracked = conn.execute("SELECT count(*) FROM releases r JOIN tracked_labels t ON t.label_id = r.label_id"
                                " WHERE t.active").fetchone()[0]
         pending = conn.execute(
