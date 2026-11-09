@@ -307,11 +307,11 @@ The cookie works on the live site only if the API is on a subdomain of adnsaudio
 ## Add the question box to a page
 
 The question box is plain HTML, CSS and JavaScript, with no framework and no build step:
-- [`widget/ask.js`](widget/ask.js), the box;
+- [`widget/ask.js`](widget/ask.js), the box, which loads its parts from the same folder: [`ask-render.js`](widget/ask-render.js) (the answer and its data tables), [`ask-account.js`](widget/ask-account.js) (the account form), [`ask-requests.js`](widget/ask-requests.js) (label requests), [`ask-about.js`](widget/ask-about.js) (the label list and About the data) and [`ask-dom.js`](widget/ask-dom.js) (shared helpers);
 - [`widget/ask.css`](widget/ask.css), its look, which picks up adnsaudio.com's own colour and font variables;
 - [`widget/index.html`](widget/index.html), a demo page.
 
-To put it on a page, copy the two files next to it and add:
+To put it on a page, copy `ask.css` and every `ask*.js` file next to it and add:
 
 ```html
 <link rel="stylesheet" href="ask.css">
@@ -380,7 +380,7 @@ sh deploy/deploy.sh server   # only the API
 sh deploy/deploy.sh page     # only the page
 ```
 
-The command logs in as `deploy` and pulls `main`, then rebuilds and restarts the containers. It also adds any new tables and rights (`apply_schema` and `create_limits_role` are safe to run every time), so nothing has to be run by hand after a merge. It waits until `https://api.adnsaudio.com` answers. Last, it copies `ask.js` and `ask.css` from [`widget/`](widget) into `adns-space/market-trends/` and, if anything changed, opens a pull request on the website. The website's `main` only takes pull requests with passing checks, so merging that pull request is what publishes the page. It uses your usual GitHub login and the `gh` command.
+The command logs in as `deploy` and pulls `main`, then rebuilds and restarts the containers. It also adds any new tables and rights (`apply_schema` and `create_limits_role` are safe to run every time), so nothing has to be run by hand after a merge. It waits until `https://api.adnsaudio.com` answers. Last, it copies the question box's files (`ask.js`, its `ask-*.js` modules and `ask.css`, listed in `WIDGET_FILES` in the script) from [`widget/`](widget) into `adns-space/market-trends/` and, if anything changed, opens a pull request on the website. The website's `main` only takes pull requests with passing checks, so merging that pull request is what publishes the page. It uses your usual GitHub login and the `gh` command.
 
 ### Looking after it
 
