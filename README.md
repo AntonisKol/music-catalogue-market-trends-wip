@@ -145,7 +145,7 @@ Ingest a whole label: every vinyl release on it, and today's snapshot of each:
 python -m ingestion.ingest_label 800000
 ```
 
-Progress is logged with timestamps, one line per release, for example `[1/11] 1832937 saved: 38 for sale from 2.99 EUR; want 39, have 328; rated 2.54 by 35`, and the run ends with a summary such as `Label 2 done: 27 listed, 23 saved, 4 not vinyl, 0 not on this label, 0 gone, 0 failed`. It takes about 2 seconds per vinyl release, so a label with 500 releases takes roughly 15 minutes.
+Progress is logged with timestamps, one line per release, for example `[1/11] 1832937 saved: 38 for sale from 2.99 EUR; want 39, have 328; rated 2.54 by 35`, and the run ends with a summary such as `Label 2 done: 27 listed, 23 saved, 4 not vinyl, 0 not on this label, 0 gone, 0 failed`. It takes about 2 seconds per vinyl release, so a label with 500 releases takes roughly 15 minutes. Only one ingestion run happens at a time: if another is running, the command exits, and with `--wait` (`python -m ingestion.ingest_label --wait 800000`) it waits for that run to finish and then starts.
 
 - **Vinyl only.** Releases whose list entry is clearly CD, file, cassette or video are skipped without a request. Every other release is kept only if its details include the format "Vinyl". Releases listed twice are ingested once.
 - **Issued on the label, not just credited.** A label's Discogs list also holds releases where it only appears in a credit, such as a studio under "Recorded At". Those are skipped as "not on this label". A co-release is still stored under its first label only.
@@ -182,7 +182,7 @@ python -m ingestion.track_labels resume 538
    sh scripts/label-requests reject 3 "Not a techno label."
    ```
 
-3. **Approving** tracks the label and starts importing it on the server at once (progress in `logs/import-<label>.log`). After that the nightly run keeps it up to date.
+3. **Approving** tracks the label and starts importing it on the server at once (progress in `logs/import-<label>.log`). If another import is running, such as the nightly run, the new label's import waits and starts when it finishes. After that the nightly run keeps it up to date.
 4. **Rejecting** sends your reason to everyone who asked.
 
 Everyone who asked is emailed your decision: added, or rejected with your reason. If an email fails, the watcher sends it again within 15 minutes. The box shows signed-in visitors where their requests stand, under "Missing a label?", each with a coloured bullet (yellow waiting, green added, red rejected), and checks again every 30 seconds while one is waiting. Discogs' search can miss a label; then find it on discogs.com and approve with the number in its address.
