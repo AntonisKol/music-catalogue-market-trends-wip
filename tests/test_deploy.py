@@ -184,3 +184,10 @@ def test_the_review_script_only_imports_after_an_approval_went_through():
     assert "*[!0-9]*" in script
     # approve <request> <label>: the label, not the request number, is imported.
     assert 'printf \'%s\' "$3"' in script
+
+
+def test_an_approved_label_waits_for_a_running_import_instead_of_giving_up():
+    script = (ROOT / "scripts" / "label-requests").read_text()
+    assert 'python -m ingestion.ingest_label --wait $label' in script
+    # If the container can't even start, the owner is told rather than shown "Importing".
+    assert "Could not start the import" in script
