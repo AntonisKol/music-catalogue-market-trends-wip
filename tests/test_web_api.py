@@ -354,6 +354,42 @@ def test_a_label_is_listed_once_its_releases_are_in_the_database(client, db, rea
     assert client.get("/api/labels").get_json() == {"labels": ["Tresor"]}
 
 
+def test_the_data_dates_are_the_first_and_latest_day_prices_were_saved(client, db, reader):
+    with_releases(db, 1, 2)
+    db.execute("INSERT INTO price_snapshots (release_id, snapshot_date) VALUES "
+               "(1, '2026-11-03'), (1, '2026-11-09'), (2, '2026-11-02'), (2, '2026-11-08')")
+    db.commit()
+
+    response = client.get("/api/data-dates", headers={"Origin": "https://adnsaudio.test"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"tracked_since": "2026-11-02", "updated": "2026-11-09"}
+    assert response.headers["Cache-Control"] == "public, max-age=300"
+
+
+def test_before_the_first_night_there_are_no_data_dates(client, reader):
+    assert client.get("/api/data-dates").get_json() == {"tracked_since": None, "updated": None}
+
+
+def test_the_data_dates_use_the_index_not_the_whole_table(db, reader):
+    db.execute("SET enable_seqscan = off")
+    plan = "\n".join(row[0] for row in db.execute(
+        "EXPLAIN SELECT min(snapshot_date), max(snapshot_date) FROM price_snapshots").fetchall())
+    db.rollback()
+
+    assert "price_snapshots_snapshot_date" in plan and "Seq Scan" not in plan, plan
+
+
+def test_the_data_dates_fail_with_a_plain_message_when_the_database_is_down(fakes, limits_db):
+    def broken():
+        raise psycopg.OperationalError("connection to 10.0.0.1 refused")
+
+    response = create_app(answer=fakes.answer, verify_captcha=fakes.verify, dates=broken).test_client().get("/api/data-dates")
+
+    assert response.status_code == 503
+    assert "10.0.0.1" not in response.get_data(as_text=True)
+
+
 def test_a_label_is_listed_when_its_releases_name_another_label_first(client, db, reader):
     """Issue 94: a co-release lists the tracked label second, so releases.label_id is the other label."""
     db.execute("INSERT INTO tracked_labels (label_id, name) VALUES (2, 'Second Label')")

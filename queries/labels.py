@@ -30,3 +30,12 @@ def listed_label_names() -> list:
     """The tracked labels the page lists: only those whose releases are in the database,
     so a label appears once questions about it can be answered."""
     return _names(" AND EXISTS (SELECT 1 FROM release_labels rl WHERE rl.label_id = t.label_id)")
+
+
+def data_dates() -> dict:
+    """The first and the latest day prices were saved, for "About the data" on the page,
+    as ISO dates, or None before the first night. The index on snapshot_date keeps this
+    to two index lookups however long the history grows."""
+    with connect_reader() as conn:
+        first, latest = conn.execute("SELECT min(snapshot_date), max(snapshot_date) FROM price_snapshots").fetchone()
+    return {"tracked_since": first and first.isoformat(), "updated": latest and latest.isoformat()}
