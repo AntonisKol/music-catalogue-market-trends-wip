@@ -848,6 +848,7 @@ def test_end_to_end_with_the_real_api_and_database(browser, site, limits_db, rea
         db.execute("INSERT INTO labels (id, name) VALUES (%s, 'x')", (label_id,))
         db.execute("INSERT INTO releases (id, title, label_id, is_physical) VALUES (%s, 'x', %s, true)",
                    (label_id, label_id))
+        db.execute("INSERT INTO release_labels (release_id, label_id) VALUES (%s, %s)", (label_id, label_id))
     db.execute("INSERT INTO price_snapshots (release_id, snapshot_date) VALUES (1, '2026-11-02'), (2, '2026-11-09')")
     db.commit()
     monkeypatch.setattr(config, "ALLOWED_ORIGINS", [site.origin])

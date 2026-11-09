@@ -4,6 +4,7 @@ import pytest
 from psycopg.conninfo import conninfo_to_dict
 
 from ingestion import create_reader_role as command
+from ingestion.apply_schema import apply_schema
 from ingestion.create_reader_role import create_reader_role
 from tests.conftest import FAKE_SETTINGS
 
@@ -83,6 +84,19 @@ def test_reader_can_read_but_not_write_tables_added_later(db, reader):
     finally:
         db.execute("DROP TABLE later_table")
         db.commit()
+
+
+def test_reader_can_read_release_labels_added_by_applying_the_schema(db, reader):
+    """As on the server: the reader role exists, then a deploy adds release_labels (issue 94)."""
+    db.execute("DROP TABLE release_labels")
+    db.commit()
+    apply_schema(db)
+    db.execute("INSERT INTO labels (id, name) VALUES (1, 'Planet E')")
+    db.execute("INSERT INTO releases (id, title, label_id, is_physical) VALUES (10, 'x', 1, true)")
+    db.execute("INSERT INTO release_labels (release_id, label_id) VALUES (10, 1)")
+    db.commit()
+
+    assert reader.execute("SELECT release_id, label_id FROM release_labels").fetchall() == [(10, 1)]
 
 
 def test_running_again_changes_the_password(reader_role, postgres_url):

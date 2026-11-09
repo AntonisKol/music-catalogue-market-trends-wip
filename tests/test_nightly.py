@@ -304,6 +304,22 @@ def test_applying_the_schema_adds_the_warning_column_to_an_old_database(db):
                      "AND column_name = 'warning'") == [(1,)]
 
 
+def test_applying_the_schema_lists_each_stored_releases_first_label(db):
+    """Issue 94: releases saved before release_labels existed get their first label from releases."""
+    db.execute("INSERT INTO labels (id, name) VALUES (1, 'First'), (2, 'Second')")
+    db.execute("INSERT INTO releases (id, title, label_id, catno, is_physical) VALUES "
+               "(10, 'Old', 1, 'F1', true), (11, 'No label', NULL, NULL, true), (12, 'Saved since', 1, 'F2', true)")
+    db.execute("INSERT INTO release_labels (release_id, label_id, catno) VALUES (12, 1, 'F2'), (12, 2, 'S2')")
+    db.commit()
+
+    apply_schema.apply_schema(db)
+    apply_schema.apply_schema(db)
+
+    assert query(db, "SELECT release_id, label_id, catno FROM release_labels ORDER BY 1, 2") == [
+        (10, 1, "F1"), (12, 1, "F2"), (12, 2, "S2"),
+    ]
+
+
 def test_applying_the_schema_adds_new_tables_to_an_old_database(db):
     db.execute("DROP TABLE ingestion_run_labels")
     db.commit()
